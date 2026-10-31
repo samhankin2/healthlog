@@ -1,0 +1,241 @@
+/**
+ * Chat / AI routes — SPEC §6 "Chat / AI" and SPEC §7.
+ *
+ * POST /api/chat runs the dual-model pipeline, stores the assistant message,
+ * and (unless `save: false`) stores the meal. Retrying the same request with an
+ * `Idempotency-Key` header (or `clientId` in the body) within 2 minutes returns
+ * the original response instead of running the models again.
+ */
+import { randomUUID } from 'node:crypto'
+import { getDb } from '../db.js'
+import { requireUser } from '../auth.js'
+import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
+import { alias, asObject, clampInt, requireString } from '../lib/validate.js'
+import { isISODate, sumIntake, today } from '../lib/metrics.js'
+import { chatMessagePayload } from '../lib/shape.js'
+import { analysisPayload, runAnalysis } from '../ai.js'
+import { findMeal, insertMeal } from '../lib/meals.js'
+
+/** In-memory idempotency cache: `${userId}|${key}` → {at, body}. */
+const replyCache = new Map()
+const REPLY_TTL_MS = 2 * 60 * 1000
+const REPLY_CACHE_MAX = 200
+
+function cacheGet(key) {
+  const hit = replyCache.get(key)
+  if (!hit) return null
+  if (Date.now() - hit.at > REPLY_TTL_MS) {
+    replyCache.delete(key)
+    return null
+  }
+  return hit.body
+}
+
+function cacheSet(key, body) {
+  if (replyCache.size >= REPLY_CACHE_MAX) {
+    const oldest = replyCache.keys().next().value
+    if (oldest) replyCache.delete(oldest)
+  }
+  replyCache.set(key, { at: Date.now(), body })
+}
+
+/** Human-readable assistant reply: reconciled numbers + comparison + assumptions. */
+function assistantText(result) {
+  const reconciled = result.reconciled
+  if (!reconciled) {
+    const why = result.error ? ` (${result.error})` : ''
+    return (
+      `Sorry — I couldn't estimate that one${why}. Nothing was saved. ` +
+      'Try describing the meal again with rough portions, e.g. "2 eggs on toast with butter".'
+    )
+  }
+  const t = reconciled.total
+  const lines = [
+    `About ${Math.round(t.kcal)} kcal — protein ${Math.round(t.protein_g)} g, carbs ${Math.round(t.carbs_g)} g, fat ${Math.round(t.fat_g)} g.`,
+    '',
+    result.comparison,
+  ]
+
+  const notes =
+    result.chosen === 'B'
+      ? result.outputB?.notes
+      : result.chosen === 'A' || result.chosen === 'mean'
+        ? (result.outputA?.notes || result.outputB?.notes)
+        : null
+  if (notes) lines.push('', `Assumption: ${notes}`)
+
+  if (Array.isArray(reconciled.items) && reconciled.items.length > 0) {
+    const parts = reconciled.items.map((i) => `${i.name}${i.quantity ? ` (${i.quantity})` : ''} — ${Math.round(i.kcal)} kcal`)
+    lines.push('', `Breakdown: ${parts.join('; ')}.`)
+  }
+  return lines.join('\n')
+}
+
+/** Short meal title: the item names if we have them, else the message. */
+function mealName(reconciled, message) {
+  const names = (reconciled?.items ?? []).map((i) => i.name).filter(Boolean)
+  const fromItems = names.slice(0, 3).join(', ')
+  const base = fromItems || String(message)
+  return base.length > 80 ? `${base.slice(0, 77)}...` : base
+}
+
+export function registerChatRoutes(router) {
+  router.get('/api/chat/messages', async ({ req, res, query }) => {
+    const user = requireUser(req)
+    const db = getDb()
+    const limit = clampInt(query.get('limit'), 1, 500, 100)
+    const before = query.get('before')
+
+    const params = [user.id]
+    let sql = 'SELECT * FROM chat_messages WHERE user_id = ?'
+    if (before) {
+      // Accept ISO-8601; stored timestamps are `YYYY-MM-DD HH:MM:SS` (UTC).
+      const sqlTs = String(before).replace('T', ' ').replace('Z', '').slice(0, 19)
+      if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(sqlTs)) {
+        throw new HttpError(400, 'before must be an ISO-8601 timestamp')
+      }
+      sql += ' AND created_at < ?'
+      params.push(sqlTs)
+    }
+    sql += ' ORDER BY created_at DESC, rowid DESC LIMIT ?'
+    params.push(limit)
+
+    const rows = db.prepare(sql).all(...params).reverse() // oldest → newest
+    sendJson(res, 200, { ok: true, messages: rows.map(chatMessagePayload) })
+  })
+
+  router.post('/api/chat', async ({ req, res }) => {
+    const body = asObject(await readJsonBody(req))
+    const user = requireUser(req)
+    const db = getDb()
+
+    const message = requireString(alias(body, 'message'), 'message', { max: 4000 })
+    const dayRaw = alias(body, 'day')
+    if (dayRaw !== undefined && dayRaw !== null && dayRaw !== '' && !isISODate(String(dayRaw))) {
+      throw new HttpError(400, 'day must be a calendar date (YYYY-MM-DD)')
+    }
+    const day = dayRaw ? String(dayRaw) : today()
+    const save = body.save !== false
+
+    const idemKey = req.headers['idempotency-key'] || alias(body, 'clientId')
+    const cacheKey = idemKey ? `${user.id}|${String(idemKey)}` : null
+    if (cacheKey) {
+      const cached = cacheGet(cacheKey)
+      if (cached) {
+        sendJson(res, 200, cached)
+        return
+      }
+    }
+
+    const profileRow = db.prepare('SELECT * FROM profile WHERE user_id = ?').get(user.id)
+    const latestWeight = db
+      .prepare('SELECT weight_kg FROM weight_entries WHERE user_id = ? ORDER BY date DESC LIMIT 1')
+      .get(user.id)
+    const mealsToday = db
+      .prepare('SELECT kcal, protein_g, carbs_g, fat_g FROM meals WHERE user_id = ? AND day = ?')
+      .all(user.id, day)
+      .map((m) => ({ kcal: m.kcal, proteinG: m.protein_g, carbsG: m.carbs_g, fatG: m.fat_g }))
+    const intake = sumIntake(mealsToday)
+
+    const profileForPrompt = profileRow
+      ? {
+          currentWeightKg: latestWeight ? Number(latestWeight.weight_kg) : (profileRow.start_weight_kg ?? null),
+          goalWeightKg: profileRow.goal_weight_kg ?? null,
+          kcalTarget: profileRow.kcal_target ?? null,
+          heightCm: profileRow.height_cm ?? null,
+          sex: profileRow.sex ?? null,
+          age: profileRow.age ?? null,
+        }
+      : null
+
+    // Record the user's message before doing any slow work.
+    const userMsgId = randomUUID()
+    db.prepare('INSERT INTO chat_messages (id, user_id, role, content) VALUES (?, ?, ?, ?)').run(
+      userMsgId,
+      user.id,
+      'user',
+      message,
+    )
+
+    const result = await runAnalysis({
+      user,
+      message,
+      profile: profileForPrompt,
+      intake,
+      day,
+      sessionId: `healthlog-${user.id}`,
+    })
+
+    const analysisId = randomUUID()
+    let mealId = null
+    let meal = null
+
+    if (result.reconciled && save) {
+      const t = result.reconciled.total
+      const confidence =
+        result.chosen === 'B'
+          ? result.outputB?.confidence
+          : result.chosen === 'A' || result.chosen === 'mean'
+            ? result.outputA?.confidence
+            : null
+      mealId = insertMeal(db, user.id, {
+        eatenAt: new Date().toISOString(),
+        day,
+        name: mealName(result.reconciled, message),
+        description: message,
+        kcal: t.kcal,
+        proteinG: t.protein_g,
+        carbsG: t.carbs_g,
+        fatG: t.fat_g,
+        source: 'ai',
+        confidence: typeof confidence === 'number' ? confidence : null,
+        analysisId,
+        items: (result.reconciled.items ?? []).map((i) => ({
+          name: i.name,
+          quantity: i.quantity,
+          kcal: i.kcal,
+          proteinG: i.protein_g,
+          carbsG: i.carbs_g,
+          fatG: i.fat_g,
+        })),
+      })
+      db.prepare("UPDATE meals SET analysis_id = ? WHERE id = ?").run(analysisId, mealId)
+      meal = findMeal(db, user.id, mealId)
+    }
+
+    db.prepare(
+      `INSERT INTO analyses (id, user_id, meal_id, prompt_text, model_a, model_b, result_a, result_b,
+                             reconciled, comparison, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      analysisId,
+      user.id,
+      mealId,
+      result.promptText,
+      result.modelA,
+      result.modelB,
+      JSON.stringify(result.outputA),
+      JSON.stringify(result.outputB),
+      JSON.stringify(result.reconciled),
+      result.comparison,
+      result.error,
+    )
+
+    const analysisRow = db.prepare('SELECT * FROM analyses WHERE id = ?').get(analysisId)
+
+    const assistantId = randomUUID()
+    db.prepare(
+      'INSERT INTO chat_messages (id, user_id, role, content, meal_id, analysis_id) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(assistantId, user.id, 'assistant', assistantText(result), mealId, analysisId)
+    const assistantRow = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(assistantId)
+
+    const payload = {
+      ok: true,
+      message: chatMessagePayload(assistantRow),
+      meal,
+      analysis: analysisPayload(analysisRow),
+    }
+    if (cacheKey) cacheSet(cacheKey, payload)
+    sendJson(res, 200, payload)
+  })
+}

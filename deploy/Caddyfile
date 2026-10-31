@@ -1,0 +1,41 @@
+# Caddy reverse proxy for HealthLog.
+#
+# Public API origin: https://healthlog.<PUBLIC_IP>.sslip.io
+#
+# sslip.io is a real public DNS name that resolves <anything>.<ip>.sslip.io to
+# <ip>, so Caddy gets a normal Let's Encrypt certificate with no DNS records and
+# no cost. Replace __PUBLIC_IP__ below with the VPS's IPv4 address, dotted form:
+#
+#   PGPIP=152.69.178.242; sed -i "s/__PUBLIC_IP__/${PGPIP}/" /etc/caddy/Caddyfile
+#
+# deploy/bootstrap.sh does that substitution for you. If you run Caddy by hand,
+# either edit the one line below or copy this file and sed the placeholder.
+#
+# The API must stay HTTPS: the frontend is served from GitHub Pages over HTTPS,
+# and a browser blocks an http:// API call as mixed content. CORS headers cannot
+# rescue that.
+#
+# Installing / reloading:
+#   install -m 0644 deploy/Caddyfile /etc/caddy/Caddyfile
+#   caddy validate --config /etc/caddy/Caddyfile
+#   systemctl restart caddy      # restart, not reload: on a fresh box the
+#                                # packaged service may not be running yet.
+#
+# HTTP-01 needs port 80 and TLS-ALPN-01 needs 443. Oracle's Ubuntu image
+# REJECTs both before the ufw chains - see deploy/bootstrap.sh, which inserts
+# the accepts and persists them.
+
+healthlog.__PUBLIC_IP__.sslip.io {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# CORS is handled by the Node app (it echoes the Origin header and answers
+	# OPTIONS with 204), so nothing is added here on purpose.
+	reverse_proxy 127.0.0.1:8787
+}

@@ -1,0 +1,132 @@
+/**
+ * Dashboard metrics — SPEC §6 "Dashboard metrics".
+ * Weight maths is the ported old-tracker maths (server/lib/metrics.js); the
+ * calorie block is new. Field names are the tracker's names (see SPEC §6):
+ * `currentWeightKg`, `avg7d`, `weeklyRateKg`, `streakDays`, `dailySwingKg`, ...
+ */
+import { getDb } from '../db.js'
+import { requireUser } from '../auth.js'
+import { sendJson, HttpError } from '../lib/http.js'
+import { clampDays, computeOverallStats, isISODate, sumIntake, today } from '../lib/metrics.js'
+import { profilePayload } from '../lib/shape.js'
+
+const r0 = (n) => (n === null || n === undefined ? null : Math.round(Number(n)))
+const r1 = (n) => (n === null || n === undefined ? null : Math.round(Number(n) * 10) / 10)
+const r2 = (n) => (n === null || n === undefined ? null : Math.round(Number(n) * 100) / 100)
+
+/** Meals grouped by day for a date range → array of raw sums. */
+function intakeByDay(db, userId, from, to) {
+  return db
+    .prepare(
+      `SELECT day,
+              SUM(kcal)      AS kcal,
+              SUM(protein_g) AS protein_g,
+              SUM(carbs_g)   AS carbs_g,
+              SUM(fat_g)     AS fat_g
+         FROM meals
+        WHERE user_id = ? AND day >= ? AND day <= ?
+        GROUP BY day
+        ORDER BY day ASC`,
+    )
+    .all(userId, from, to)
+}
+
+export function registerDashboardRoutes(router) {
+  router.get('/api/dashboard', async ({ req, res, query }) => {
+    const user = requireUser(req)
+    const db = getDb()
+
+    const profileRow = db.prepare('SELECT * FROM profile WHERE user_id = ?').get(user.id)
+    const profile = profilePayload(profileRow)
+
+    // `day` lets a client pin "today" (useful across timezones and in tests).
+    const dayParam = query.get('day')
+    if (dayParam && !isISODate(dayParam)) throw new HttpError(400, 'day must be a calendar date (YYYY-MM-DD)')
+    const day = dayParam || today()
+    const days = clampDays(query.get('days') ?? profile?.chartWindowDays ?? 90, 90)
+
+    const entries = db
+      .prepare('SELECT id, date, weight_kg FROM weight_entries WHERE user_id = ? ORDER BY date ASC')
+      .all(user.id)
+      .map((row) => ({ id: row.id, date: row.date, weightKg: Number(row.weight_kg) }))
+
+    const phases = db
+      .prepare('SELECT * FROM phases WHERE user_id = ? ORDER BY start_date ASC')
+      .all(user.id)
+      .map((row) => ({ id: row.id, name: row.name, startDate: row.start_date, endDate: row.end_date ?? null, color: row.color }))
+
+    const stats = computeOverallStats(
+      entries,
+      { heightCm: profile?.heightCm ?? null, startWeightKg: profile?.startWeightKg ?? null, goalWeightKg: profile?.goalWeightKg ?? null },
+      day,
+    )
+
+    const mealsToday = db
+      .prepare('SELECT kcal, protein_g, carbs_g, fat_g FROM meals WHERE user_id = ? AND day = ?')
+      .all(user.id, day)
+      .map((m) => ({ kcal: m.kcal, proteinG: m.protein_g, carbsG: m.carbs_g, fatG: m.fat_g }))
+    const intakeBlock = sumIntake(mealsToday)
+
+    const historyRows = intakeByDay(db, user.id, addDaysLocal(day, -(days - 1)), day)
+    const historyByDay = new Map(historyRows.map((row) => [row.day, row]))
+    const intakeHistory = []
+    for (let i = 0; i < days; i++) {
+      const d = addDaysLocal(day, -(days - 1) + i)
+      const row = historyByDay.get(d)
+      intakeHistory.push({
+        day: d,
+        kcal: row ? r0(row.kcal) : 0,
+        proteinG: row ? r1(row.protein_g) : 0,
+        carbsG: row ? r1(row.carbs_g) : 0,
+        fatG: row ? r1(row.fat_g) : 0,
+      })
+    }
+
+    const metrics = {
+      /* trend / weight (old-tracker names) */
+      currentWeightKg: r2(stats.latestKg),
+      avg7d: r2(stats.avg7Kg),
+      totalChangeKg: r2(stats.totalChangeKg),
+      weeklyRateKg: r2(stats.trendKgPerWeek),
+      streakDays: stats.currentStreak,
+      bestStreakDays: stats.longestStreak,
+      bmi: r1(stats.bmi),
+      dailySwingKg: r2(stats.volatilityKg),
+      goalProgressPct: stats.goalProgress === null ? null : Math.round(stats.goalProgress * 100),
+      startWeightKg: profile?.startWeightKg ?? null,
+      goalWeightKg: profile?.goalWeightKg ?? null,
+
+      /* extras the UI can use without recomputing */
+      latestDate: stats.latestDate,
+      toGoalKg: r2(stats.toGoalKg),
+      goalReached: stats.goalReached,
+      entryCount: stats.count,
+      adherence: Math.round(stats.adherence * 100) / 100,
+      days,
+
+      /* calories */
+      intake: {
+        day,
+        kcal: intakeBlock.kcal,
+        kcalTarget: profile?.kcalTarget ?? null,
+        proteinG: intakeBlock.proteinG,
+        carbG: intakeBlock.carbG,
+        fatG: intakeBlock.fatG,
+        proteinPct: intakeBlock.proteinPct,
+        carbPct: intakeBlock.carbPct,
+        fatPct: intakeBlock.fatPct,
+      },
+      intakeHistory,
+    }
+
+    sendJson(res, 200, { ok: true, metrics })
+  })
+}
+
+/** Local-calendar day arithmetic without importing Date maths twice. */
+function addDaysLocal(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + days)
+  return dt.toISOString().slice(0, 10)
+}

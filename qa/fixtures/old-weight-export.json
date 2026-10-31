@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "profile": {
+    "startWeightKg": 92.4,
+    "goalWeightKg": 78,
+    "heightCm": 181,
+    "unit": "kg",
+    "chartWindowDays": 90
+  },
+  "entries": [
+    { "date": "2026-09-01", "weightKg": 92.4, "note": "start", "createdAt": 1756684800000, "updatedAt": 1756684800000 },
+    { "date": "2026-09-08", "weightKg": 91.8, "createdAt": 1757289600000, "updatedAt": 1757289600000 },
+    { "date": "2026-09-15", "weightKg": 91.1, "note": "after gym", "createdAt": 1757894400000, "updatedAt": 1757894400000 },
+    { "date": "2026-09-22", "weightKg": 90.7, "createdAt": 1758499200000, "updatedAt": 1758499200000 },
+    { "date": "2026-09-29", "weightKg": 90.2, "createdAt": 1759104000000, "updatedAt": 1759104000000 }
+  ],
+  "phases": [
+    {
+      "id": "phase-cut-1",
+      "name": "Cut",
+      "startDate": "2026-09-01",
+      "endDate": "2026-09-29",
+      "color": "#3b82f6",
+      "createdAt": 1756684800000
+    },
+    {
+      "id": "phase-main-1",
+      "name": "Maintenance",
+      "startDate": "2026-09-30",
+      "endDate": null,
+      "color": "#10b981",
+      "createdAt": 1759104000000
+    }
+  ]
+}

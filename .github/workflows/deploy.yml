@@ -1,0 +1,71 @@
+name: Deploy API to the VPS
+
+# SSH to the Oracle VPS and run /usr/local/bin/healthlog-deploy, which pulls
+# main, restarts the systemd service, health-checks it and rolls back on
+# failure. This workflow then re-checks the PUBLIC URL, so a bad deploy is a red
+# X on the commit and never reaches users.
+#
+# Required repository configuration:
+#   secret    DEPLOY_SSH_KEY   private half of the CI deploy keypair
+#   variable  DEPLOY_HOST      the VPS public IP
+#   variable  API_BASE_URL     https://healthlog.<ip>.sslip.io  (used by Pages)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "deploy/**"
+      - "package.json"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: app-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to the VPS
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST}" ]; then echo "DEPLOY_HOST variable is not set" >&2; exit 1; fi
+          if [ -z "${DEPLOY_SSH_KEY}" ]; then echo "DEPLOY_SSH_KEY secret is not set" >&2; exit 1; fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=accept-new \
+              -o IdentitiesOnly=yes \
+              -o ConnectTimeout=20 \
+              "ubuntu@${DEPLOY_HOST}" \
+              "sudo /usr/local/bin/healthlog-deploy"
+
+      - name: Verify the public API
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          API="https://healthlog.${DEPLOY_HOST}.sslip.io"
+          for attempt in $(seq 1 10); do
+            if body="$(curl -fsS --max-time 10 "$API/api/health")"; then
+              echo "$body"
+              echo
+              echo "public API healthy at $API"
+              exit 0
+            fi
+            echo "attempt ${attempt}: $API not healthy yet"
+            sleep 5
+          done
+          echo "public API did not become healthy - the deploy has been rolled back on the box" >&2
+          exit 1

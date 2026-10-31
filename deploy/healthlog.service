@@ -1,0 +1,46 @@
+[Unit]
+Description=HealthLog API (weight + calorie tracker)
+Documentation=https://github.com/samhankin2/healthlog
+After=network-online.target
+Wants=network-online.target
+# A crash loop on a bad commit should not hammer the box forever.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# Runs as the same unprivileged user CI logs in as, so the checkout in
+# /opt/healthlog is readable without extra capabilities.
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/healthlog
+
+# PORT, HOST, DATA_DIR, COMMIT_FILE and the AI settings live here, never in the
+# repo. The file is mode 0600 and is read by systemd (as root) before the
+# sandbox is applied, so ProtectSystem does not matter for it.
+EnvironmentFile=/etc/healthlog/healthlog.env
+ExecStart=/usr/bin/node server/index.js
+
+Restart=always
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=healthlog
+
+# Hardening. The code directory is read-only to the service; the only writable
+# path is the data directory, which lives outside /opt/healthlog on purpose so a
+# deploy or a rollback can never touch the SQLite database.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/healthlog
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

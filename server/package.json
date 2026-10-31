@@ -1,0 +1,5 @@
+{
+  "name": "healthlog-server",
+  "private": true,
+  "type": "module"
+}

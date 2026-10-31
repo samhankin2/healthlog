@@ -1,0 +1,78 @@
+name: Deploy frontend to GitHub Pages
+
+# Builds the Vite app and publishes dist/ to Pages.
+#
+# The API origin is NOT in the code. The workflow rewrites dist/api-config.js
+# from the repository variable API_BASE_URL (Settings > Secrets and variables >
+# Actions > Variables), so the address is changed in exactly one place. The
+# committed public/api-config.js only carries the local / same-origin default.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "vite.config.ts"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Inject the API base AFTER the build: the value lives in a repo variable,
+      # never in a committed file. Same filename, so index.html's
+      # <script src="api-config.js"> keeps working.
+      - name: Inject API base URL
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          printf 'window.APP_API_BASE = "%s";\n' "${API_BASE_URL}" > dist/api-config.js
+          cat dist/api-config.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # dist/, not public/: Vite copies public/ into dist/ and rewrites the
+          # asset paths, and GitHub Pages serves a project site from a sub-path.
+          path: dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

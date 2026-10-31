@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+.vite/
+
+# data — the SQLite database lives on the VPS at /var/lib/healthlog
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# secrets and local config
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# logs and QA artefacts
+*.log
+qa/*.log
+qa/*.png
+qa/*.json.tmp
+
+# editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# NOTE: public/ is deliberately NOT ignored. api-config.js, manifest.webmanifest,
+# sw.js and the icons ship to GitHub Pages.
