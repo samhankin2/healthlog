@@ -85,7 +85,24 @@ export function registerMealRoutes(router) {
     const eatenAt =
       typeof eatenAtRaw === 'string' && eatenAtRaw.trim() ? eatenAtRaw.trim() : `${day}T12:00:00.000Z`
     const input = readMealInput(body)
-    const id = insertMeal(db, user.id, { ...input, day, eatenAt })
+
+    // A meal saved from a chat reply ("Save meal" after "Ask again") carries the
+    // analysis it came from. The link is what lets the chat show it as saved,
+    // and it makes the save idempotent: a double tap returns the same meal.
+    const analysisRaw = alias(body, 'analysisId', 'analysis_id')
+    let analysisId = null
+    if (analysisRaw !== undefined && analysisRaw !== null) {
+      analysisId = requireString(analysisRaw, 'analysisId', { max: 64 })
+      const owned = db.prepare('SELECT id FROM analyses WHERE id = ? AND user_id = ?').get(analysisId, user.id)
+      if (!owned) throw new HttpError(400, 'analysisId does not match one of your analyses')
+      const already = db.prepare('SELECT id FROM meals WHERE analysis_id = ? AND user_id = ?').get(analysisId, user.id)
+      if (already) {
+        sendJson(res, 200, { ok: true, meal: findMeal(db, user.id, already.id) })
+        return
+      }
+    }
+
+    const id = insertMeal(db, user.id, { ...input, day, eatenAt, analysisId })
     sendJson(res, 201, { ok: true, meal: findMeal(db, user.id, id) })
   })
 
