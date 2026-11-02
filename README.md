@@ -110,6 +110,10 @@ variables locally. `.env` is git-ignored.
 | `AI_MODEL_A` | `claude-haiku-5-5` | First estimator. |
 | `AI_MODEL_B` | `gemini-4-argon` | Second estimator. |
 | `AI_JUDGE_MODEL` | `minimax-m3.1-flash` | Writes the comparison when the two disagree. |
+| `AI_FALLBACK` | on | Set `off` to disable the free-model retry on 401/402/403/429. |
+| `AI_FALLBACK_BASE_URL` | `https://opencode.ai/inference/openai/v1` | Free-model endpoint (no `/go`). |
+| `AI_FALLBACK_MODEL_A` / `_B` | `deepseek-v4.1-flash-free` / `glm-5.3-flash-free` | Free replacements for A / B. |
+| `AI_FALLBACK_JUDGE_MODEL` | `nemotron-3.5-lightning-free` | Free replacement for the judge. |
 
 The AI key is never in the repo, never in a GitHub variable the frontend can
 read, and never sent to the browser.

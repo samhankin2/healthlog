@@ -418,6 +418,18 @@ AI_MODEL_B=gemini-4-argon
 AI_JUDGE_MODEL=minimax-m3.1-flash
 ```
 
+**Free-model fallback.** If a call fails with HTTP 401/402/403/429 (key out of
+usage, rate limited, rejected), it is retried once with a free model on
+`AI_FALLBACK_BASE_URL` (default `https://opencode.ai/inference/openai/v1`, no
+`/go`), using the same key:
+```
+AI_FALLBACK_MODEL_A=deepseek-v4.1-flash-free
+AI_FALLBACK_MODEL_B=glm-5.3-flash-free
+AI_FALLBACK_JUDGE_MODEL=nemotron-3.5-lightning-free
+AI_FALLBACK=off        # optional: disable the fallback
+```
+The model actually used is what gets stored as `model_a` / `model_b`.
+
 **Flow for one chat message:**
 
 1. Build the prompt: the user's raw message, today's logged intake (kcal and

@@ -18,6 +18,14 @@ const DEFAULT_BASE_URL = 'https://opencode.ai/inference/go/openai/v1'
 const DEFAULT_MODEL_A = 'claude-haiku-5-5'
 const DEFAULT_MODEL_B = 'gemini-4-argon'
 const DEFAULT_JUDGE_MODEL = 'minimax-m3.1-flash'
+// Free-tier fallback: used when the primary call fails because the key is out
+// of credit / rate limited. Free models live on the non-"go" endpoint.
+const DEFAULT_FALLBACK_BASE_URL = 'https://opencode.ai/inference/openai/v1'
+const DEFAULT_FALLBACK_MODEL_A = 'deepseek-v4.1-flash-free'
+const DEFAULT_FALLBACK_MODEL_B = 'glm-5.3-flash-free'
+const DEFAULT_FALLBACK_JUDGE_MODEL = 'nemotron-3.5-lightning-free'
+// 401/403 auth, 402 payment required, 429 rate/usage limit.
+const FALLBACK_STATUSES = new Set([401, 402, 403, 429])
 // Measured against the live OpenCode Go endpoint: a two-model nutrition
 // analysis can take 5-25 s per model (gemini-4-argon is the slow one), and the
 // judge model burns extra tokens on reasoning. The old 25 s/1200-token budget
@@ -39,6 +47,11 @@ export function aiConfig() {
     modelB: process.env.AI_MODEL_B || DEFAULT_MODEL_B,
     judgeModel: process.env.AI_JUDGE_MODEL || DEFAULT_JUDGE_MODEL,
     mock: (process.env.AI_MOCK || '').trim().toLowerCase(),
+    fallback: !['0', 'off', 'false', 'no'].includes((process.env.AI_FALLBACK || '').trim().toLowerCase()),
+    fallbackBaseUrl: (process.env.AI_FALLBACK_BASE_URL || DEFAULT_FALLBACK_BASE_URL).replace(/\/+$/, ''),
+    fallbackModelA: process.env.AI_FALLBACK_MODEL_A || DEFAULT_FALLBACK_MODEL_A,
+    fallbackModelB: process.env.AI_FALLBACK_MODEL_B || DEFAULT_FALLBACK_MODEL_B,
+    fallbackJudgeModel: process.env.AI_FALLBACK_JUDGE_MODEL || DEFAULT_FALLBACK_JUDGE_MODEL,
   }
 }
 
@@ -121,9 +134,9 @@ export function buildPrompt({ message, intake = null, profile = null, day = null
  * One OpenAI-compatible chat completion call.
  * Never throws — returns `{ ok: true, content }` or `{ ok: false, error }`.
  */
-async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId, cfg }) {
+async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId, cfg, baseUrl = cfg.baseUrl }) {
   try {
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${cfg.apiKey}`,
@@ -142,7 +155,7 @@ async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId,
     })
     if (!res.ok) {
       const text = await safeText(res)
-      return { ok: false, error: `HTTP ${res.status} from ${model}${text ? `: ${text.slice(0, 200)}` : ''}` }
+      return { ok: false, status: res.status, error: `HTTP ${res.status} from ${model}${text ? `: ${text.slice(0, 200)}` : ''}` }
     }
     const data = await res.json()
     const content = data?.choices?.[0]?.message?.content
@@ -158,6 +171,22 @@ async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId,
     }
     return { ok: false, error: `${model} request failed: ${msg}` }
   }
+}
+
+/**
+ * chatCompletion with a free-model fallback. If the primary call fails because
+ * the key is out of usage / rate limited / rejected, retry once with
+ * `fallbackModel` on the free endpoint. Resolves with the model actually used.
+ */
+async function chatWithFallback({ model, fallbackModel, ...rest }) {
+  const first = await chatCompletion({ model, ...rest })
+  const cfg = rest.cfg
+  if (first.ok || !cfg.fallback || !FALLBACK_STATUSES.has(first.status) || !fallbackModel) {
+    return { ...first, model }
+  }
+  const second = await chatCompletion({ model: fallbackModel, ...rest, baseUrl: cfg.fallbackBaseUrl })
+  if (second.ok) return { ...second, model: fallbackModel, fellBack: true }
+  return { ...second, model: fallbackModel, error: `${first.error}; fallback: ${second.error}` }
 }
 
 function sessionHeader(id) {
@@ -491,24 +520,25 @@ export async function analyseWithModel({ variant, model, messages, sessionId, us
     if (isMocked(cfg)) {
       const mode = mockModeFor(userMessage, cfg)
       const output = mockModelOutput(variant, mode)
-      return { output: normaliseModelOutput(JSON.stringify(output)), raw: JSON.stringify(output) }
+      return { output: normaliseModelOutput(JSON.stringify(output)), raw: JSON.stringify(output), model }
     }
-    const res = await chatCompletion({
+    const res = await chatWithFallback({
       model,
+      fallbackModel: variant === 'B' ? cfg.fallbackModelB : cfg.fallbackModelA,
       messages,
       timeoutMs: MODEL_TIMEOUT_MS,
       jsonMode: true,
       sessionId,
       cfg,
     })
-    if (!res.ok) return { output: { error: res.error }, raw: JSON.stringify({ error: res.error }) }
+    if (!res.ok) return { output: { error: res.error }, raw: JSON.stringify({ error: res.error }), model: res.model }
 
     const output = normaliseModelOutput(res.content)
-    if (output.error) return { output, raw: res.content }
-    return { output, raw: JSON.stringify(output) }
+    if (output.error) return { output, raw: res.content, model: res.model }
+    return { output, raw: JSON.stringify(output), model: res.model }
   } catch (err) {
     const message = err?.message || String(err)
-    return { output: { error: message }, raw: JSON.stringify({ error: message }) }
+    return { output: { error: message }, raw: JSON.stringify({ error: message }), model }
   }
 }
 
@@ -535,8 +565,9 @@ export async function judgeComparison({ a, b, recon, sessionId, message, cfg }) 
       'what they agree on, where they differ, which assumption is most likely wrong, and the final verdict.',
     ].join('\n')
 
-    const res = await chatCompletion({
+    const res = await chatWithFallback({
       model: cfg.judgeModel,
+      fallbackModel: cfg.fallbackJudgeModel,
       messages: [
         { role: 'system', content: 'You compare two nutrition estimates. Be concise and concrete.' },
         { role: 'user', content: prompt },
@@ -606,8 +637,8 @@ export async function runAnalysis({ user, message, profile = null, intake = null
 
   return {
     promptText,
-    modelA: cfg.modelA,
-    modelB: cfg.modelB,
+    modelA: resA.model || cfg.modelA,
+    modelB: resB.model || cfg.modelB,
     outputA: resA.output,
     outputB: resB.output,
     reconciled: recon.reconciled,
