@@ -38,13 +38,21 @@ Cloud VM, SQLite on disk, Caddy for TLS.
 
 ```
 index.html            Vite entry
-src/                  frontend (TypeScript, no UI framework, Chart.js only)
+src/                  frontend — Svelte 5 components, TypeScript, Chart.js
+  lib/                api client, state module, shared components, charts
+  views/              Login, Chat, Dashboard, Foods, Settings, History
+  design/             the design system (tokens.css + ui.css, global CSS)
 server/               API — Node 24, zero runtime dependencies, node:sqlite
 public/               static files Vite copies into dist/ (api-config.js, icons, sw)
 deploy/               VPS bootstrap, systemd unit, Caddyfile, deploy script
 .github/workflows/    pages.yml (frontend) and deploy.yml (API)
 qa/                   verification scripts
 ```
+
+The frontend is **plain Svelte 5** — no SvelteKit, no SSR, no router library.
+Routing is hash-based (`#/dashboard`) because GitHub Pages has no rewrites: a
+path-based route would 404 on refresh. The build output is still `dist/`, so the
+Pages workflow is unchanged.
 
 The database never lives in the repo. On the server it is
 `/var/lib/healthlog/healthlog.db`, outside the code directory, so a deploy or a
@@ -58,7 +66,7 @@ Requires Node 24 (the server uses `node:sqlite`, which is built in).
 
 ```bash
 npm install                 # frontend dependencies only
-npm run build               # tsc + vite -> dist/
+npm run build               # svelte-check + vite -> dist/
 node server/index.js        # API + the built frontend on http://127.0.0.1:8787
 ```
 
@@ -71,10 +79,11 @@ For frontend work with hot reload:
 npm run dev                 # Vite dev server on :5173
 ```
 
-That is a different origin from the API on :8787, so the Vite dev server must
-proxy `/api` to `http://127.0.0.1:8787` (see `vite.config.ts`). Do not "fix" it
-by editing `public/api-config.js` — that file is rewritten by the Pages workflow
-and must keep its empty default.
+That is a different origin from the API on :8787, so the Vite dev server proxies
+`/api` to `http://127.0.0.1:8787` (see `vite.config.ts`). Point it elsewhere
+with `VITE_DEV_API=https://healthlog.152.69.178.242.sslip.io npm run dev`. Do not
+"fix" it by editing `public/api-config.js` — that file is rewritten by the Pages
+workflow and must keep its empty default.
 
 Create a first account locally: registration needs an invite code.
 
