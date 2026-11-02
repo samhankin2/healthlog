@@ -4,7 +4,7 @@ Working notes for any agent (or human) picking up this repository.
 
 ## What this is
 
-HealthLog — a personal weight + calorie tracker. Vite/TypeScript frontend on
+HealthLog — a personal weight + calorie tracker. Svelte 5 frontend on
 GitHub Pages, a zero-dependency Node 24 API with SQLite on a free Oracle Cloud
 VPS, and a chat-based food logger that asks two AI models and reconciles their
 answers in code.
@@ -24,7 +24,22 @@ Do not re-derive any of it.
 
 ```
 SPEC.md               the contract
-src/                  frontend — TypeScript, no UI framework, Chart.js only
+reference/
+  svelte-contract.md  the component/state/backend contract the UI is built against
+  legacy-ui/          the TypeScript DOM app the Svelte port replaced (reference
+                      only — not built, not part of the app)
+src/
+  main.ts             entry: mount(App) — Svelte 5
+  App.svelte          shell: auth gate, hash router, tab bar / side rail
+  views/              Login, Chat, Dashboard, Foods, Settings, History
+  lib/
+    api.ts            the ONLY module that calls fetch
+    auth.ts format.ts pwa.ts types.ts store.ts   framework-agnostic
+    state.svelte.ts   the reactive state + actions (runes)
+    icons.ts toast.svelte.ts
+    components/       shared Svelte components
+    panels/ charts/   view-specific components
+  design/             tokens.css + ui.css — the design system, global CSS
 index.html            Vite entry
 public/               files Vite copies verbatim into dist/
   api-config.js       runtime API base — REWRITTEN by the Pages workflow
@@ -45,9 +60,10 @@ qa/                   smoke / API / browser checks
 ## Commands
 
 ```bash
-npm install && npm run build     # frontend: tsc + vite -> dist/
+npm install && npm run build     # frontend: svelte-check + vite -> dist/
 node server/index.js             # API + built site on http://127.0.0.1:8787
-npm run dev                      # Vite dev server (:5173, needs an /api proxy)
+npm run dev                      # Vite dev server (:5173, proxies /api)
+npm run check                    # svelte-check only
 node server/cli.js invite create --note "local"
 ```
 
@@ -56,6 +72,17 @@ No `npm install` on the server: the API imports only Node built-ins
 
 ## Hard rules
 
+- **Plain Svelte 5, not SvelteKit.** No SSR, no adapter, no prerendering, no
+  routing config. `vite-plugin-svelte` + `vite build` → `dist/`.
+- **Hash routing, not path routing.** GitHub Pages has no rewrites, so a deep
+  link or a refresh on `/healthlog/dashboard` would 404. The app routes on
+  `#/dashboard`.
+- **`base: './'`** in `vite.config.ts`, and `relative` asset paths everywhere.
+- **Svelte 5 idioms:** `onclick={fn}` (not `on:click`), callback props (not
+  `createEventDispatcher`), snippets (not slots). A `$state` primitive cannot be
+  exported and reassigned — export an object, or a getter function like
+  `route()` in `state.svelte.ts`.
+- **Fix a11y warnings; do not silence them.** No `<!-- svelte-ignore -->`.
 - **No secrets in the repo.** No keys, tokens or passwords in any file, test,
   fixture or commit message. Use placeholders (`OPENCODE_API_KEY=`). The AI key
   exists only in `/etc/healthlog/healthlog.env` on the box; the GitHub token only

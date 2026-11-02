@@ -5,6 +5,10 @@ node_modules/
 dist/
 .vite/
 
+# the TypeScript DOM app the Svelte port replaced — kept locally as a porting
+# reference, never built and never committed
+reference/legacy-ui/
+
 # data — the SQLite database lives on the VPS at /var/lib/healthlog
 data/
 *.db
