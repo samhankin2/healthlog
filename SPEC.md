@@ -474,12 +474,33 @@ that the frontend can read.
 
 ## 8. Frontend contract
 
-- **Vite + TypeScript, no UI framework.** Chart.js is the only runtime
-  dependency (plus `date-fns` if needed).
+> **Framework decision (2026-10-31): the frontend is plain Svelte 5 + Vite.**
+> It started as Vite + TypeScript with a hand-rolled DOM layer and was migrated
+> to Svelte components with runes. SvelteKit was considered and rejected: the
+> app is a client-side SPA on a GitHub Pages *project* site, and SvelteKit
+> brings SSR/prerender/base-path/`404.html` concerns that plain Svelte does
+> not. What this section means from here on:
+>
+> - **Plain Svelte 5 (runes), not SvelteKit.** No SSR, no adapter, no
+>   prerendering, no `svelte.config.js` route config. `vite.config.ts` keeps
+>   `base: './'` so the build works under any sub-path.
+> - **Routing is hash-based** (`#/chat`, `#/dashboard`, …), not path-based —
+>   a refresh or a shared link must never 404 on Pages.
+> - **Output stays `dist/`**, so `.github/workflows/pages.yml` keeps publishing
+>   `dist/` and injecting `dist/api-config.js`. No workflow change is needed.
+> - The framework-agnostic TypeScript modules (`api.ts`, `auth.ts`, `types.ts`,
+>   `format.ts`) stay as they are; only the UI layer is Svelte.
+> - Shared state lives in a runes-aware module (`*.svelte.ts`) using `$state`,
+>   not in the old subscribe/notify store.
+
+- **Svelte 5 + TypeScript + Vite.** Chart.js is the only runtime dependency
+  (plus `date-fns` if needed).
 - Port the visual language from the old app: `src/design/tokens.css`
   (`--color-bg #f3f5f1`, `--color-accent #146c5a`, dark `#101613`/`#7bd8bb`,
   16px radius cards, tabular figures) and `src/ui/components.ts`
   (`el()`, `Sheet`, `StatTile`, `SegmentedControl`, `BigNumberInput`, `Toast`).
+  In Svelte these become components; the CSS tokens are imported globally and
+  stay unscoped.
 - **Mobile-first**, and good on desktop: bottom tab bar on narrow screens,
   a sidebar/rail on wide screens. Same as the old app's shell, extended.
 - **Tabs:** Chat (default) · Dashboard · Foods · Settings.
@@ -560,8 +581,9 @@ Local development uses `.env` (git-ignored) or plain env vars.
 
 ## 10. Definition of done
 
-- [ ] `npm run build` passes with `tsc` strict + `verbatimModuleSyntax` +
-      `noUnusedLocals` (as the old project had).
+- [ ] `npm run build` passes: `svelte-check` clean (Svelte 5 components) and
+      `tsc` strict + `verbatimModuleSyntax` + `noUnusedLocals` for the
+      framework-agnostic `.ts` modules.
 - [ ] `node server/index.js` boots on an empty database, creating the schema.
 - [ ] `qa/api-test.mjs` exercises register → login → profile → weight → phase →
       meal → chat (with a **mocked** AI client, no network) → import, and passes.

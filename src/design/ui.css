@@ -1289,6 +1289,97 @@ body:has(.sheet-layer.is-open) .toast {
   text-align: center;
 }
 
+/* Fields -------------------------------------------------------------------
+   Ported from the old app's app.css "Fields" block. These rules are not
+   optional: without them the label renders inline next to a default-styled
+   input and the two collide. */
+
+.field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.field-label {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.4;
+}
+
+.field-label-text {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
+.field-input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--touch-target);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-md);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.field-input::placeholder {
+  color: var(--color-text-subtle);
+}
+
+.field-input:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.field-input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+.field-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.field-input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.field-with-unit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Flex children default to min-width:auto, so the input would refuse to shrink
+   and push the unit out into the gutter. Let it flex instead. */
+.field-with-unit .field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.field-unit {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
 .field-hint,
 .field-error {
   margin: 0;
