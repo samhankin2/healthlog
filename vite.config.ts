@@ -1,3 +1,4 @@
+import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { defineConfig } from 'vite'
 
 // Vite's config runs in Node but the project has no @types/node, so the one
@@ -5,8 +6,10 @@ import { defineConfig } from 'vite'
 declare const process: { env: Record<string, string | undefined> }
 
 export default defineConfig({
+  plugins: [svelte()],
   // GitHub Pages serves a project site from a sub-path, so every asset path in
-  // the build must be relative.
+  // the build must be relative. The app uses hash routing (#/chat), so the
+  // document URL never changes and a relative base always resolves correctly.
   base: './',
   build: {
     outDir: 'dist',
