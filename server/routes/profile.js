@@ -33,12 +33,9 @@ function readFields(body) {
     'kcal_target',
     optionalNumber(alias(body, 'kcalTarget', 'kcal_target'), 'kcalTarget', { min: 0, max: 20000, integer: true, nullable: true }),
   )
-  set(
-    'protein_pct',
-    optionalNumber(alias(body, 'proteinPct', 'protein_pct'), 'proteinPct', { min: 0, max: 100, integer: true, nullable: true }),
-  )
-  set('carb_pct', optionalNumber(alias(body, 'carbPct', 'carb_pct'), 'carbPct', { min: 0, max: 100, integer: true, nullable: true }))
-  set('fat_pct', optionalNumber(alias(body, 'fatPct', 'fat_pct'), 'fatPct', { min: 0, max: 100, integer: true, nullable: true }))
+  set('protein_g', optionalNumber(alias(body, 'proteinG', 'protein_g'), 'proteinG', { min: 0, max: 2000, integer: true, nullable: true }))
+  set('carb_g', optionalNumber(alias(body, 'carbG', 'carb_g'), 'carbG', { min: 0, max: 2000, integer: true, nullable: true }))
+  set('fat_g', optionalNumber(alias(body, 'fatG', 'fat_g'), 'fatG', { min: 0, max: 2000, integer: true, nullable: true }))
   set(
     'chart_window_days',
     optionalNumber(alias(body, 'chartWindowDays', 'chart_window_days'), 'chartWindowDays', {

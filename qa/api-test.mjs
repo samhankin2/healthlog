@@ -278,9 +278,9 @@ async function run() {
   // Mifflin–St Jeor, male: 10*82 + 6.25*180 - 5*30 + 5 = 1800; *1.55 = 2790
   eq('profile: kcalTarget recomputed (Mifflin–St Jeor x activity)', r.json?.profile?.kcalTarget, 2790)
 
-  r = await api('PUT', '/api/profile', { token: authToken, body: { kcalTarget: 2400, proteinPct: 30, carbPct: 40, fatPct: 30 } })
+  r = await api('PUT', '/api/profile', { token: authToken, body: { kcalTarget: 2400, proteinG: 180, carbG: 240, fatG: 80 } })
   eq('profile: explicit kcalTarget wins', r.json?.profile?.kcalTarget, 2400)
-  eq('profile: protein pct saved', r.json?.profile?.proteinPct, 30)
+  eq('profile: protein grams saved', r.json?.profile?.proteinG, 180)
 
   r = await api('PUT', '/api/profile', { token: authToken, body: { sex: 'robot' } })
   eq('profile: rejects an invalid sex', r.status, 400)

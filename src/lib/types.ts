@@ -20,9 +20,9 @@ export interface Profile {
   age: number | null
   activityLevel: ActivityLevel | null
   kcalTarget: number | null
-  proteinPct: number | null
-  carbPct: number | null
-  fatPct: number | null
+  proteinG: number | null
+  carbG: number | null
+  fatG: number | null
   chartWindowDays: number
 }
 

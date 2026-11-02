@@ -56,9 +56,9 @@ CREATE TABLE IF NOT EXISTS profile (
   age             INTEGER,
   activity_level  TEXT,
   kcal_target     INTEGER,
-  protein_pct     INTEGER,
-  carb_pct        INTEGER,
-  fat_pct         INTEGER,
+  protein_g       INTEGER,
+  carb_g          INTEGER,
+  fat_g           INTEGER,
   chart_window_days INTEGER NOT NULL DEFAULT 90,
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -180,6 +180,29 @@ export function migrate(db) {
   db.exec('PRAGMA foreign_keys = ON')
   db.exec('PRAGMA busy_timeout = 5000')
   db.exec(SCHEMA)
+  migrateMacroPctToGrams(db)
+}
+
+/**
+ * Older databases stored macro targets as percent of calories. Convert them to
+ * grams (4/4/9 kcal per gram, using the kcal target) and drop the old columns.
+ */
+function migrateMacroPctToGrams(db) {
+  const cols = new Set(db.prepare('PRAGMA table_info(profile)').all().map((c) => c.name))
+  if (!cols.has('protein_pct')) return
+  for (const col of ['protein_g', 'carb_g', 'fat_g']) {
+    if (!cols.has(col)) db.exec(`ALTER TABLE profile ADD COLUMN ${col} INTEGER`)
+  }
+  db.exec(`
+    UPDATE profile SET
+      protein_g = CASE WHEN kcal_target > 0 AND protein_pct IS NOT NULL THEN CAST(ROUND(kcal_target * protein_pct / 100.0 / 4) AS INTEGER) END,
+      carb_g    = CASE WHEN kcal_target > 0 AND carb_pct IS NOT NULL THEN CAST(ROUND(kcal_target * carb_pct / 100.0 / 4) AS INTEGER) END,
+      fat_g     = CASE WHEN kcal_target > 0 AND fat_pct IS NOT NULL THEN CAST(ROUND(kcal_target * fat_pct / 100.0 / 9) AS INTEGER) END
+    WHERE protein_g IS NULL AND carb_g IS NULL AND fat_g IS NULL;
+    ALTER TABLE profile DROP COLUMN protein_pct;
+    ALTER TABLE profile DROP COLUMN carb_pct;
+    ALTER TABLE profile DROP COLUMN fat_pct;
+  `)
 }
 
 let singleton = null

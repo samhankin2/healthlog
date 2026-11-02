@@ -25,9 +25,9 @@ export function profilePayload(row) {
     age: num(row.age),
     activityLevel: row.activity_level ?? null,
     kcalTarget: num(row.kcal_target),
-    proteinPct: num(row.protein_pct),
-    carbPct: num(row.carb_pct),
-    fatPct: num(row.fat_pct),
+    proteinG: num(row.protein_g),
+    carbG: num(row.carb_g),
+    fatG: num(row.fat_g),
     chartWindowDays: num(row.chart_window_days) ?? 90,
     updatedAt: iso(row.updated_at),
   }

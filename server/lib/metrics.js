@@ -351,20 +351,6 @@ export function buildIntakeBlock(kcal, proteinG, carbsG, fatG) {
   }
 }
 
-/** Macro gram targets from a kcal target + percentages. */
-export function macroTargets(kcalTarget, proteinPct, carbPct, fatPct) {
-  const kcal = Number(kcalTarget)
-  if (!Number.isFinite(kcal) || kcal <= 0) return { proteinG: null, carbG: null, fatG: null }
-  const p = Number.isFinite(Number(proteinPct)) ? Number(proteinPct) : 30
-  const c = Number.isFinite(Number(carbPct)) ? Number(carbPct) : 40
-  const f = Number.isFinite(Number(fatPct)) ? Number(fatPct) : 30
-  return {
-    proteinG: round1((kcal * p) / 100 / 4),
-    carbG: round1((kcal * c) / 100 / 4),
-    fatG: round1((kcal * f) / 100 / 9),
-  }
-}
-
 /**
  * Mifflin–St Jeor BMR + activity multiplier → daily kcal target.
  * Returns null when any input is missing.

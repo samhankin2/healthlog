@@ -130,9 +130,9 @@ CREATE TABLE profile (
   age             INTEGER,
   activity_level  TEXT,                    -- 'sedentary'..'very_active'
   kcal_target     INTEGER,
-  protein_pct     INTEGER,                 -- percent of calories
-  carb_pct        INTEGER,
-  fat_pct         INTEGER,
+  protein_g       INTEGER,                 -- daily target, grams
+  carb_g          INTEGER,
+  fat_g           INTEGER,
   chart_window_days INTEGER NOT NULL DEFAULT 90,
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -283,7 +283,7 @@ GET  /api/auth/me                                         -> 200 { ok:true, user
 ### Profile
 ```
 GET /api/profile -> 200 { ok:true, profile:{ heightCm, startWeightKg, goalWeightKg, sex, age,
-                          activityLevel, kcalTarget, proteinPct, carbPct, fatPct, chartWindowDays } }
+                          activityLevel, kcalTarget, proteinG, carbG, fatG, chartWindowDays } }
 PUT /api/profile { ...partial profile fields... } -> 200 { ok:true, profile:{...} }
 ```
 PUT also recomputes `kcalTarget` from the profile when `kcalTarget` is not

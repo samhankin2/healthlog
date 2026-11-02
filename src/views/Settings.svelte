@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import Icon from '../lib/components/Icon.svelte'
   import SegmentedControl from '../lib/components/SegmentedControl.svelte'
   import WeightJsonPanel from '../lib/panels/WeightJsonPanel.svelte'
@@ -25,9 +25,9 @@
   let age = $state(app.profile?.age?.toString() ?? '')
   let activity = $state(app.profile?.activityLevel ?? '')
   let kcalTarget = $state(app.profile?.kcalTarget?.toString() ?? '')
-  let protein = $state(String(app.profile?.proteinPct ?? 30))
-  let carbs = $state(String(app.profile?.carbPct ?? 40))
-  let fat = $state(String(app.profile?.fatPct ?? 30))
+  let protein = $state(app.profile?.proteinG?.toString() ?? '')
+  let carbs = $state(app.profile?.carbG?.toString() ?? '')
+  let fat = $state(app.profile?.fatG?.toString() ?? '')
   let initialRange = app.profile?.chartWindowDays ?? 90
   let chartRange = $state(initialRange >= 3650 ? 0 : initialRange)
   let saving = $state(false)
@@ -35,7 +35,7 @@
   let jsonOpen = $state(false)
   let exporting = $state(false)
   let signOutOpen = $state(false)
-  let macroTotal = $derived((Number(protein) || 0) + (Number(carbs) || 0) + (Number(fat) || 0))
+  let macroKcal = $derived(Math.round(((Number(protein) || 0) + (Number(carbs) || 0)) * 4 + (Number(fat) || 0) * 9))
 
   function optionalNumber(value: string, min: number, max: number, integer = false): number | null | undefined {
     if (!value.trim()) return null
@@ -52,16 +52,12 @@
     const goalWeightKg = optionalNumber(goalWeight, 20, 400)
     const parsedAge = optionalNumber(age, 1, 130, true)
     const parsedKcal = optionalNumber(kcalTarget, 0, 20000, true)
-    const proteinPct = optionalNumber(protein, 0, 100, true)
-    const carbPct = optionalNumber(carbs, 0, 100, true)
-    const fatPct = optionalNumber(fat, 0, 100, true)
-    const numeric = [heightCm, startWeightKg, goalWeightKg, parsedAge, parsedKcal, proteinPct, carbPct, fatPct]
+    const proteinG = optionalNumber(protein, 0, 2000, true)
+    const carbG = optionalNumber(carbs, 0, 2000, true)
+    const fatG = optionalNumber(fat, 0, 2000, true)
+    const numeric = [heightCm, startWeightKg, goalWeightKg, parsedAge, parsedKcal, proteinG, carbG, fatG]
     if (numeric.some((value) => value === undefined)) {
-      error = 'Check the highlighted ranges: height 80–260 cm, weight 20–400 kg, age 1–130, and whole-number nutrition values.'
-      return
-    }
-    if ((proteinPct ?? 0) + (carbPct ?? 0) + (fatPct ?? 0) !== 100) {
-      error = 'Protein, carb, and fat percentages must add up to 100%.'
+      error = 'Check the highlighted ranges: height 80â€“260 cm, weight 20â€“400 kg, age 1â€“130, and whole-number nutrition values.'
       return
     }
     const apiDays = chartRange === 0 ? 3650 : chartRange
@@ -75,9 +71,9 @@
       // Deliberately sent alongside every Mifflin input so an explicit target
       // cannot be overwritten by the API's automatic recalculation.
       kcalTarget: parsedKcal ?? null,
-      proteinPct: proteinPct ?? null,
-      carbPct: carbPct ?? null,
-      fatPct: fatPct ?? null,
+      proteinG: proteinG ?? null,
+      carbG: carbG ?? null,
+      fatG: fatG ?? null,
       chartWindowDays: apiDays,
     }
     saving = true
@@ -162,11 +158,11 @@
         <div class="settings-grid nutrition-grid">
           <div class="field"><label class="field-label" for="settings-kcal">Calorie target</label><div class="field-with-unit"><input class="field-input" id="settings-kcal" type="number" inputmode="numeric" min="0" max="20000" step="1" placeholder="2000" bind:value={kcalTarget} disabled={saving} /><span class="field-unit">kcal</span></div><p class="field-hint">Your explicit target is kept when profile details change.</p></div>
           <fieldset class="macro-fieldset" disabled={saving}>
-            <legend>Macro split <span class:invalid={macroTotal !== 100}>({macroTotal}% total)</span></legend>
+            <legend>Daily macro targets <span>(â‰ˆ {macroKcal} kcal)</span></legend>
             <div class="macro-settings-grid">
-              <div class="field"><label class="field-label" for="settings-protein">Protein</label><div class="field-with-unit"><input class="field-input" id="settings-protein" type="number" inputmode="numeric" min="0" max="100" step="1" bind:value={protein} /><span class="field-unit">%</span></div></div>
-              <div class="field"><label class="field-label" for="settings-carbs">Carbs</label><div class="field-with-unit"><input class="field-input" id="settings-carbs" type="number" inputmode="numeric" min="0" max="100" step="1" bind:value={carbs} /><span class="field-unit">%</span></div></div>
-              <div class="field"><label class="field-label" for="settings-fat">Fat</label><div class="field-with-unit"><input class="field-input" id="settings-fat" type="number" inputmode="numeric" min="0" max="100" step="1" bind:value={fat} /><span class="field-unit">%</span></div></div>
+              <div class="field"><label class="field-label" for="settings-protein">Protein</label><div class="field-with-unit"><input class="field-input" id="settings-protein" type="number" inputmode="numeric" min="0" max="2000" step="1" bind:value={protein} /><span class="field-unit">g</span></div></div>
+              <div class="field"><label class="field-label" for="settings-carbs">Carbs</label><div class="field-with-unit"><input class="field-input" id="settings-carbs" type="number" inputmode="numeric" min="0" max="2000" step="1" bind:value={carbs} /><span class="field-unit">g</span></div></div>
+              <div class="field"><label class="field-label" for="settings-fat">Fat</label><div class="field-with-unit"><input class="field-input" id="settings-fat" type="number" inputmode="numeric" min="0" max="2000" step="1" bind:value={fat} /><span class="field-unit">g</span></div></div>
             </div>
           </fieldset>
         </div>
@@ -179,7 +175,7 @@
     </section>
 
     {#if error}<p class="form-error" role="alert"><Icon name="alert" size={19} /> {error}</p>{/if}
-    <button class="button button--primary save-settings" type="submit" disabled={saving}>{#if saving}<span class="spinner" aria-hidden="true"></span> Saving…{:else}<Icon name="check" size={19} /> Save settings{/if}</button>
+    <button class="button button--primary save-settings" type="submit" disabled={saving}>{#if saving}<span class="spinner" aria-hidden="true"></span> Savingâ€¦{:else}<Icon name="check" size={19} /> Save settings{/if}</button>
   </form>
 
   <section class="metric-card settings-card" aria-labelledby="data-title">
@@ -188,7 +184,7 @@
       <p class="card-note">Restore the old weight-tracker format, or download your HealthLog profile, weigh-ins, phases, meals, foods, and recent chat messages as JSON.</p>
       <div class="data-actions">
         <button class="button button--secondary" type="button" onclick={() => { jsonOpen = true }}><Icon name="upload" size={18} /> Import old JSON</button>
-        <button class="button button--secondary" type="button" disabled={exporting} onclick={exportData}><Icon name="download" size={18} /> {exporting ? 'Preparing export…' : 'Export account data'}</button>
+        <button class="button button--secondary" type="button" disabled={exporting} onclick={exportData}><Icon name="download" size={18} /> {exporting ? 'Preparing exportâ€¦' : 'Export account data'}</button>
       </div>
     </div>
   </section>
@@ -211,7 +207,6 @@
   .macro-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
   .macro-fieldset legend { margin-bottom: var(--space-2); font-size: var(--text-sm); font-weight: var(--weight-medium); }
   .macro-fieldset legend span { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
-  .macro-fieldset legend span.invalid { color: var(--color-danger); }
   .macro-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
   .save-settings { align-self: flex-end; min-width: 11rem; }
   .data-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
