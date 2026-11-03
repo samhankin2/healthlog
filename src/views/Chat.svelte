@@ -17,6 +17,12 @@
     save: boolean
     clearDraft: boolean
     createdAt: number
+    reviseAnalysisId?: string
+  }
+
+  interface Revising {
+    analysisId: string
+    label: string
   }
 
   interface EditingMeal {
@@ -34,6 +40,7 @@
   let pending = $state<PendingRequest | null>(null)
   let analyses = $state<Record<string, Analysis>>({})
   let editing = $state<EditingMeal | null>(null)
+  let revising = $state<Revising | null>(null)
   let mealActionBusy = $state<string | null>(null)
   let chatScroll: HTMLElement | undefined = $state()
   let composerInput: HTMLTextAreaElement | undefined = $state()
@@ -95,6 +102,7 @@
         day: today(),
         save: request.save,
         clientId: request.clientId,
+        ...(request.reviseAnalysisId ? { reviseAnalysisId: request.reviseAnalysisId } : {}),
       })
       if (response.analysis) analyses[response.analysis.id] = response.analysis
       pending = null
@@ -111,13 +119,29 @@
   function submitDraft(): void {
     const text = draft.trim()
     if (!text || sending) return
+    // Nothing is saved until the user presses "Save meal", so an estimate can be
+    // corrected first.
+    const target = revising
+    revising = null
     void runRequest({
       text,
       clientId: crypto.randomUUID(),
-      save: true,
+      save: false,
       clearDraft: true,
       createdAt: Date.now(),
+      ...(target ? { reviseAnalysisId: target.analysisId } : {}),
     })
+  }
+
+  async function startCorrecting(analysis: Analysis): Promise<void> {
+    if (sending) return
+    const names = (analysis.reconciled?.meals?.length ? analysis.reconciled.meals.map((m) => m.name ?? m.items[0]?.name) : [analysis.reconciled?.items[0]?.name])
+      .filter(Boolean)
+      .join(', ')
+    revising = { analysisId: analysis.id, label: names || 'this estimate' }
+    sendError = ''
+    await tick()
+    composerInput?.focus()
   }
 
   function onComposerKeydown(event: KeyboardEvent): void {
@@ -252,6 +276,7 @@
               onsave={() => saveMeal(message, analysis, prompt)}
               onedit={() => (editing = { message, analysis, meal, prompt })}
               onaskagain={() => askAgain(prompt)}
+              oncorrect={() => startCorrecting(analysis)}
             />
           {:else}
             <div class="message-bubble">{message.content}</div>
@@ -296,6 +321,12 @@
       aria-busy={sending}
       onsubmit={(event) => { event.preventDefault(); submitDraft() }}
     >
+      {#if revising}
+        <div class="revising-banner" role="status">
+          <span>Correcting: <strong>{revising.label}</strong> — say what's off, e.g. "the rice is 1/3 cup raw, about 250 kcal"</span>
+          <button class="revising-cancel" type="button" onclick={() => (revising = null)}>Cancel</button>
+        </div>
+      {/if}
       <div class="composer-inner">
         <textarea
           bind:this={composerInput}
@@ -303,7 +334,7 @@
           class="composer-input"
           rows="1"
           maxlength="4000"
-          placeholder="Describe what you ate…"
+          placeholder={revising ? 'What should change?' : 'Describe what you ate…'}
           aria-label="Food description"
           aria-describedby="composer-hint"
           oninput={resizeComposer}
@@ -339,6 +370,30 @@
 {/if}
 
 <style>
+  .revising-banner {
+    display: flex;
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    border-left: 3px solid var(--color-accent);
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-soft);
+    font-size: var(--text-sm);
+  }
+
+  .revising-cancel {
+    flex: 0 0 auto;
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font: inherit;
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+  }
+
   .thinking {
     display: flex;
     align-items: center;

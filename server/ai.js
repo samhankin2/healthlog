@@ -104,6 +104,8 @@ function systemPrompt() {
     'numbers EXACTLY for that meal and only estimate whichever macros they did not state, keeping the',
     'meal consistent with the stated calories. For a meal with fully stated numbers use a single item.',
     'When the user gives weights or quantities, use them; otherwise assume a typical portion.',
+    'Dry staples (rice, pasta, oats, flour, lentils) are RAW unless the user says cooked: use raw',
+    'calories for them, e.g. 1/3 cup raw rice (about 65 g) is roughly 230-250 kcal, not ~100.',
     'Rules: all numbers are non-negative; kcal are kilocalories; macros are grams;',
     "each meal's `total` must be the sum of its `items`; `confidence` is 0..1 and reflects how well the",
     'description pins down portions; `notes` is one short sentence listing assumptions.',
@@ -113,7 +115,7 @@ function systemPrompt() {
 /**
  * @param {{message: string, intake?: object|null, profile?: object|null, day?: string}} ctx
  */
-export function buildPrompt({ message, intake = null, profile = null, day = null }) {
+export function buildPrompt({ message, intake = null, profile = null, day = null, previous = null }) {
   const lines = []
   if (day) lines.push(`Local day: ${day}`)
   if (intake) {
@@ -135,10 +137,53 @@ export function buildPrompt({ message, intake = null, profile = null, day = null
   }
   lines.push('')
   lines.push('The user said:')
-  lines.push(String(message || '').slice(0, 2000))
+  lines.push(String(message || '').slice(0, 6000))
   lines.push('')
+  if (previous) {
+    lines.push(PREVIOUS_MARKER)
+    lines.push(JSON.stringify(compactForPrompt(previous)))
+    lines.push(
+      'The user has corrected that estimate; their correction is the last "Correction:" line above.',
+      'Apply the correction exactly (their numbers and quantities beat your assumptions) and keep',
+      'everything they did not mention the same. Return the FULL updated estimate, not just the change.',
+      '',
+    )
+  }
   lines.push('Estimate this meal. Return only the JSON object described in the system prompt.')
   return lines.join('\n')
+}
+
+const PREVIOUS_MARKER = 'Your previous estimate was:'
+
+/** Meals + items of an earlier reconciled result, trimmed for use inside a prompt. */
+function compactForPrompt(reconciled) {
+  const groups = reconciled?.meals?.length
+    ? reconciled.meals
+    : [{ name: null, items: reconciled?.items ?? [] }]
+  return groups.map((g) => ({
+    name: g.name ?? null,
+    items: (g.items ?? []).map((i) => ({
+      name: i.name,
+      quantity: i.quantity ?? null,
+      kcal: i.kcal,
+      protein_g: i.protein_g,
+      carbs_g: i.carbs_g,
+      fat_g: i.fat_g,
+    })),
+  }))
+}
+
+/** Recover what the user described from a stored prompt (used when revising an analysis). */
+export function userTextFromPrompt(promptText) {
+  const text = String(promptText || '')
+  const startMarker = 'The user said:\n'
+  const start = text.indexOf(startMarker)
+  if (start < 0) return ''
+  const body = text.slice(start + startMarker.length)
+  const ends = [`\n\n${PREVIOUS_MARKER}`, '\n\nEstimate this meal.']
+    .map((marker) => body.lastIndexOf(marker))
+    .filter((i) => i >= 0)
+  return (ends.length ? body.slice(0, Math.min(...ends)) : body).trim()
 }
 
 /* ------------------------------------------------------------------ */
@@ -684,9 +729,9 @@ export async function judgeComparison({ a, b, recon, sessionId, message, cfg }) 
  *   chosen: string|null, error: string|null, judgeUsed: boolean
  * }>}
  */
-export async function runAnalysis({ user, message, profile = null, intake = null, day = null, sessionId = null }) {
+export async function runAnalysis({ user, message, profile = null, intake = null, day = null, sessionId = null, previous = null }) {
   const cfg = aiConfig()
-  const promptText = buildPrompt({ message, intake, profile, day })
+  const promptText = buildPrompt({ message, intake, profile, day, previous })
   const messages = [
     { role: 'system', content: systemPrompt() },
     { role: 'user', content: promptText },

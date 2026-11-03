@@ -57,6 +57,22 @@ function removeById<T extends { id: string }>(items: T[], id: string): T[] {
   return items.filter((item) => item.id !== id)
 }
 
+/**
+ * The chat starts empty each time the app is opened. Messages that already
+ * existed when this session first loaded are "archived": they stay in the
+ * database (and in exports) but are never shown in the chat view.
+ */
+const archivedMessageIds = new Set<string>()
+let chatSessionStarted = false
+
+function sessionMessages(all: ChatMessage[]): ChatMessage[] {
+  if (!chatSessionStarted) {
+    for (const message of all) archivedMessageIds.add(message.id)
+    chatSessionStarted = true
+  }
+  return all.filter((message) => !archivedMessageIds.has(message.id))
+}
+
 export const store = {
   get(): AppState {
     return state
@@ -70,6 +86,8 @@ export const store = {
   /** Clear all account data from memory. The auth token is managed by auth.ts. */
   reset(): void {
     setUser(null)
+    archivedMessageIds.clear()
+    chatSessionStarted = false
     state = { ...EMPTY_STATE }
     for (const listener of listeners) listener(state)
   },
@@ -102,7 +120,7 @@ export const store = {
         phases: phases.phases,
         meals: meals.meals,
         foods: foods.foods,
-        messages: messages.messages,
+        messages: sessionMessages(messages.messages),
         metrics: dashboard.metrics,
         loading: false,
         loaded: true,
@@ -245,15 +263,16 @@ export const store = {
 
   async loadMessages(filter: { limit?: number; before?: string } = { limit: 100 }, options?: ApiRequestOptions): Promise<ChatMessage[]> {
     const response = await api.getChatMessages(filter, options)
-    commit({ messages: response.messages })
-    return response.messages
+    const shown = sessionMessages(response.messages)
+    commit({ messages: shown })
+    return shown
   },
 
   async sendChat(input: ChatInput, options?: ApiRequestOptions): Promise<{ message: ChatMessage; meal: Meal | null; analysis: Analysis | null }> {
     const response = await api.sendChat(input, options)
     const messages = await api.getChatMessages({ limit: 100 }, options)
     commit({
-      messages: messages.messages,
+      messages: sessionMessages(messages.messages),
       meals: (response.meals?.length ? response.meals : response.meal ? [response.meal] : []).reduce(
         (list, saved) => upsertById(list, saved),
         state.meals,

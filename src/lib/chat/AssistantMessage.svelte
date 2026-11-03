@@ -14,9 +14,10 @@
     onsave: () => void
     onedit: () => void
     onaskagain: () => void
+    oncorrect: () => void
   }
 
-  let { message, analysis, saved, busy = false, onsave, onedit, onaskagain }: Props = $props()
+  let { message, analysis, saved, busy = false, onsave, onedit, onaskagain, oncorrect }: Props = $props()
 
   function isModelOutput(output: Analysis['modelAOutput']): output is ModelOutput {
     return !('error' in output)
@@ -139,6 +140,11 @@
         </Button>
       {:else}
         <span class="badge" data-tone="success"><Icon name="check" size={15} /> Meal saved</span>
+      {/if}
+      {#if !saved}
+        <Button variant="secondary" onclick={oncorrect} disabled={busy}>
+          <Icon name="chat" size={17} /> Correct
+        </Button>
       {/if}
       {#if splitMeals.length <= 1}
         <Button variant="secondary" onclick={onedit} disabled={busy}>

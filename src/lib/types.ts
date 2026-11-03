@@ -231,7 +231,14 @@ export type MealInput = Nutrition & {
 }
 export type MealPatch = Partial<MealInput>
 export type FoodInput = Nutrition & { name: string; serving?: string | null }
-export type ChatInput = { message: string; day?: DayString; save?: boolean; clientId?: string }
+export type ChatInput = {
+  message: string
+  day?: DayString
+  save?: boolean
+  clientId?: string
+  /** Re-estimate an earlier analysis using `message` as the user's correction. */
+  reviseAnalysisId?: string
+}
 
 export interface FoodCsvMapping {
   name: string

@@ -13,7 +13,7 @@ import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
 import { alias, asObject, clampInt, requireString } from '../lib/validate.js'
 import { isISODate, sumIntake, today } from '../lib/metrics.js'
 import { chatMessagePayload } from '../lib/shape.js'
-import { analysisPayload, runAnalysis } from '../ai.js'
+import { analysisPayload, runAnalysis, userTextFromPrompt } from '../ai.js'
 import { findMeal, insertMeal } from '../lib/meals.js'
 
 /** In-memory idempotency cache: `${userId}|${key}` → {at, body}. */
@@ -133,6 +133,24 @@ export function registerChatRoutes(router) {
     const day = dayRaw ? String(dayRaw) : today()
     const save = body.save !== false
 
+    // Correcting an earlier estimate ("you've underestimated the rice"): the
+    // models get their previous answer plus the user's correction.
+    let previous = null
+    let analysisMessage = message
+    const reviseId = alias(body, 'reviseAnalysisId')
+    if (reviseId) {
+      const row = db.prepare('SELECT * FROM analyses WHERE id = ? AND user_id = ?').get(String(reviseId), user.id)
+      if (!row) throw new HttpError(404, 'The estimate you are correcting was not found')
+      try {
+        previous = JSON.parse(row.reconciled)
+      } catch {
+        previous = null
+      }
+      const original = userTextFromPrompt(row.prompt_text)
+      if (previous && original) analysisMessage = `${original}\nCorrection: ${message}`
+      else previous = null
+    }
+
     const idemKey = req.headers['idempotency-key'] || alias(body, 'clientId')
     const cacheKey = idemKey ? `${user.id}|${String(idemKey)}` : null
     if (cacheKey) {
@@ -175,7 +193,8 @@ export function registerChatRoutes(router) {
 
     const result = await runAnalysis({
       user,
-      message,
+      message: analysisMessage,
+      previous,
       profile: profileForPrompt,
       intake,
       day,
@@ -203,8 +222,8 @@ export function registerChatRoutes(router) {
         const id = insertMeal(db, user.id, {
           eatenAt: new Date(baseTime + index).toISOString(),
           day,
-          name: g.name || mealName(g, message),
-          description: groups.length > 1 ? `${g.name || mealName(g, message)} — from: ${message}` : message,
+          name: g.name || mealName(g, analysisMessage),
+          description: groups.length > 1 ? `${g.name || mealName(g, analysisMessage)} — from: ${analysisMessage}` : analysisMessage,
           kcal: g.total.kcal,
           proteinG: g.total.protein_g,
           carbsG: g.total.carbs_g,
