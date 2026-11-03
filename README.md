@@ -115,6 +115,10 @@ variables locally. `.env` is git-ignored.
 | `AI_FALLBACK_BASE_URL` | `https://api.groq.com/openai/v1` | Fallback endpoint. |
 | `AI_FALLBACK_MODEL_A` / `_B` | `llama-3.3-70b-versatile` / `llama-3.1-8b-instant` | Fallback replacements for A / B. |
 | `AI_FALLBACK_JUDGE_MODEL` | `llama-3.1-8b-instant` | Fallback replacement for the judge. |
+| `BACKUPS` | on | Set `off` to stop the server's daily snapshots. |
+| `BACKUP_INTERVAL_HOURS` | `24` | Minimum age of the newest snapshot before another is taken. |
+| `BACKUP_KEEP` | `14` | Snapshots kept in `$DATA_DIR/backups`. |
+| `ACCESS_LOG` | on | Set `off` to stop the one-line-per-request journal log. |
 
 The AI key is never in the repo, never in a GitHub variable the frontend can
 read, and never sent to the browser.
@@ -259,6 +263,41 @@ curl https://<user>.github.io/healthlog/api-config.js    # the injected API base
 
 ## Operations
 
+### `scripts/hl` — the box from your machine
+
+One command for everything you would otherwise SSH in for (Git Bash on
+Windows; uses `DEPLOY_HOST` and `SSH_KEY`, defaulting to the live box):
+
+| Task | Command |
+| --- | --- |
+| Health, commit, memory/disk, backups, recent errors | `scripts/hl status` |
+| Users, activity, meals per day, AI models + errors, row counts | `scripts/hl stats [--days 7]` |
+| Accounts with activity | `scripts/hl users` |
+| API requests by route/status with latency | `scripts/hl traffic [hours]` |
+| One query (read-only) | `scripts/hl sql "SELECT day, name, kcal FROM meals ORDER BY created_at DESC LIMIT 10"` |
+| One write (backs up first) | `scripts/hl sql --write "UPDATE meals SET kcal = 450 WHERE id = '...'"` |
+| Interactive SQL on the live DB | `scripts/hl shell` (`.tables`, `.schema meals`, `.json`, `.quit`); `--write` to allow writes |
+| Logs | `scripts/hl logs [N]`, `scripts/hl logs -f`, `scripts/hl errors [hours]` |
+| Backups | `scripts/hl backup`, `scripts/hl backup list`, `scripts/hl backup pull` (download to `data/backups/`) |
+| Local dev DB = copy of production | `scripts/hl pull` |
+| Restart + health check | `scripts/hl restart` |
+
+SQL goes through `server/cli.js` on the box, so nothing extra is installed
+there. Reads open the database read-only; password and token hashes are masked
+in every result. For a GUI, `scripts/hl backup pull` and open the file in
+DB Browser for SQLite.
+
+**Backups.** The server snapshots the database (`VACUUM INTO`, safe while it is
+running) into `/var/lib/healthlog/backups/` once a day and keeps the newest 14
+(`BACKUP_KEEP`, `BACKUP_INTERVAL_HOURS`, `BACKUPS=off`). They live on the same
+disk — run `scripts/hl backup pull` now and then for an off-box copy.
+
+**Access log.** Every API request writes one journal line,
+`[req] POST /api/chat 200 4123ms` — method, path, status, duration only; no
+query strings, headers or bodies. `ACCESS_LOG=off` disables it.
+
+### Raw commands
+
 | Task | Command |
 | --- | --- |
 | Deploy by hand | `ssh ubuntu@<ip> 'sudo /usr/local/bin/healthlog-deploy'` |
@@ -267,7 +306,7 @@ curl https://<user>.github.io/healthlog/api-config.js    # the injected API base
 | Which commit is live | `curl https://healthlog.<ip>.sslip.io/api/health` |
 | Bootstrap log | `ssh ubuntu@<ip> 'sudo tail -n 120 /var/log/healthlog-bootstrap.log'` |
 | New invite code | `ssh ubuntu@<ip> 'cd /opt/healthlog && node server/cli.js invite create --note "who"'` |
-| Back up the database | `ssh ubuntu@<ip> 'sudo cp /var/lib/healthlog/healthlog.db ~/healthlog-$(date +%F).db'` |
+| Back up the database | `ssh ubuntu@<ip> 'cd /opt/healthlog && DATA_DIR=/var/lib/healthlog node server/cli.js backup'` (a plain `cp` of a WAL database can be inconsistent) |
 | Edit server config | `ssh ubuntu@<ip> 'sudoedit /etc/healthlog/healthlog.env'` then `sudo systemctl restart healthlog` |
 
 There is no `npm install` on the server: the API has zero runtime dependencies

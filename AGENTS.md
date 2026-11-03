@@ -46,7 +46,7 @@ public/               files Vite copies verbatim into dist/
   .nojekyll           keep Pages from running Jekyll
 server/               API — node:http + node:sqlite, zero runtime dependencies
   index.js            server, router, static fallback
-  db.js auth.js ai.js lib/ routes/ cli.js
+  db.js auth.js ai.js lib/ routes/ cli.js   (cli.js: admin - stats, sql, backups, invites)
 deploy/
   bootstrap.sh        one-shot VPS install (Node 24, Caddy, user, dirs, env, unit, firewall)
   healthlog-deploy.sh installed as /usr/local/bin/healthlog-deploy
@@ -65,7 +65,12 @@ node server/index.js             # API + built site on http://127.0.0.1:8787
 npm run dev                      # Vite dev server (:5173, proxies /api)
 npm run check                    # svelte-check only
 node server/cli.js invite create --note "local"
+node server/cli.js stats | users | sql "..." | backup   # admin; sql is read-only without --write
+scripts/hl status | stats | sql "..." | shell | logs -f # the same, against the live box over SSH
 ```
+
+`scripts/hl` is the way to inspect production (README → Operations). It goes
+through `server/cli.js` on the box, so it needs the current `cli.js` deployed.
 
 No `npm install` on the server: the API imports only Node built-ins
 (`node:sqlite`, `node:http`, `node:crypto`). `package.json` is frontend-only.

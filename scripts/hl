@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# hl - talk to the HealthLog VPS from your machine (Git Bash / macOS / Linux).
+#
+#   scripts/hl status             service, health, commit, memory/disk, backups, recent errors
+#   scripts/hl stats [--days N]   users, activity, meals/day, AI models + errors, row counts
+#   scripts/hl users              one line per account
+#   scripts/hl traffic [hours]    API requests by route/status, with avg + max latency (default 24h)
+#   scripts/hl sql "SELECT ..."   run a query (read-only) - add --json, --wide
+#   scripts/hl sql --write "..."  run a write (takes a backup on the box first)
+#   scripts/hl shell [--write]    interactive SQL prompt on the live DB (.tables .schema .quit)
+#   scripts/hl logs [N]           last N journal lines (default 80)
+#   scripts/hl logs -f            follow the journal
+#   scripts/hl errors [hours]     error lines from the journal (default 24h)
+#   scripts/hl backup             snapshot the DB on the box now
+#   scripts/hl backup list        list snapshots on the box
+#   scripts/hl backup pull        snapshot + download to data/backups/ (off-box copy)
+#   scripts/hl pull               make the local dev DB a copy of production (scripts/db-sync.sh)
+#   scripts/hl restart            restart the service and health-check it
+#   scripts/hl ssh                plain shell on the box
+#
+# The DB on the box is read through server/cli.js, so nothing extra needs
+# installing there. Password and token hashes are masked in every result.
+#
+# Env: DEPLOY_HOST (default 152.69.178.242), SSH_KEY (default ~/.ssh/biscuit_arena_oracle)
+set -euo pipefail
+
+HOST="${DEPLOY_HOST:-152.69.178.242}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/biscuit_arena_oracle}"
+API="https://healthlog.${HOST}.sslip.io"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLI="cd /opt/healthlog && DATA_DIR=/var/lib/healthlog COMMIT_FILE=/var/lib/healthlog/commit.txt node server/cli.js"
+
+ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
+remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
+remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
+
+usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# Only fixed flags are forwarded to the remote command line; the SQL itself
+# goes over stdin, so no quoting or injection worries.
+sql_flags() {
+  local out=()
+  for a in "$@"; do
+    case "$a" in
+      --json|--wide|--write) out+=("$a") ;;
+      *) echo "unknown flag: $a" >&2; exit 2 ;;
+    esac
+  done
+  echo "${out[*]:-}"
+}
+
+positive_int() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]; }
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  status)
+    echo "== public health ($API) =="
+    curl -fsS --max-time 10 "$API/api/health" || echo "UNREACHABLE"
+    echo
+    echo "local main: $(git -C "$ROOT" rev-parse origin/main 2>/dev/null || echo '?')"
+    remote "bash -s" <<'EOF'
+echo
+echo "== service =="
+printf 'healthlog: %s (since %s)\n' "$(systemctl is-active healthlog)" "$(systemctl show healthlog -p ActiveEnterTimestamp --value)"
+printf 'caddy:     %s\n' "$(systemctl is-active caddy)"
+printf 'restarts:  %s\n' "$(systemctl show healthlog -p NRestarts --value)"
+echo
+echo "== box =="
+uptime
+free -h | sed -n '1,2p'
+df -h / | tail -1
+echo
+echo "== data =="
+ls -la /var/lib/healthlog | sed 1d
+echo "backups: $(ls /var/lib/healthlog/backups 2>/dev/null | wc -l), newest: $(ls -t /var/lib/healthlog/backups 2>/dev/null | head -1)"
+echo
+echo "== requests last 24h =="
+journalctl -u healthlog --since -24h --no-pager -o cat | grep -c '^\[req\]' || true
+echo "== errors last 24h =="
+errs="$(journalctl -u healthlog --since -24h --no-pager -o short-iso \
+  | grep -E 'error|Error|failed|\[req\] [A-Z]+ [^ ]+ 5[0-9][0-9] ' | tail -10 || true)"
+echo "${errs:-(none)}"
+EOF
+    ;;
+
+  stats)
+    if [ $# -eq 0 ]; then
+      remote "$CLI stats"
+    elif [ "$1" = "--days" ] && positive_int "${2:-}"; then
+      remote "$CLI stats --days $2"
+    else
+      echo "usage: hl stats [--days N]" >&2; exit 2
+    fi
+    ;;
+
+  users)
+    remote "$CLI users"
+    ;;
+
+  traffic)
+    hours="${1:-24}"
+    positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
+    # Collapse ids in paths so /api/meals/<uuid> groups as /api/meals/:id.
+    remote "journalctl -u healthlog --since -${hours}h --no-pager -o cat | grep '^\[req\]'" \
+      | awk '{
+          path=$3; gsub(/\/[0-9a-f-]{8,}/, "/:id", path)
+          ms=$5; sub(/ms$/, "", ms)
+          k=$2" "path" "$4; n[k]++; t[k]+=ms; if (ms>m[k]) m[k]=ms
+        }
+        END {
+          if (length(n)==0) { print "(no requests logged in that window)"; exit }
+          printf "%-6s %-36s %-6s %6s %8s %8s\n", "method", "path", "status", "count", "avg_ms", "max_ms"
+          for (k in n) { split(k, p, " "); printf "%-6s %-36s %-6s %6d %8d %8d\n", p[1], p[2], p[3], n[k], t[k]/n[k], m[k] }
+        }' | { read -r header; echo "$header"; sort -k4,4nr; }
+    ;;
+
+  sql)
+    flags=()
+    query=""
+    for a in "$@"; do
+      case "$a" in --*) flags+=("$a") ;; *) query="$a" ;; esac
+    done
+    [ -n "$query" ] || { echo 'usage: hl sql [--json] [--wide] [--write] "SELECT ..."' >&2; exit 2; }
+    f="$(sql_flags "${flags[@]+"${flags[@]}"}")"
+    printf '%s' "$query" | remote "$CLI sql - $f"
+    ;;
+
+  shell)
+    f="$(sql_flags "$@")"
+    remote_tty "$CLI sql $f"
+    ;;
+
+  logs)
+    if [ "${1:-}" = "-f" ]; then
+      remote_tty "journalctl -u healthlog -f -n 30 --no-pager"
+    else
+      n="${1:-80}"
+      positive_int "$n" || { echo "N must be a number" >&2; exit 2; }
+      remote "journalctl -u healthlog -n $n --no-pager -o short-iso"
+    fi
+    ;;
+
+  errors)
+    hours="${1:-24}"
+    positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
+    remote "journalctl -u healthlog --since -${hours}h --no-pager -o short-iso | grep -E -A5 'error|Error|failed|\[req\] [A-Z]+ [^ ]+ 5[0-9][0-9] ' || echo '(no errors)'"
+    ;;
+
+  backup)
+    case "${1:-}" in
+      "") remote "$CLI backup" ;;
+      list) remote "$CLI backup list" ;;
+      pull)
+        path="$(remote "$CLI backup" | awk '{print $1}')"
+        [[ "$path" == /var/lib/healthlog/backups/* ]] || { echo "unexpected backup path: $path" >&2; exit 1; }
+        mkdir -p "$ROOT/data/backups"
+        scp "${ssh_opts[@]}" "ubuntu@$HOST:$path" "$ROOT/data/backups/"
+        echo "downloaded: $ROOT/data/backups/$(basename "$path")"
+        ;;
+      *) echo "usage: hl backup [list|pull]" >&2; exit 2 ;;
+    esac
+    ;;
+
+  pull)
+    exec "$ROOT/scripts/db-sync.sh" pull
+    ;;
+
+  restart)
+    remote "sudo systemctl restart healthlog && for i in \$(seq 1 15); do curl -fsS --max-time 2 http://127.0.0.1:8787/api/health && echo && exit 0; sleep 1; done; echo 'NOT HEALTHY after 15s' >&2; exit 1"
+    ;;
+
+  ssh)
+    exec ssh -i "$SSH_KEY" "ubuntu@$HOST"
+    ;;
+
+  help|-h|--help)
+    usage
+    ;;
+
+  *)
+    echo "unknown command: $cmd" >&2
+    usage
+    exit 2
+    ;;
+esac

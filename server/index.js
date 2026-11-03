@@ -24,6 +24,7 @@ import { registerFoodRoutes } from './routes/foods.js'
 import { registerChatRoutes } from './routes/chat.js'
 import { registerAnalysisRoutes } from './routes/analyses.js'
 import { registerImportRoutes } from './routes/imports.js'
+import { scheduleBackups } from './lib/backup.js'
 
 const SERVICE = 'healthlog'
 const VERSION = '1.0'
@@ -161,10 +162,29 @@ function serveStatic(req, res, pathname) {
 /* Server                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * One journal line per API request: method, path (no query string), status,
+ * duration. Never logs headers or bodies, so no token or food text leaks.
+ * Preflights and health checks are skipped. ACCESS_LOG=off disables it.
+ */
+const ACCESS_LOG = !['0', 'off', 'false', 'no'].includes((process.env.ACCESS_LOG || '').trim().toLowerCase())
+
+function logRequest(req, res) {
+  if (!ACCESS_LOG || req.method === 'OPTIONS') return
+  const started = process.hrtime.bigint()
+  res.on('finish', () => {
+    const pathname = (req.url || '/').split('?')[0]
+    if (!pathname.startsWith('/api/') || pathname === '/api/health') return
+    const ms = Number((process.hrtime.bigint() - started) / 1_000_000n)
+    console.log(`[req] ${req.method} ${pathname} ${res.statusCode} ${ms}ms`)
+  })
+}
+
 export function createServer() {
   const router = buildRouter()
 
   return http.createServer(async (req, res) => {
+    logRequest(req, res)
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null
     const cors = corsHeaders(origin)
     for (const [k, v] of Object.entries(cors)) res.setHeader(k, v)
@@ -238,7 +258,8 @@ export function start() {
   const host = process.env.HOST || '127.0.0.1'
 
   // Opening the DB here creates the schema on an empty data directory.
-  getDb()
+  const db = getDb()
+  const stopBackups = scheduleBackups(db)
 
   const server = createServer()
   server.listen(port, host, () => {
@@ -247,6 +268,7 @@ export function start() {
 
   const shutdown = (signal) => {
     console.log(`[healthlog] ${signal} received, shutting down`)
+    stopBackups()
     server.close(() => {
       closeDb()
       process.exit(0)
