@@ -49,6 +49,9 @@
           <dt>From the formula</dt>
           <dd>{tdee.formulaKcal === null ? '—' : fmtKcal(tdee.formulaKcal)}</dd>
         </div>
+        {#if tdee.watchKcal != null}
+          <div><dt>Garmin watch</dt><dd>{fmtKcal(tdee.watchKcal)}</dd></div>
+        {/if}
         <div><dt>Your daily target</dt><dd>{tdee.kcalTarget === null ? '—' : fmtKcal(tdee.kcalTarget)}</dd></div>
       </dl>
 
@@ -64,7 +67,7 @@
       {/if}
       <p class="card-note">
         This assumes the meals you log are complete. Days where you skipped logging some meals pull it down. The formula comes from the
-        activity level in Settings.
+        activity level in Settings.{#if tdee.watchKcal != null}{' '}The watch figure is Garmin's own average daily burn over {tdee.watchDays} days. Watches often overestimate it.{/if}
       </p>
     {:else}
       <p class="tdee-reason">{tdee.reason}</p>
@@ -98,7 +101,7 @@
   .tdee-headline span { color: var(--color-text-muted); font-size: var(--text-lg); }
   .tdee-basis, .tdee-implication, .tdee-reason { margin: var(--space-2) 0 var(--space-3); color: var(--color-text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .tdee-implication { color: var(--color-text); }
-  .tdee-compare { display: grid; margin: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+  .tdee-compare { display: grid; margin: 0; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: var(--space-2); }
   .tdee-compare div { display: flex; min-width: 0; padding: var(--space-3); flex-direction: column; gap: var(--space-1); border-radius: var(--radius-card); background: var(--color-surface-sunken); }
   .tdee-compare dt { color: var(--color-text-muted); font-size: var(--text-xs); }
   .tdee-compare dd { margin: 0; font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; }

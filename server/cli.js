@@ -8,6 +8,9 @@
  *   node server/cli.js sql -                          read the query from stdin
  *   node server/cli.js sql                            interactive prompt (when stdin is a TTY)
  *   node server/cli.js backup [list]
+ *   node server/cli.js garmin login --email <healthlog email>   one-time interactive Garmin login
+ *   node server/cli.js garmin sync --email <email> [--days N]  sync now (saved tokens only)
+ *   node server/cli.js garmin status
  *   node server/cli.js invite create --note "sam"
  *   node server/cli.js invite list
  *   node server/cli.js user create --email me@example.com --password "hunter22"
@@ -31,6 +34,8 @@ import {
   validateCredentials,
 } from './auth.js'
 import { backupNow, listBackups } from './lib/backup.js'
+import { spawnSync } from 'node:child_process'
+import { garminAvailable, garminStatus, markLoggedIn, pythonBin, scriptPath, syncUser, tokensDir } from './lib/garmin.js'
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -63,6 +68,9 @@ function usage() {
     '  node server/cli.js sql                            interactive prompt (.tables, .schema, .quit)',
     '  node server/cli.js backup                         take a snapshot now',
     '  node server/cli.js backup list                    list snapshots',
+    '  node server/cli.js garmin login --email <email>   one-time interactive Garmin login (MFA ok)',
+    '  node server/cli.js garmin sync --email <email> [--days N]   sync now with saved tokens',
+    '  node server/cli.js garmin status                  connection + last sync per user',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
     '  node server/cli.js invite list                    list invite codes',
     '  node server/cli.js invite revoke --code <code>',
@@ -390,6 +398,55 @@ function cmdBackup(action) {
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Garmin                                                              */
+/* ------------------------------------------------------------------ */
+
+function userByEmailArg(db, args) {
+  const email = typeof args.email === 'string' ? args.email.trim() : ''
+  if (!email) throw new Error('--email <healthlog account email> is required')
+  const user = findUserByEmail(db, email)
+  if (!user) throw new Error(`no HealthLog account with email ${email}`)
+  return user
+}
+
+async function cmdGarmin(action, args) {
+  const db = getDb()
+  if (action === 'status') {
+    const users = db.prepare('SELECT id, email FROM users ORDER BY created_at').all()
+    console.log(`python: ${pythonBin()} (${garminAvailable() ? 'ok' : 'missing - run deploy/garmin-setup.sh'})`)
+    for (const u of users) {
+      const s = garminStatus(db, u.id)
+      console.log(`${u.email}  ${s.status}${s.lastSuccessAt ? `  last ok ${s.lastSuccessAt}` : ''}${s.backoffUntil ? `  paused until ${s.backoffUntil}` : ''}${s.lastError ? `  (${s.lastError.slice(0, 120)})` : ''}`)
+    }
+    return
+  }
+  if (action === 'login') {
+    const user = userByEmailArg(db, args)
+    if (!garminAvailable()) throw new Error(`Garmin Python environment missing at ${pythonBin()} - run deploy/garmin-setup.sh`)
+    const argv = [scriptPath(), 'login', '--tokens', tokensDir(user.id)]
+    if (args.force) argv.push('--force')
+    // stdio inherited: the password prompt and MFA go straight to the terminal.
+    const r = spawnSync(pythonBin(), argv, { stdio: 'inherit', env: { ...process.env, GARMINTOKENS: '' } })
+    if (r.status !== 0) {
+      fail(r.status === 4 ? 'Garmin is rate-limiting logins from this IP. Wait several hours before trying again.' : 'Garmin login did not complete.')
+      return
+    }
+    markLoggedIn(db, user.id)
+    console.log(`Connected Garmin for ${user.email}. The server syncs once a day; run "garmin sync" for a first backfill.`)
+    return
+  }
+  if (action === 'sync') {
+    const user = userByEmailArg(db, args)
+    const days = args.days !== undefined ? Number(args.days) : undefined
+    const result = await syncUser(db, user.id, { days, trigger: 'cli' })
+    if (result.ok) console.log(`synced ${result.days} days and ${result.activities} activities (${result.from}..${result.to})`)
+    else fail(`${result.error}: ${result.message}`)
+    return
+  }
+  fail('usage: node server/cli.js garmin login|sync|status [--email <email>] [--days N] [--force]')
+}
+
 async function main() {
   const [group, action] = process.argv.slice(2)
   const args = parseArgs(process.argv.slice(3))
@@ -403,6 +460,7 @@ async function main() {
   if (group === 'users') return cmdUsers()
   if (group === 'sql') return cmdSql(args)
   if (group === 'backup') return cmdBackup(action)
+  if (group === 'garmin') return cmdGarmin(action, args)
 
   const db = getDb()
 

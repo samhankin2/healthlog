@@ -11,3 +11,5 @@ deploy/Caddyfile text eol=lf
 *.ts text eol=lf
 *.html text eol=lf
 *.md text eol=lf
+*.py text eol=lf
+*.txt text eol=lf

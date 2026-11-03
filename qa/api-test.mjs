@@ -83,6 +83,11 @@ const childEnv = {
   AI_MOCK: '1',
   OPENCODE_API_KEY: '',
   DIST_DIR: '',
+  // Garmin: a fake fetcher stands in for the Python script (qa/fixtures/fake-garmin.mjs).
+  GARMIN: 'on',
+  GARMIN_PYTHON: process.execPath,
+  GARMIN_SCRIPT: path.join(HERE, 'fixtures', 'fake-garmin.mjs'),
+  GARMIN_SYNC_HOUR: '99', // never let the daily scheduler fire during the test
 }
 
 let serverLog = ''
@@ -692,6 +697,73 @@ async function run() {
   eq('weights: DELETE 200', r.status, 200)
   r = await api('GET', '/api/weights', { token: authToken })
   ok('weights: DELETE removed the entry', !r.json?.entries?.some((e) => e.id === firstEntryId))
+
+  /* ---------- garmin ---------- */
+  {
+    r = await api('GET', '/api/auth/me', { token: authToken })
+    const uid = r.json?.user?.id
+    ok('garmin: have the user id', typeof uid === 'string' && uid.length > 0)
+    const gdir = path.join(dataDir, 'garmin', uid)
+    const setMode = (m) => fs.writeFileSync(path.join(gdir, 'mode'), m)
+    const calls = () => { try { return fs.readFileSync(path.join(gdir, 'calls'), 'utf8').split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean) } catch { return [] } }
+
+    r = await api('GET', '/api/garmin', { token: authToken })
+    eq('garmin: GET 200', r.status, 200)
+    eq('garmin: available with the fake fetcher', r.json?.garmin?.available, true)
+    eq('garmin: not connected without tokens', r.json?.garmin?.connected, false)
+    eq('garmin: status needs_login without tokens', r.json?.garmin?.status, 'needs_login')
+    r = await api('POST', '/api/garmin/sync', { token: authToken })
+    eq('garmin: sync without tokens is 409', r.status, 409)
+    eq('garmin: no fetch attempted without tokens', calls().length, 0)
+
+    fs.mkdirSync(gdir, { recursive: true })
+    fs.writeFileSync(path.join(gdir, 'garmin_tokens.json'), '{}')
+    setMode('ok')
+    r = await api('POST', '/api/garmin/sync', { token: authToken })
+    eq('garmin: first sync 200', r.status, 200)
+    eq('garmin: first sync backfills 30 days', r.json?.result?.days, 30)
+    eq('garmin: first sync stores 2 activities', r.json?.result?.activities, 2)
+    eq('garmin: status connected after sync', r.json?.garmin?.status, 'connected')
+    ok('garmin: lastSuccessAt set', typeof r.json?.garmin?.lastSuccessAt === 'string')
+    eq('garmin: fetch called with fetch + range', calls()[0], `fetch ${isoDay(-29)} ${TODAY}`)
+
+    r = await api('POST', '/api/garmin/sync', { token: authToken })
+    eq('garmin: later sync covers 7 days', r.json?.result?.days, 7)
+    r = await api('GET', '/api/activities', { token: authToken })
+    eq('garmin: activities upserted, not duplicated', r.json?.activities?.length, 2)
+    eq('garmin: newest activity first', r.json?.activities?.[0]?.name, 'Morning Run')
+    eq('garmin: activity fields', [r.json?.activities?.[0]?.type, r.json?.activities?.[0]?.distanceM, r.json?.activities?.[0]?.startLocal], ['running', 5000, `${TODAY}T07:15:00`])
+    r = await api('GET', `/api/activity/daily?from=${isoDay(-6)}&to=${TODAY}`, { token: authToken })
+    eq('garmin: 7 daily rows', r.json?.days?.length, 7)
+    eq('garmin: daily fields', [r.json?.days?.[0]?.steps, r.json?.days?.[0]?.totalKcal, r.json?.days?.[0]?.restingHr], [9000, 2600, 52])
+
+    r = await api('GET', '/api/dashboard?days=7', { token: authToken })
+    eq('garmin: dashboard latest steps', r.json?.metrics?.activity?.latest?.steps, 9000)
+    eq('garmin: dashboard avgSteps7d', r.json?.metrics?.activity?.avgSteps7d, 9000)
+    eq('garmin: dashboard recent activities', r.json?.metrics?.activity?.recent?.length, 2)
+    eq('garmin: TDEE watchKcal from 28-day window', r.json?.metrics?.adaptiveTdee?.watchKcal, 2600)
+    eq('garmin: TDEE watchDays', r.json?.metrics?.adaptiveTdee?.watchDays, 28)
+
+    setMode('needs_login')
+    r = await api('POST', '/api/garmin/sync', { token: authToken })
+    eq('garmin: needs_login is reported, not a 500', r.status, 200)
+    eq('garmin: needs_login result', [r.json?.result?.ok, r.json?.result?.error], [false, 'needs_login'])
+    eq('garmin: status needs_login', r.json?.garmin?.status, 'needs_login')
+    r = await api('GET', '/api/activities', { token: authToken })
+    eq('garmin: data kept after a failed sync', r.json?.activities?.length, 2)
+
+    setMode('rate_limited')
+    r = await api('POST', '/api/garmin/sync', { token: authToken })
+    eq('garmin: rate_limited result', r.json?.result?.error, 'rate_limited')
+    ok('garmin: backoff set', typeof r.json?.garmin?.backoffUntil === 'string' && Date.parse(r.json.garmin.backoffUntil) > Date.now() + 5 * 3600_000)
+    const before = calls().length
+    setMode('ok')
+    r = await api('POST', '/api/garmin/sync', { token: authToken })
+    eq('garmin: sync refused during backoff (429)', r.status, 429)
+    eq('garmin: no fetch attempted during backoff', calls().length, before)
+    r = await api('POST', '/api/garmin/sync', { token: authToken, body: { days: 500 } })
+    eq('garmin: days out of range is 400', r.status, 400)
+  }
 
   /* ---------- auth scoping + logout ---------- */
   r = await api('POST', '/api/auth/register', { body: { email: 'owner@example.com', password: 'whatever1' } })

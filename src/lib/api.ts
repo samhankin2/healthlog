@@ -1,6 +1,10 @@
 import { getToken } from './auth'
 import type {
+  Activity,
   Analysis,
+  DailyActivity,
+  GarminStatus,
+  GarminSyncResult,
   ChatInput,
   ChatMessage,
   DashboardPayload,
@@ -261,5 +265,22 @@ export const api = {
     meals: Meal[]
   }> {
     return request('/import/food-csv/commit', { method: 'POST', body: { csv, mapping } }, options)
+  },
+
+  getGarmin(options?: ApiRequestOptions): Promise<SuccessResponse & { garmin: GarminStatus }> {
+    return request('/garmin', {}, options)
+  },
+
+  /** Resumes saved tokens on the server; a backfill can take a minute or two. */
+  syncGarmin(days?: number, options?: ApiRequestOptions): Promise<SuccessResponse & { result: GarminSyncResult; garmin: GarminStatus }> {
+    return request('/garmin/sync', { method: 'POST', body: days === undefined ? {} : { days } }, { timeoutMs: 200_000, ...options })
+  },
+
+  getActivities(filter: { limit?: number; before?: string } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & { activities: Activity[] }> {
+    return request(`/activities${queryString(filter)}`, {}, options)
+  },
+
+  getDailyActivity(range: { from?: DayString; to?: DayString } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & { days: DailyActivity[] }> {
+    return request(`/activity/daily${queryString(range)}`, {}, options)
   },
 }

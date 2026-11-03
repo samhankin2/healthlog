@@ -243,6 +243,14 @@ CREATE TABLE imports (
 Indexes: `weight_entries(user_id, date)`, `meals(user_id, day)`, `chat_messages(user_id, created_at)`,
 `analyses(user_id, created_at)`, `foods(user_id, name)`.
 
+### Garmin tables
+
+`daily_activity` (one row per user per day: steps, active/total/BMR kcal,
+resting HR, sleep seconds, intensity minutes), `activities` (one row per
+recorded workout, unique on `(user_id, source, external_id)` so re-syncs
+upsert), and `integrations` (per user + provider: status, last attempt /
+success, last error, `backoff_until`). Exact DDL lives in `server/db.js`.
+
 ## 5. Auth model
 
 - **Registration requires an invite code.** `POST /api/auth/register` with
@@ -373,6 +381,46 @@ message, and (when `save` is not `false`) stores the meal. It must be
 ```
 GET /api/analyses/:id -> 200 { ok:true, analysis:{...} }
 ```
+
+### Garmin
+
+```
+GET  /api/garmin               -> 200 { ok:true, garmin:{ available, connected, status, syncing,
+                                      lastAttemptAt, lastSuccessAt, lastError, backoffUntil, syncHour } }
+POST /api/garmin/sync { days? } -> 200 { ok:true, result:{ ok, from, to, days?, activities?, error?, message? }, garmin }
+                                   409 not connected / already running, 429 inside backoff, 503 not installed
+GET  /api/activities?limit=50&before=<startLocal> -> 200 { ok:true, activities:[{ id, source, name, type,
+       startLocal, day, durationS, movingS, distanceM, kcal, avgHr, maxHr, elevationGainM, avgSpeedMps, trainingEffect }] }
+GET  /api/activity/daily?from&to -> 200 { ok:true, days:[{ day, steps, activeKcal, totalKcal, bmrKcal,
+       restingHr, sleepSeconds, intensityMinutes, source, syncedAt }] }
+```
+`/api/dashboard` adds `metrics.activity:{ garmin, latest, avgSteps7d, recent[3] }`
+and `adaptiveTdee.watchKcal` / `watchDays` (the watch's mean daily total kcal over
+the TDEE window; null under 7 days).
+
+**How sync works.** `sync/garmin_sync.py` (python-garminconnect, pinned in
+`sync/requirements.txt`, venv at `/opt/healthlog-garmin/venv`) is a pure
+fetcher: it prints JSON and never touches the database. Node spawns it
+(`server/lib/garmin.js`) and writes the rows. This is the one deliberate
+exception to "zero runtime dependencies"; the Node API itself still imports
+only built-ins and runs normally when the venv is absent (`available:false`).
+
+**Login rules — Garmin rate-limits SSO logins per IP, for days once tripped:**
+- The fetcher is constructed **without credentials** and can only resume the
+  saved tokens in `$DATA_DIR/garmin/<userId>/garmin_tokens.json` (refreshing
+  them in place). Missing or rejected tokens end in `needs_login`; it never
+  falls back to a password login. The Garmin password is never stored.
+- The only full login is interactive: `node server/cli.js garmin login --email <e>`
+  (or `scripts/hl garmin-login <e>`), with an MFA prompt.
+- Scheduled sync: at most **one attempt per user per day**, after
+  `GARMIN_SYNC_HOUR` (default 6, server local time), successful or not.
+  `needs_login` is not retried until the token file changes.
+- `rate_limited` sets `backoff_until` (`GARMIN_BACKOFF_HOURS`, default 6);
+  every sync, manual included, is refused until then.
+- The first strategies in garminconnect's login chain usually fail; those
+  are warnings in the journal, not errors.
+- Range: the first sync backfills 30 days, later syncs re-fetch the last 7
+  (so yesterday's final numbers replace its partial ones). Max 120.
 
 ### Imports
 ```
@@ -619,7 +667,10 @@ injected by the workflow **after** the build:
 - The workflow re-checks the public API URL after the SSH step and fails the
   build if it is unhealthy.
 - The Pages and deploy workflows are triggered by pushes to `main`; the deploy
-  workflow's `paths:` filter must include `server/**` and `deploy/**`.
+  workflow's `paths:` filter must include `server/**`, `deploy/**` and `sync/**`.
+- Garmin's Python venv is installed by `deploy/garmin-setup.sh` (bootstrap
+  runs it; re-run by hand after bumping `sync/requirements.txt`). It lives in
+  `/opt/healthlog-garmin`, outside the checkout, so deploys never touch it.
 
 **Environment variables on the server** (systemd `EnvironmentFile`,
 `/etc/healthlog/healthlog.env`, mode 0600):

@@ -179,6 +179,7 @@ export interface Metrics {
   intake: Intake
   intakeHistory: IntakeHistoryDay[]
   adaptiveTdee?: AdaptiveTdee
+  activity?: ActivityBlock
 }
 
 /** Observed maintenance calories (SPEC §6). Shown beside kcalTarget; never replaces it. */
@@ -195,6 +196,71 @@ export interface AdaptiveTdee {
   reason: string | null
   formulaKcal: number | null
   kcalTarget: number | null
+  /** The watch's own average daily burn over the same window (null under 7 days of data). */
+  watchKcal?: number | null
+  watchDays?: number
+}
+
+export type GarminState = 'never' | 'connected' | 'needs_login' | 'rate_limited' | 'error'
+
+export interface GarminStatus {
+  available: boolean
+  connected: boolean
+  status: GarminState
+  syncing: boolean
+  lastAttemptAt: string | null
+  lastSuccessAt: string | null
+  lastError: string | null
+  backoffUntil: string | null
+  syncHour: number
+}
+
+export interface Activity {
+  id: string
+  source: string
+  name: string | null
+  type: string | null
+  startLocal: string
+  day: DayString
+  durationS: number | null
+  movingS: number | null
+  distanceM: number | null
+  kcal: number | null
+  avgHr: number | null
+  maxHr: number | null
+  elevationGainM: number | null
+  avgSpeedMps: number | null
+  trainingEffect: number | null
+}
+
+export interface DailyActivity {
+  day: DayString
+  steps: number | null
+  activeKcal: number | null
+  totalKcal: number | null
+  bmrKcal: number | null
+  restingHr: number | null
+  sleepSeconds: number | null
+  intensityMinutes: number | null
+  source: string
+  syncedAt: string
+}
+
+export interface ActivityBlock {
+  garmin: GarminStatus
+  latest: DailyActivity | null
+  avgSteps7d: number | null
+  recent: Activity[]
+}
+
+export interface GarminSyncResult {
+  ok: boolean
+  from: DayString
+  to: DayString
+  days?: number
+  activities?: number
+  error?: string
+  message?: string
 }
 
 export interface DashboardPayload {
@@ -216,7 +282,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history'
+export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity'
 
 export interface ViewContext {
   state: AppState

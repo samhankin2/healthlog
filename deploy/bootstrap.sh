@@ -16,6 +16,7 @@
 #   3. /etc/healthlog/healthlog.env, mode 0600, AI key left empty for the owner
 #   4. git clone of the repo into /opt/healthlog (if not already there)
 #   5. systemd unit `healthlog` + the deploy script at /usr/local/bin/healthlog-deploy
+#      (+ the Garmin sync Python venv, deploy/garmin-setup.sh)
 #   6. Caddy site healthlog.<public-ip>.sslip.io -> 127.0.0.1:8787 (free TLS)
 #   7. Oracle's image-level iptables REJECT rule fixed for 80/443, and persisted
 #
@@ -179,6 +180,12 @@ if [ -f "$APP_DIR/deploy/healthlog-deploy.sh" ]; then
   echo "installed /usr/local/bin/${SERVICE}-deploy"
 else
   echo "WARNING: $APP_DIR/deploy/healthlog-deploy.sh not found - CI deploy will fail" >&2
+fi
+
+echo "== garmin sync environment =="
+if [ -f "$APP_DIR/deploy/garmin-setup.sh" ]; then
+  # Non-fatal: the API runs fine without it; Garmin just reports "not installed".
+  bash "$APP_DIR/deploy/garmin-setup.sh" || echo "WARNING: garmin-setup failed - Garmin sync unavailable" >&2
 fi
 
 # CI logs in as ubuntu and runs the deploy script with sudo.

@@ -16,6 +16,9 @@
 #   scripts/hl backup pull        snapshot + download to data/backups/ (off-box copy)
 #   scripts/hl pull               make the local dev DB a copy of production (scripts/db-sync.sh)
 #   scripts/hl restart            restart the service and health-check it
+#   scripts/hl garmin-login EMAIL one-time interactive Garmin login (password + MFA prompt)
+#   scripts/hl garmin-sync EMAIL [DAYS]   sync Garmin now with the saved tokens
+#   scripts/hl garmin-status      Garmin connection + last sync per account
 #   scripts/hl ssh                plain shell on the box
 #
 # The DB on the box is read through server/cli.js, so nothing extra needs
@@ -34,7 +37,7 @@ ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
 remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 
-usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Only fixed flags are forwarded to the remote command line; the SQL itself
 # goes over stdin, so no quoting or injection worries.
@@ -173,6 +176,23 @@ EOF
 
   ssh)
     exec ssh -i "$SSH_KEY" "ubuntu@$HOST"
+    ;;
+
+  garmin-login|garmin-sync)
+    email="${1:-}"
+    [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || { echo "usage: hl $cmd <healthlog account email>" >&2; exit 2; }
+    if [ "$cmd" = garmin-login ]; then
+      # -t: the Garmin password and MFA prompts need a terminal.
+      remote_tty "$CLI garmin login --email '$email'"
+    else
+      days="${2:-}"
+      [ -z "$days" ] || [[ "$days" =~ ^[0-9]+$ ]] || { echo "DAYS must be a number" >&2; exit 2; }
+      remote "$CLI garmin sync --email '$email'${days:+ --days $days}"
+    fi
+    ;;
+
+  garmin-status)
+    remote "$CLI garmin status"
     ;;
 
   help|-h|--help)

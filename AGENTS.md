@@ -47,7 +47,11 @@ public/               files Vite copies verbatim into dist/
 server/               API — node:http + node:sqlite, zero runtime dependencies
   index.js            server, router, static fallback
   db.js auth.js ai.js lib/ routes/ cli.js   (cli.js: admin - stats, sql, backups, invites)
+sync/
+  garmin_sync.py      Garmin fetcher (python-garminconnect); spawned by server/lib/garmin.js
+  requirements.txt    the pinned version — the only Python dependency
 deploy/
+  garmin-setup.sh     installs the Garmin venv at /opt/healthlog-garmin (idempotent)
   bootstrap.sh        one-shot VPS install (Node 24, Caddy, user, dirs, env, unit, firewall)
   healthlog-deploy.sh installed as /usr/local/bin/healthlog-deploy
   healthlog.service   systemd unit
@@ -113,6 +117,10 @@ No `npm install` on the server: the API imports only Node built-ins
   `/etc/healthlog/healthlog.env`, port 8787 on 127.0.0.1, Caddy site
   `healthlog.<ip>.sslip.io`. Changing one means changing `deploy/`, the
   workflows, the README and SPEC §9 together.
+- **Never make the Garmin sync log in with a password.** Garmin rate-limits
+  SSO logins per IP and keeps 429ing for days. Scheduled and manual syncs only
+  resume saved tokens; the only full login is the interactive
+  `cli.js garmin login`. Keep the once-a-day rule and the 429 backoff (SPEC §6).
 - **Do not restart Caddy in a loop.** Let's Encrypt rate-limits `sslip.io`;
   `bootstrap.sh` only restarts it when the Caddyfile actually changed.
 - **The deploy script self-refreshes** from `deploy/healthlog-deploy.sh` after a

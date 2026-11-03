@@ -18,6 +18,7 @@ import {
   today,
 } from '../lib/metrics.js'
 import { profilePayload } from '../lib/shape.js'
+import { activityPayload, dailyActivityPayload, garminStatus } from '../lib/garmin.js'
 
 const r0 = (n) => (n === null || n === undefined ? null : Math.round(Number(n)))
 const r1 = (n) => (n === null || n === undefined ? null : Math.round(Number(n) * 10) / 10)
@@ -106,6 +107,22 @@ export function registerDashboardRoutes(router) {
       activityLevel: profile?.activityLevel,
     })
 
+    // Garmin: the watch's own burn estimate over the same TDEE window, plus the
+    // latest day's numbers and the most recent activities.
+    const watch = db
+      .prepare('SELECT AVG(total_kcal) AS kcal, COUNT(total_kcal) AS n FROM daily_activity WHERE user_id = ? AND day >= ? AND day <= ? AND total_kcal > 0')
+      .get(user.id, adaptive.windowStart, adaptive.windowEnd)
+    const latestDaily = db
+      .prepare('SELECT * FROM daily_activity WHERE user_id = ? AND day <= ? ORDER BY day DESC LIMIT 1')
+      .get(user.id, day)
+    const avgSteps = db
+      .prepare('SELECT AVG(steps) AS steps FROM daily_activity WHERE user_id = ? AND day >= ? AND day <= ? AND steps IS NOT NULL')
+      .get(user.id, addDaysLocal(day, -6), day)
+    const recentActivities = db
+      .prepare('SELECT * FROM activities WHERE user_id = ? ORDER BY start_local DESC LIMIT 3')
+      .all(user.id)
+      .map(activityPayload)
+
     const metrics = {
       /* trend / weight (old-tracker names) */
       currentWeightKg: r2(stats.latestKg),
@@ -143,7 +160,21 @@ export function registerDashboardRoutes(router) {
       intakeHistory,
 
       /* observed maintenance — shown beside kcalTarget, never written to it */
-      adaptiveTdee: { ...adaptive, formulaKcal, kcalTarget: profile?.kcalTarget ?? null },
+      adaptiveTdee: {
+        ...adaptive,
+        formulaKcal,
+        kcalTarget: profile?.kcalTarget ?? null,
+        watchKcal: watch && Number(watch.n) >= 7 ? r0(watch.kcal) : null,
+        watchDays: watch ? Number(watch.n) : 0,
+      },
+
+      /* Garmin watch data (null fields until a sync has run) */
+      activity: {
+        garmin: garminStatus(db, user.id),
+        latest: latestDaily ? dailyActivityPayload(latestDaily) : null,
+        avgSteps7d: avgSteps?.steps == null ? null : r0(avgSteps.steps),
+        recent: recentActivities,
+      },
     }
 
     sendJson(res, 200, { ok: true, metrics })

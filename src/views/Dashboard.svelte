@@ -3,6 +3,7 @@
   import WeightChart from '../lib/panels/WeightChart.svelte'
   import IntakeChart from '../lib/panels/IntakeChart.svelte'
   import TdeeCard from '../lib/panels/TdeeCard.svelte'
+  import ActivityCard from '../lib/panels/ActivityCard.svelte'
   import SegmentedControl from '../lib/components/SegmentedControl.svelte'
   import StatTile from '../lib/components/StatTile.svelte'
   import MacroBar from '../lib/components/MacroBar.svelte'
@@ -198,6 +199,10 @@
       <div class="tdee-slot"><TdeeCard tdee={metrics.adaptiveTdee} /></div>
     {/if}
 
+    {#if metrics?.activity && (metrics.activity.garmin.connected || metrics.activity.latest || metrics.activity.recent.length > 0)}
+      <div class="activity-slot"><ActivityCard block={metrics.activity} onopen={() => navigate('activity')} /></div>
+    {/if}
+
     <section class="metric-card phases-card">
       <div class="metric-card-header">
         <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="flag" size={20} /></span><h2 class="metric-card-title">Training phases</h2></div>
@@ -272,8 +277,8 @@
   .progress-track { height: 0.65rem; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-sunken); }
   .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); }
   .dashboard-grid { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
-  .chart-card, .calorie-card, .intake-card, .tdee-slot, .phases-card, .metrics-section { min-width: 0; }
-  .tdee-slot { display: grid; }
+  .chart-card, .calorie-card, .intake-card, .tdee-slot, .activity-slot, .phases-card, .metrics-section { min-width: 0; }
+  .tdee-slot, .activity-slot { display: grid; }
   .chart-header { flex-wrap: wrap; }
   .range-wrap { margin-bottom: var(--space-4); }
   .chart-legend { display: flex; margin: var(--space-3) 0 0; padding: 0; flex-wrap: wrap; justify-content: center; gap: var(--space-4); color: var(--color-text-muted); font-size: var(--text-xs); list-style: none; }
@@ -319,7 +324,9 @@
     .metrics-section { grid-column: 1 / -1; }
     .intake-card { grid-column: span 5; }
     .tdee-slot { grid-column: span 7; }
+    .activity-slot { grid-column: span 5; }
     .phases-card { grid-column: 1 / -1; }
+    .activity-slot + .phases-card { grid-column: span 7; }
     .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   }
 </style>

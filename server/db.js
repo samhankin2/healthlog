@@ -165,6 +165,55 @@ CREATE TABLE IF NOT EXISTS imports (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Garmin (SPEC §4): one row per day of watch data, one per recorded activity.
+CREATE TABLE IF NOT EXISTS daily_activity (
+  user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day               TEXT NOT NULL,          -- YYYY-MM-DD
+  steps             INTEGER,
+  active_kcal       REAL,
+  total_kcal        REAL,                   -- the watch's own burn estimate (BMR + active)
+  bmr_kcal          REAL,
+  resting_hr        INTEGER,
+  sleep_seconds     INTEGER,
+  intensity_minutes INTEGER,                -- moderate + 2 x vigorous
+  source            TEXT NOT NULL DEFAULT 'garmin',
+  synced_at         TEXT NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS activities (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source           TEXT NOT NULL,           -- 'garmin'
+  external_id      TEXT NOT NULL,
+  name             TEXT,
+  type             TEXT,                    -- Garmin typeKey: running, cycling, strength_training, ...
+  start_local      TEXT NOT NULL,           -- YYYY-MM-DDTHH:MM:SS, local time of the activity
+  day              TEXT NOT NULL,
+  duration_s       REAL,
+  moving_s         REAL,
+  distance_m       REAL,
+  kcal             REAL,
+  avg_hr           REAL,
+  max_hr           REAL,
+  elevation_gain_m REAL,
+  avg_speed_mps    REAL,
+  training_effect  REAL,                    -- aerobic training effect
+  synced_at        TEXT NOT NULL,
+  UNIQUE (user_id, source, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS integrations (
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider        TEXT NOT NULL,            -- 'garmin'
+  status          TEXT NOT NULL,            -- never | connected | needs_login | rate_limited | error
+  last_attempt_at TEXT,                     -- ISO timestamps
+  last_success_at TEXT,
+  last_error      TEXT,
+  backoff_until   TEXT,
+  PRIMARY KEY (user_id, provider)
+);
+
 CREATE INDEX IF NOT EXISTS idx_weight_entries_user_date ON weight_entries(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_meals_user_day            ON meals(user_id, day);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at);
@@ -172,6 +221,7 @@ CREATE INDEX IF NOT EXISTS idx_analyses_user_created     ON analyses(user_id, cr
 CREATE INDEX IF NOT EXISTS idx_foods_user_name           ON foods(user_id, name);
 CREATE INDEX IF NOT EXISTS idx_phases_user_start         ON phases(user_id, start_date);
 CREATE INDEX IF NOT EXISTS idx_sessions_token            ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_activities_user_start     ON activities(user_id, start_local);
 `
 
 /** Create tables + indexes if they do not exist. Safe to run on every boot. */

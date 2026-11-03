@@ -24,7 +24,9 @@ import { registerFoodRoutes } from './routes/foods.js'
 import { registerChatRoutes } from './routes/chat.js'
 import { registerAnalysisRoutes } from './routes/analyses.js'
 import { registerImportRoutes } from './routes/imports.js'
+import { registerGarminRoutes } from './routes/garmin.js'
 import { scheduleBackups } from './lib/backup.js'
+import { scheduleGarminSync } from './lib/garmin.js'
 
 const SERVICE = 'healthlog'
 const VERSION = '1.0'
@@ -45,6 +47,7 @@ export function buildRouter() {
   registerChatRoutes(router)
   registerAnalysisRoutes(router)
   registerImportRoutes(router)
+  registerGarminRoutes(router)
   return router
 }
 
@@ -260,6 +263,7 @@ export function start() {
   // Opening the DB here creates the schema on an empty data directory.
   const db = getDb()
   const stopBackups = scheduleBackups(db)
+  const stopGarmin = scheduleGarminSync(db)
 
   const server = createServer()
   server.listen(port, host, () => {
@@ -269,6 +273,7 @@ export function start() {
   const shutdown = (signal) => {
     console.log(`[healthlog] ${signal} received, shutting down`)
     stopBackups()
+    stopGarmin()
     server.close(() => {
       closeDb()
       process.exit(0)

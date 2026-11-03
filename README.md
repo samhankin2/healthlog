@@ -119,6 +119,10 @@ variables locally. `.env` is git-ignored.
 | `BACKUP_INTERVAL_HOURS` | `24` | Minimum age of the newest snapshot before another is taken. |
 | `BACKUP_KEEP` | `14` | Snapshots kept in `$DATA_DIR/backups`. |
 | `ACCESS_LOG` | on | Set `off` to stop the one-line-per-request journal log. |
+| `GARMIN` | on | Set `off` to disable Garmin sync. |
+| `GARMIN_PYTHON` | `/opt/healthlog-garmin/venv/bin/python` | Python that runs `sync/garmin_sync.py`. |
+| `GARMIN_SYNC_HOUR` | `6` | Local hour after which the daily sync runs. |
+| `GARMIN_BACKOFF_HOURS` | `6` | Pause after Garmin answers 429. |
 
 The AI key is never in the repo, never in a GitHub variable the frontend can
 read, and never sent to the browser.
@@ -281,6 +285,9 @@ Windows; uses `DEPLOY_HOST` and `SSH_KEY`, defaulting to the live box):
 | Backups | `scripts/hl backup`, `scripts/hl backup list`, `scripts/hl backup pull` (download to `data/backups/`) |
 | Local dev DB = copy of production | `scripts/hl pull` |
 | Restart + health check | `scripts/hl restart` |
+| Connect Garmin (once, interactive: password + MFA) | `scripts/hl garmin-login you@example.com` |
+| Garmin sync now / backfill | `scripts/hl garmin-sync you@example.com [days]` |
+| Garmin status per account | `scripts/hl garmin-status` |
 
 SQL goes through `server/cli.js` on the box, so nothing extra is installed
 there. Reads open the database read-only; password and token hashes are masked

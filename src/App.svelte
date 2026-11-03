@@ -18,6 +18,7 @@
   import Settings from './views/Settings.svelte'
   import History from './views/History.svelte'
   import Calories from './views/Calories.svelte'
+  import ActivityView from './views/Activity.svelte'
 
   // `railOnly` tabs appear in the desktop side rail but not the mobile bottom
   // bar, which has no room for a sixth button.
@@ -27,6 +28,7 @@
     { id: 'calories', label: 'Calories', icon: 'flame' },
     { id: 'foods', label: 'Foods', icon: 'food' },
     { id: 'history', label: 'History', icon: 'calendar', railOnly: true },
+    { id: 'activity', label: 'Activity', icon: 'trending-up', railOnly: true },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ]
 
@@ -37,6 +39,7 @@
     foods: 'Saved foods',
     settings: 'Settings',
     history: 'History',
+    activity: 'Activity',
   }
 
   let booting = $state(isAuthenticated())
@@ -191,6 +194,8 @@
           <Settings />
         {:else if current === 'history'}
           <History />
+        {:else if current === 'activity'}
+          <ActivityView />
         {/if}
       </main>
     </div>

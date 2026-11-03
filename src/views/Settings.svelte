@@ -3,7 +3,8 @@
   import SegmentedControl from '../lib/components/SegmentedControl.svelte'
   import WeightJsonPanel from '../lib/panels/WeightJsonPanel.svelte'
   import ConfirmPanel from '../lib/panels/ConfirmPanel.svelte'
-  import { actions, app } from '../lib/state.svelte'
+  import GarminSyncControl from '../lib/components/GarminSyncControl.svelte'
+  import { actions, app, navigate } from '../lib/state.svelte'
   import { api } from '../lib/api'
   import { logout } from '../lib/auth'
   import { today } from '../lib/format'
@@ -18,6 +19,7 @@
     { value: '0', label: 'All' },
   ]
 
+  const garmin = $derived(app.metrics?.activity?.garmin ?? null)
   let height = $state(app.profile?.heightCm?.toString() ?? '')
   let startWeight = $state(app.profile?.startWeightKg?.toString() ?? '')
   let goalWeight = $state(app.profile?.goalWeightKg?.toString() ?? '')
@@ -181,6 +183,17 @@
     <button class="button button--primary save-settings" type="submit" disabled={saving}>{#if saving}<span class="spinner" aria-hidden="true"></span> Saving…{:else}<Icon name="check" size={19} /> Save settings{/if}</button>
   </form>
 
+  <section class="metric-card settings-card" aria-labelledby="garmin-title">
+    <div class="metric-card-header">
+      <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="trending-up" size={20} /></span><h2 class="metric-card-title" id="garmin-title">Garmin</h2></div>
+      <button class="button button--secondary compact-button" type="button" onclick={() => navigate('activity')}>Activities <Icon name="chevron-right" size={17} /></button>
+    </div>
+    <div class="metric-card-content">
+      <p class="card-note">Steps, calories burned, resting heart rate, sleep and workouts from your watch. It syncs once a day after {garmin?.syncHour ?? 6}:00, or whenever you press Sync now.</p>
+      <GarminSyncControl status={garmin} showHelp email={app.user?.email} onsynced={() => actions.loadDashboard()} />
+    </div>
+  </section>
+
   <section class="metric-card settings-card" aria-labelledby="data-title">
     <div class="metric-card-header"><div class="metric-card-heading"><span class="metric-card-icon"><Icon name="download" size={20} /></span><h2 class="metric-card-title" id="data-title">Your data</h2></div></div>
     <div class="metric-card-content">
@@ -202,6 +215,7 @@
 <ConfirmPanel open={signOutOpen} title="Sign out of HealthLog?" message="Your data stays on the server. You will need your email and password to sign back in." confirmLabel="Sign out" oncancel={() => { signOutOpen = false }} onconfirm={signOut} />
 
 <style>
+  .compact-button { min-height: var(--touch-target); padding: var(--space-2) var(--space-3); }
   .settings-form { display: flex; flex-direction: column; gap: var(--space-4); }
   .settings-card { min-width: 0; }
   .card-note { margin: 0 0 var(--space-4); color: var(--color-text-muted); font-size: var(--text-sm); }
