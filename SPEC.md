@@ -391,7 +391,7 @@ GET /api/analyses/:id -> 200 { ok:true, analysis:{...} }
 
 ```
 GET  /api/garmin               -> 200 { ok:true, garmin:{ available, connected, status, syncing,
-                                      lastAttemptAt, lastSuccessAt, lastError, backoffUntil, syncHour } }
+                                      lastAttemptAt, lastSuccessAt, lastError, backoffUntil, syncHour, syncIntervalHours } }
 POST /api/garmin/sync { days? } -> 200 { ok:true, result:{ ok, from, to, days?, activities?, error?, message? }, garmin }
                                    409 not connected / already running, 429 inside backoff, 503 not installed
 GET  /api/activities?limit=50&before=<startLocal> -> 200 { ok:true, activities:[{ id, source, name, type,
@@ -417,15 +417,21 @@ only built-ins and runs normally when the venv is absent (`available:false`).
   falls back to a password login. The Garmin password is never stored.
 - The only full login is interactive: `node server/cli.js garmin login --email <e>`
   (or `scripts/hl garmin-login <e>`), with an MFA prompt.
-- Scheduled sync: at most **one attempt per user per day**, after
-  `GARMIN_SYNC_HOUR` (default 6, server local time), successful or not.
-  `needs_login` is not retried until the token file changes.
+- Scheduled sync: at most **one attempt per user every
+  `GARMIN_SYNC_INTERVAL_HOURS`** (default 3, minimum 1), successful or not,
+  and only from `GARMIN_SYNC_HOUR` (default 6, server local time) until
+  midnight — nothing overnight. `needs_login` is not retried until the token
+  file changes.
 - `rate_limited` sets `backoff_until` (`GARMIN_BACKOFF_HOURS`, default 6);
   every sync, manual included, is refused until then.
 - The first strategies in garminconnect's login chain usually fail; those
   are warnings in the journal, not errors.
-- Range: the first sync backfills 30 days, later syncs re-fetch the last 7
-  (so yesterday's final numbers replace its partial ones). Max 120.
+- Range: only days that are not final are fetched. A day is final once a
+  successful sync has run after 12:00 on the following day; each sync starts at
+  the earliest day that was not final at the last success. Normally that is
+  today alone, plus yesterday until the first sync after noon. The first sync
+  (or a gap longer than 30 days) backfills 30 days; `days` on a manual sync
+  forces the last N (max 120). Finished days stay stored and are not re-fetched.
 
 ### Imports
 ```
@@ -613,8 +619,11 @@ that the frontend can read.
 - **Dashboard view**: the old trend chart (7-day average + raw dots + phase
   shading) plus a calorie panel for today (kcal vs target, macro split) and a
   7-day intake bar chart.
-- **Calories view** (`#/calories`): today in detail (kcal vs target with a
-  progress bar, each macro against its gram target, today's meals) and the
+- **Calories view** (`#/calories`): a day in detail (kcal vs target with a
+  progress bar, each macro against its gram target, that day's meals) — today
+  by default, with previous / next / date-picker controls to step back to any
+  earlier day (totals summed from that day's meals, against the current
+  targets) — and the
   intake history over a 7d / 30d / 90d / 1y / All range — a swipeable carousel
   of four charts (Calories, Protein, Carbs, Fat), each with daily bars, a 7-day
   average line and that metric's target, then summary tiles (average intake, vs target,

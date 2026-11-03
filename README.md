@@ -121,7 +121,8 @@ variables locally. `.env` is git-ignored.
 | `ACCESS_LOG` | on | Set `off` to stop the one-line-per-request journal log. |
 | `GARMIN` | on | Set `off` to disable Garmin sync. |
 | `GARMIN_PYTHON` | `/opt/healthlog-garmin/venv/bin/python` | Python that runs `sync/garmin_sync.py`. |
-| `GARMIN_SYNC_HOUR` | `6` | Local hour after which the daily sync runs. |
+| `GARMIN_SYNC_HOUR` | `6` | Local hour scheduled syncs start each day (none overnight). |
+| `GARMIN_SYNC_INTERVAL_HOURS` | `3` | Hours between scheduled syncs (minimum 1). Each fetches only unfinished days. |
 | `GARMIN_BACKOFF_HOURS` | `6` | Pause after Garmin answers 429. |
 
 The AI key is never in the repo, never in a GitHub variable the frontend can

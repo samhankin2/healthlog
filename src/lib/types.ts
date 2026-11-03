@@ -213,6 +213,8 @@ export interface GarminStatus {
   lastError: string | null
   backoffUntil: string | null
   syncHour: number
+  /** Hours between scheduled syncs (from syncHour until midnight). */
+  syncIntervalHours: number
 }
 
 export interface Activity {

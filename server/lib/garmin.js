@@ -7,13 +7,19 @@
  *   - Node never has the Garmin password. The fetcher runs without credentials
  *     and can only resume saved tokens; a full login happens only through the
  *     interactive `node server/cli.js garmin login`.
- *   - At most one scheduled attempt per user per day, successful or not.
+ *   - Scheduled attempts at most every GARMIN_SYNC_INTERVAL_HOURS (default 3,
+ *     minimum 1), successful or not, and only from GARMIN_SYNC_HOUR until
+ *     midnight - nothing overnight.
+ *   - Each sync fetches only the days that are not final yet (see syncRange):
+ *     normally today, plus yesterday until a sync after noon has run. Finished
+ *     days stay in the database and are never re-fetched.
  *   - `needs_login` stops scheduled attempts until the token file changes.
  *   - `rate_limited` blocks every sync (manual too) for GARMIN_BACKOFF_HOURS.
  *
  * Env: GARMIN=off, GARMIN_PYTHON (default /opt/healthlog-garmin/venv/bin/python),
  * GARMIN_SCRIPT (default sync/garmin_sync.py), GARMIN_SYNC_HOUR (local hour
- * after which the daily sync runs, default 6), GARMIN_BACKOFF_HOURS (default 6).
+ * syncing starts each day, default 6), GARMIN_SYNC_INTERVAL_HOURS (default 3),
+ * GARMIN_BACKOFF_HOURS (default 6).
  */
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -28,6 +34,8 @@ const PROVIDER = 'garmin'
 const TOKEN_FILE = 'garmin_tokens.json'
 const FETCH_TIMEOUT_MS = 180_000
 const MAX_DAYS = 120
+/** First sync, or a gap longer than this, backfills this many days. */
+const BACKFILL_DAYS = 30
 
 const isOff = (v) => ['0', 'off', 'false', 'no'].includes(String(v || '').trim().toLowerCase())
 const envNum = (name, fallback) => (Number.isFinite(Number(process.env[name])) && process.env[name] !== '' && process.env[name] !== undefined ? Number(process.env[name]) : fallback)
@@ -59,12 +67,6 @@ function tokenMtime(userId) {
 
 export function hasTokens(userId) {
   return tokenMtime(userId) !== null
-}
-
-/** Local calendar day of a timestamp (same calendar as metrics.today()). */
-function localDay(iso) {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +106,7 @@ export function garminStatus(db, userId) {
     lastError: row?.last_error ?? null,
     backoffUntil,
     syncHour: envNum('GARMIN_SYNC_HOUR', 6),
+    syncIntervalHours: syncIntervalHours(),
   }
 }
 
@@ -197,8 +200,38 @@ export class GarminSyncError extends Error {
   }
 }
 
+function syncIntervalHours() {
+  return Math.max(1, envNum('GARMIN_SYNC_INTERVAL_HOURS', 3))
+}
+
+/** Epoch ms of 12:00 local time on the day after `day`: from then on, `day` is final. */
+function finalAt(day) {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y, m - 1, d + 1, 12).getTime()
+}
+
 /**
- * Sync one user. `days` defaults to 7 (30 on the very first sync). Throws
+ * Days to fetch. A day is final once a successful sync has run after noon of
+ * the next day (the watch has long since uploaded it). Every sync starts at the
+ * earliest day that was not final at the last success, so finished days are
+ * fetched once and then left alone. Pure, for tests.
+ */
+export function syncRange(lastSuccessAt, todayDay, days) {
+  if (days) {
+    const span = Math.max(1, Math.min(MAX_DAYS, Math.round(Number(days)) || 1))
+    return { from: addDays(todayDay, -(span - 1)), to: todayDay }
+  }
+  const oldest = addDays(todayDay, -(BACKFILL_DAYS - 1))
+  const last = lastSuccessAt ? Date.parse(lastSuccessAt) : NaN
+  if (!Number.isFinite(last)) return { from: oldest, to: todayDay }
+  let from = todayDay
+  while (from > oldest && finalAt(addDays(from, -1)) > last) from = addDays(from, -1)
+  return { from, to: todayDay }
+}
+
+/**
+ * Sync one user. Without `days` it fetches only the days not yet final
+ * (30 on the very first sync); `days` forces the last N days. Throws
  * GarminSyncError for refusals (unavailable, busy, backing off); a failed
  * fetch is recorded in the state and returned, not thrown.
  */
@@ -211,9 +244,7 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
     throw new GarminSyncError('rate_limited', `Garmin is rate-limiting requests; syncing is paused until ${before.backoff_until}.`, 429)
   }
 
-  const span = Math.max(1, Math.min(MAX_DAYS, Math.round(Number(days) || (before?.last_success_at ? 7 : 30))))
-  const to = today()
-  const from = addDays(to, -(span - 1))
+  const { from, to } = syncRange(before?.last_success_at ?? null, today(), days)
 
   running.add(userId)
   saveState(db, userId, { last_attempt_at: new Date().toISOString() })
@@ -238,18 +269,18 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
   }
 }
 
-/** Should the daily scheduler try this user now? Pure, for tests. */
-export function dueForDailySync(row, tokenChangedAt, now = new Date(), syncHour = 6) {
+/** Should the scheduler try this user now? Pure, for tests. */
+export function dueForSync(row, tokenChangedAt, now = new Date(), syncHour = 6, intervalHours = 3) {
   if (now.getHours() < syncHour) return false
   if (row?.backoff_until && Date.parse(row.backoff_until) > now.getTime()) return false
   const lastAttempt = row?.last_attempt_at ?? null
   if (!lastAttempt) return true
   // needs_login: wait for a fresh login (the token file changes), never retry blindly.
   if (row.status === 'needs_login') return tokenChangedAt !== null && tokenChangedAt.getTime() > Date.parse(lastAttempt)
-  return localDay(lastAttempt) !== localDay(now.toISOString())
+  return now.getTime() - Date.parse(lastAttempt) >= Math.max(1, intervalHours) * 3600_000
 }
 
-/** Once-a-day sync inside the server process. Returns a stop function. */
+/** Scheduled sync inside the server process. Returns a stop function. */
 export function scheduleGarminSync(db) {
   if (isOff(process.env.GARMIN)) return () => {}
   const tick = async () => {
@@ -264,11 +295,11 @@ export function scheduleGarminSync(db) {
       const mtime = tokenMtime(userId)
       if (!mtime || running.has(userId)) continue
       if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) continue
-      if (!dueForDailySync(stateRow(db, userId), mtime, new Date(), envNum('GARMIN_SYNC_HOUR', 6))) continue
+      if (!dueForSync(stateRow(db, userId), mtime, new Date(), envNum('GARMIN_SYNC_HOUR', 6), syncIntervalHours())) continue
       try {
-        await syncUser(db, userId, { trigger: 'daily' })
+        await syncUser(db, userId, { trigger: 'scheduled' })
       } catch (e) {
-        console.error(`[garmin] daily sync skipped for ${userId}: ${e.message}`)
+        console.error(`[garmin] scheduled sync skipped for ${userId}: ${e.message}`)
       }
     }
   }

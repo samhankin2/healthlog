@@ -749,7 +749,13 @@ async function run() {
     eq('garmin: fetch called with fetch + range', calls()[0], `fetch ${isoDay(-29)} ${TODAY}`)
 
     r = await api('POST', '/api/garmin/sync', { token: authToken })
-    eq('garmin: later sync covers 7 days', r.json?.result?.days, 7)
+    // Finished days are not re-fetched: right after a sync only today is open,
+    // plus yesterday until a sync after noon has run.
+    const openDays = new Date().getHours() >= 12 ? 1 : 2
+    eq('garmin: later sync fetches only unfinished days', r.json?.result?.days, openDays)
+    eq('garmin: later sync range', calls().at(-1), `fetch ${isoDay(1 - openDays)} ${TODAY}`)
+    r = await api('POST', '/api/garmin/sync', { token: authToken, body: { days: 7 } })
+    eq('garmin: days forces a re-fetch of the last 7', r.json?.result?.days, 7)
     r = await api('GET', '/api/activities', { token: authToken })
     eq('garmin: activities upserted, not duplicated', r.json?.activities?.length, 2)
     eq('garmin: newest activity first', r.json?.activities?.[0]?.name, 'Morning Run')

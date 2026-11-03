@@ -109,6 +109,6 @@ export function garminStatusLine(g: GarminStatus): { text: string; tone: 'succes
   if (g.backoffUntil) return { text: `Garmin is rate-limiting requests, so syncing is paused until ${fmtClock(g.backoffUntil)}.`, tone: 'warning' }
   if (g.status === 'needs_login') return { text: 'Garmin stopped accepting the saved login. Run the login command on the server again.', tone: 'danger' }
   if (g.status === 'error') return { text: `Last sync failed ${fmtAgo(g.lastAttemptAt)}. Your synced data is still here.`, tone: 'danger' }
-  if (g.lastSuccessAt) return { text: `Synced ${fmtAgo(g.lastSuccessAt)}. Syncs automatically once a day.`, tone: 'success' }
+  if (g.lastSuccessAt) return { text: `Synced ${fmtAgo(g.lastSuccessAt)}. Syncs automatically every ${g.syncIntervalHours ?? 3} h during the day.`, tone: 'success' }
   return { text: 'Connected. The first sync hasn’t run yet.', tone: 'neutral' }
 }

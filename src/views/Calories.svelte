@@ -4,14 +4,14 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import Icon from '../lib/components/Icon.svelte'
   import SegmentedControl from '../lib/components/SegmentedControl.svelte'
   import StatTile from '../lib/components/StatTile.svelte'
   import MacroBar from '../lib/components/MacroBar.svelte'
   import IntakeCarousel, { type CarouselSlide } from '../lib/panels/IntakeCarousel.svelte'
   import { actions, app, navigate } from '../lib/state.svelte'
-  import { fmtNumber, fmtShort, fmtTime, fmtWithDay, today } from '../lib/format'
+  import { addDays, fmtNumber, fmtShort, fmtTime, fmtWithDay, fromDateInputValue, toDateInputValue, today } from '../lib/format'
   import { KCAL_PER_KG, ON_TARGET_TOLERANCE, summarize, trimLeadingEmpty, weekStartOf, weeklyRollups } from '../lib/intakeStats'
   import type { Intake, IntakeHistoryDay } from '../lib/types'
 
@@ -32,11 +32,28 @@
   let error = $state('')
   let requestId = 0
 
+  /** The day the summary card and meal list describe; today unless the user steps back. */
+  let selectedDay = $state(todayDay)
+  let dayLoading = $state(false)
+  let dayError = $state('')
+  /** Meal loads run one after another, so the last day asked for is the one left in state. */
+  let dayLoadChain: Promise<void> = Promise.resolve()
+
   let profile = $derived(app.profile)
   let target = $derived(intake?.kcalTarget ?? profile?.kcalTarget ?? null)
-  let todayMeals = $derived(app.meals.filter((meal) => meal.day === todayDay).sort((a, b) => a.eatenAt.localeCompare(b.eatenAt)))
-  let remaining = $derived(intake && target !== null ? Math.round(target - intake.kcal) : null)
-  let todayPct = $derived(intake && target ? Math.round((intake.kcal / target) * 100) : null)
+  let isToday = $derived(selectedDay === todayDay)
+  let dayMeals = $derived(app.meals.filter((meal) => meal.day === selectedDay).sort((a, b) => a.eatenAt.localeCompare(b.eatenAt)))
+  /** Today comes from the server's intake; a past day is the sum of its meals. */
+  let shown = $derived.by(() => {
+    if (isToday && intake) return { kcal: intake.kcal, proteinG: intake.proteinG, carbG: intake.carbG, fatG: intake.fatG }
+    return dayMeals.reduce(
+      (sum, meal) => ({ kcal: sum.kcal + meal.kcal, proteinG: sum.proteinG + meal.proteinG, carbG: sum.carbG + meal.carbsG, fatG: sum.fatG + meal.fatG }),
+      { kcal: 0, proteinG: 0, carbG: 0, fatG: 0 },
+    )
+  })
+  let remaining = $derived(target !== null ? Math.round(target - shown.kcal) : null)
+  let todayPct = $derived(target ? Math.round((shown.kcal / target) * 100) : null)
+  let dayLabel = $derived(isToday ? `Today · ${fmtWithDay(selectedDay)}` : fmtWithDay(selectedDay))
 
   /** The window shown: N completed days + today, or everything since the first log. */
   let series = $derived(range === 0 ? trimLeadingEmpty(history) : history)
@@ -51,20 +68,46 @@
     { metric: 'fatG', label: 'Fat', unit: 'g', target: profile?.fatG ?? null, average: summary.avgFatG, colorVar: '--color-fat', softVar: '--color-fat-soft' },
   ])
 
-  let macroTargets = $derived.by(() => {
-    if (!intake) return []
-    return [
-      { key: 'protein', label: 'Protein', eaten: intake.proteinG, goal: profile?.proteinG ?? null },
-      { key: 'carb', label: 'Carbs', eaten: intake.carbG, goal: profile?.carbG ?? null },
-      { key: 'fat', label: 'Fat', eaten: intake.fatG, goal: profile?.fatG ?? null },
-    ]
-  })
+  let macroTargets = $derived([
+    { key: 'protein', label: 'Protein', eaten: shown.proteinG, goal: profile?.proteinG ?? null },
+    { key: 'carb', label: 'Carbs', eaten: shown.carbG, goal: profile?.carbG ?? null },
+    { key: 'fat', label: 'Fat', eaten: shown.fatG, goal: profile?.fatG ?? null },
+  ])
   let hasMacroTargets = $derived(macroTargets.some((macro) => macro.goal !== null && macro.goal > 0))
 
   onMount(() => {
     void load()
-    void actions.loadMeals(todayDay).catch(() => { /* The meal list shows what the shell already holds. */ })
+    void showDay(todayDay)
   })
+
+  // Meals in state are the Chat/History day; hand back today's when leaving a past day.
+  onDestroy(() => {
+    if (selectedDay !== todayDay) void actions.loadMeals(todayDay).catch(() => {})
+  })
+
+  function showDay(day: string): Promise<void> {
+    if (day > todayDay) day = todayDay
+    selectedDay = day
+    dayError = ''
+    dayLoading = true
+    dayLoadChain = dayLoadChain.then(async () => {
+      if (selectedDay !== day) return // a newer day was picked while this one waited
+      try {
+        await actions.loadMeals(day)
+      } catch (cause) {
+        // Today still shows the server's totals; a past day needs its meals.
+        if (selectedDay === day && day !== todayDay) dayError = cause instanceof Error ? cause.message : 'Could not load that day.'
+      } finally {
+        if (selectedDay === day) dayLoading = false
+      }
+    })
+    return dayLoadChain
+  }
+
+  function pickDay(event: Event): void {
+    const day = fromDateInputValue((event.currentTarget as HTMLInputElement).value)
+    if (day) void showDay(day)
+  }
 
   async function load(): Promise<void> {
     const id = ++requestId
@@ -123,16 +166,23 @@
     <div class="placeholder-panel loading-panel" role="status"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading calories</span></div>
   {:else}
     <!-- ───────────── Today ───────────── -->
-    <section class="today-summary" aria-labelledby="today-title">
+    <section class="today-summary" aria-labelledby="today-title" aria-busy={dayLoading}>
+      <div class="day-nav">
+        <button class="icon-button" type="button" aria-label="Previous day" onclick={() => showDay(addDays(selectedDay, -1))}><Icon name="chevron-left" size={20} /></button>
+        <input class="field-input day-input" type="date" aria-label="Day to show" max={toDateInputValue(todayDay)} value={toDateInputValue(selectedDay)} onchange={pickDay} />
+        <button class="icon-button" type="button" aria-label="Next day" disabled={isToday} onclick={() => showDay(addDays(selectedDay, 1))}><Icon name="chevron-right" size={20} /></button>
+        {#if !isToday}<button class="button button--secondary compact-button" type="button" onclick={() => showDay(todayDay)}>Today</button>{/if}
+      </div>
       <div class="today-main">
-        <h2 class="summary-label" id="today-title">Today · {fmtWithDay(todayDay)}</h2>
-        <strong class="today-kcal">{fmtNumber(intake.kcal, 0)} <span>kcal{target !== null ? ` of ${fmtNumber(target, 0)}` : ''}</span></strong>
+        <h2 class="summary-label" id="today-title">{dayLabel}</h2>
+        {#if dayError}<div class="form-error" role="alert"><Icon name="alert" size={19} /><span>{dayError}</span></div>{/if}
+        <strong class="today-kcal">{fmtNumber(shown.kcal, 0)} <span>kcal{target !== null ? ` of ${fmtNumber(target, 0)}` : ''}</span></strong>
         {#if remaining !== null && todayPct !== null}
           <div
             class="progress-track"
             class:over={remaining < 0}
             role="progressbar"
-            aria-label="Calories eaten against today's target"
+            aria-label={isToday ? "Calories eaten against today's target" : 'Calories eaten against the target'}
             aria-valuemin="0"
             aria-valuemax="100"
             aria-valuenow={Math.min(100, todayPct)}
@@ -142,7 +192,7 @@
           </div>
           <p class="summary-note">
             {#if remaining >= 0}
-              <strong>{fmtNumber(remaining, 0)} kcal</strong> remaining · {todayPct}% of target
+              <strong>{fmtNumber(remaining, 0)} kcal</strong> {isToday ? 'remaining' : 'under target'} · {todayPct}% of target
             {:else}
               <Icon name="alert" size={15} /> <strong>{fmtNumber(Math.abs(remaining), 0)} kcal</strong> over target · {todayPct}%
             {/if}
@@ -154,7 +204,7 @@
 
       <div class="today-macros">
         {#if hasMacroTargets}
-          <ul class="macro-targets" aria-label="Macros against today's targets">
+          <ul class="macro-targets" aria-label={isToday ? "Macros against today's targets" : 'Macros against targets'}>
             {#each macroTargets as macro (macro.key)}
               <li>
                 <div class="macro-target-head">
@@ -166,14 +216,14 @@
                 {#if macro.goal}
                   <div class="macro-target-track" aria-hidden="true"><span class="macro-segment--{macro.key}" style:width={`${pct(macro.eaten, macro.goal)}%`}></span></div>
                   <span class="macro-target-note">
-                    {macro.eaten >= macro.goal ? `Target reached${macro.eaten > macro.goal ? ` (+${fmtNumber(macro.eaten - macro.goal, 0)} g)` : ''}` : `${fmtNumber(macro.goal - macro.eaten, 0)} g to go`}
+                    {macro.eaten >= macro.goal ? `Target reached${macro.eaten > macro.goal ? ` (+${fmtNumber(macro.eaten - macro.goal, 0)} g)` : ''}` : `${fmtNumber(macro.goal - macro.eaten, 0)} g ${isToday ? 'to go' : 'short'}`}
                   </span>
                 {/if}
               </li>
             {/each}
           </ul>
         {:else}
-          <MacroBar protein={intake.proteinG} carbs={intake.carbG} fat={intake.fatG} />
+          <MacroBar protein={shown.proteinG} carbs={shown.carbG} fat={shown.fatG} />
           <p class="card-note">Add macro targets in Settings to track each one against a goal.</p>
         {/if}
       </div>
@@ -181,15 +231,15 @@
 
     <section class="metric-card meals-card" aria-labelledby="today-meals-title">
       <div class="metric-card-header">
-        <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="food" size={20} /></span><h2 class="metric-card-title" id="today-meals-title">Today’s meals</h2></div>
-        <span class="badge">{todayMeals.length} logged</span>
+        <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="food" size={20} /></span><h2 class="metric-card-title" id="today-meals-title">{isToday ? 'Today’s meals' : `Meals · ${fmtShort(selectedDay)}`}</h2></div>
+        <span class="badge">{dayMeals.length} logged</span>
       </div>
       <div class="metric-card-content">
-        {#if todayMeals.length === 0}
-          <p class="quiet-empty">Nothing logged yet today. Describe a meal in Chat and save it to see it here.</p>
+        {#if dayMeals.length === 0}
+          <p class="quiet-empty">{dayLoading ? 'Loading…' : isToday ? 'Nothing logged yet today. Describe a meal in Chat and save it to see it here.' : 'Nothing was logged this day.'}</p>
         {:else}
           <ul class="today-meal-list">
-            {#each todayMeals as meal (meal.id)}
+            {#each dayMeals as meal (meal.id)}
               <li>
                 <span class="meal-time">{fmtTime(meal.eatenAt) || '—'}</span>
                 <span class="meal-copy">
@@ -323,6 +373,10 @@
     background: linear-gradient(135deg, var(--color-accent-soft), var(--color-surface) 65%);
     box-shadow: var(--shadow-card);
   }
+  .day-nav { display: flex; grid-column: 1 / -1; align-items: center; gap: var(--space-2); }
+  .day-input { width: auto; min-width: 9.5rem; }
+  .day-nav .compact-button { margin-left: auto; }
+  .today-summary[aria-busy='true'] .today-main, .today-summary[aria-busy='true'] .today-macros { opacity: 0.55; transition: opacity 120ms; }
   .today-main { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); }
   .summary-label { margin: 0; color: var(--color-text-muted); font-size: var(--text-sm); font-weight: var(--weight-medium); }
   .today-kcal { font-size: var(--text-number); font-variant-numeric: tabular-nums; letter-spacing: -0.045em; line-height: 1.15; }

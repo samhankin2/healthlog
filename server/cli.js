@@ -433,7 +433,7 @@ async function cmdGarmin(action, args) {
       return
     }
     markLoggedIn(db, user.id)
-    console.log(`Connected Garmin for ${user.email}. The server syncs once a day; run "garmin sync" for a first backfill.`)
+    console.log(`Connected Garmin for ${user.email}. The server syncs every few hours during the day; run "garmin sync" for a first backfill.`)
     return
   }
   if (action === 'sync') {

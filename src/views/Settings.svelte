@@ -189,7 +189,7 @@
       <button class="button button--secondary compact-button" type="button" onclick={() => navigate('activity')}>Activities <Icon name="chevron-right" size={17} /></button>
     </div>
     <div class="metric-card-content">
-      <p class="card-note">Steps, calories burned, resting heart rate, sleep and workouts from your watch. It syncs once a day after {garmin?.syncHour ?? 6}:00, or whenever you press Sync now.</p>
+      <p class="card-note">Steps, calories burned, resting heart rate, sleep and workouts from your watch. It syncs every {garmin?.syncIntervalHours ?? 3} hours from {garmin?.syncHour ?? 6}:00 to midnight, or whenever you press Sync now. Finished days are kept and only today (and yesterday, until noon) is fetched again.</p>
       <GarminSyncControl status={garmin} showHelp email={app.user?.email} onsynced={() => actions.loadDashboard()} />
     </div>
   </section>
