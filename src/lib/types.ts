@@ -310,6 +310,8 @@ export type MealInput = Nutrition & {
   source?: MealSource
   confidence?: number | null
   analysisId?: string | null
+  /** Which meal of a multi-meal analysis this is (0-based); keeps the save idempotent per meal. */
+  analysisPart?: number
   items?: MealItemInput[]
 }
 export type MealPatch = Partial<MealInput>

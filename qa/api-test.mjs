@@ -548,6 +548,27 @@ async function run() {
   const afterNoSave = (await api('GET', `/api/meals?day=${TODAY}`, { token: authToken })).json?.meals?.length ?? 0
   eq('chat save:false: meal count unchanged', afterNoSave, beforeNoSave)
 
+  // "Save meal" on a two-meal reply posts part 0 and part 1 of the same analysis.
+  const partsAnalysisId = r.json?.analysis?.id
+  const partBody = (part, name) => ({
+    day: TODAY, name, kcal: 100 + part, proteinG: 1, carbsG: 1, fatG: 1, source: 'ai',
+    eatenAt: new Date(Date.now() + part).toISOString(),
+    analysisId: partsAnalysisId, analysisPart: part,
+  })
+  const part0 = await api('POST', '/api/meals', { token: authToken, body: partBody(0, 'Part zero') })
+  const part1 = await api('POST', '/api/meals', { token: authToken, body: partBody(1, 'Part one') })
+  eq('meal parts: part 0 created', part0.status, 201)
+  eq('meal parts: part 1 created, not deduped onto part 0', part1.status, 201)
+  ok('meal parts: two distinct meals', part0.json?.meal?.id && part0.json.meal.id !== part1.json?.meal?.id)
+  const again0 = await api('POST', '/api/meals', { token: authToken, body: partBody(0, 'Part zero') })
+  const again1 = await api('POST', '/api/meals', { token: authToken, body: partBody(1, 'Part one') })
+  eq('meal parts: re-saving part 0 returns it', again0.json?.meal?.id, part0.json?.meal?.id)
+  eq('meal parts: re-saving part 1 returns it', again1.json?.meal?.id, part1.json?.meal?.id)
+  const afterParts = (await api('GET', `/api/meals?day=${TODAY}`, { token: authToken })).json?.meals?.length ?? 0
+  eq('meal parts: exactly two meals added', afterParts, afterNoSave + 2)
+  r = await api('POST', '/api/meals', { token: authToken, body: { ...partBody(0, 'x'), analysisPart: -1 } })
+  eq('meal parts: negative part is 400', r.status, 400)
+
   const idemKey = `qa-${Date.now()}`
   const first = await api('POST', '/api/chat', {
     token: authToken,

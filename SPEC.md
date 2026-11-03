@@ -349,8 +349,13 @@ and mirror it in `server/lib/metrics.js`.
 GET    /api/meals?day=YYYY-MM-DD&limit=50   -> 200 { ok:true, meals:[{id,eatenAt,day,name,description,
                                                   kcal,proteinG,carbsG,fatG,fiberG,source,confidence,
                                                   items:[{id,name,quantity,kcal,proteinG,carbsG,fatG}]}] }
-POST   /api/meals { eatenAt?, day?, name, description?, kcal, proteinG, carbsG, fatG, items?[] }
+POST   /api/meals { eatenAt?, day?, name, description?, kcal, proteinG, carbsG, fatG, items?[],
+                    analysisId?, analysisPart? }
                                                -> 201 { ok:true, meal:{...} }
+       # With analysisId the save is idempotent per part: if the analysis already
+       # has more than analysisPart (default 0) meals, the existing one at that
+       # position (by eatenAt) is returned with 200. A multi-meal chat reply saves
+       # parts 0..n-1.
 PUT    /api/meals/:id { ... }                -> 200 { ok:true, meal:{...} }
 DELETE /api/meals/:id                        -> 200 { ok:true, deleted:<id> }
 

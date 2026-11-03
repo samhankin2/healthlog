@@ -89,13 +89,23 @@ export function registerMealRoutes(router) {
     // A meal saved from a chat reply ("Save meal" after "Ask again") carries the
     // analysis it came from. The link is what lets the chat show it as saved,
     // and it makes the save idempotent: a double tap returns the same meal.
+    // One analysis can describe several meals (a dish and a coffee), saved as
+    // parts 0..n-1 in order; part k is "already saved" only when the analysis
+    // has more than k meals, so the second part is inserted, not deduped.
     const analysisRaw = alias(body, 'analysisId', 'analysis_id')
     let analysisId = null
     if (analysisRaw !== undefined && analysisRaw !== null) {
       analysisId = requireString(analysisRaw, 'analysisId', { max: 64 })
       const owned = db.prepare('SELECT id FROM analyses WHERE id = ? AND user_id = ?').get(analysisId, user.id)
       if (!owned) throw new HttpError(400, 'analysisId does not match one of your analyses')
-      const already = db.prepare('SELECT id FROM meals WHERE analysis_id = ? AND user_id = ?').get(analysisId, user.id)
+      const partRaw = alias(body, 'analysisPart', 'analysis_part')
+      const part = partRaw === undefined || partRaw === null ? 0 : Number(partRaw)
+      if (!Number.isInteger(part) || part < 0 || part > 50) {
+        throw new HttpError(400, 'analysisPart must be a whole number from 0 to 50')
+      }
+      const already = db
+        .prepare('SELECT id FROM meals WHERE analysis_id = ? AND user_id = ? ORDER BY eaten_at, created_at LIMIT 1 OFFSET ?')
+        .get(analysisId, user.id, part)
       if (already) {
         sendJson(res, 200, { ok: true, meal: findMeal(db, user.id, already.id) })
         return

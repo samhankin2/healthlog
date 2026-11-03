@@ -190,6 +190,7 @@
           fatG: group.total.fat_g,
           source: 'ai',
           analysisId: analysis.id,
+          analysisPart: index,
           items: group.items.map((item) => ({
             name: item.name,
             quantity: item.quantity,
