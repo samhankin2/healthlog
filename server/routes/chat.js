@@ -170,7 +170,6 @@ export function registerChatRoutes(router) {
       .all(user.id, day)
       .map((m) => ({ kcal: m.kcal, proteinG: m.protein_g, carbsG: m.carbs_g, fatG: m.fat_g }))
     const intake = sumIntake(mealsToday)
-
     const profileForPrompt = profileRow
       ? {
           currentWeightKg: latestWeight ? Number(latestWeight.weight_kg) : (profileRow.start_weight_kg ?? null),

@@ -71,6 +71,45 @@
     return `${times} · last ${last}${food.serving ? ` · ${food.serving}` : ''}`
   }
 
+  let loggingId = $state<string | null>(null)
+
+  /** One tap: log a saved food as a meal for today, with the library's exact numbers. */
+  async function logFood(food: Food): Promise<void> {
+    if (loggingId) return
+    loggingId = food.id
+    try {
+      await actions.createMeal({
+        name: food.name,
+        description: food.serving,
+        day: today(),
+        eatenAt: new Date().toISOString(),
+        kcal: food.kcal,
+        proteinG: food.proteinG,
+        carbsG: food.carbsG,
+        fatG: food.fatG,
+        source: 'saved_food',
+        items: [
+          {
+            name: food.name,
+            quantity: food.serving,
+            kcal: food.kcal,
+            proteinG: food.proteinG,
+            carbsG: food.carbsG,
+            fatG: food.fatG,
+            foodId: food.id,
+          },
+        ],
+      })
+      showToast(`${food.name} logged for today.`, 'success')
+      void actions.loadDashboard().catch(() => {})
+      void loadHistory()
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not log this food.', 'error')
+    } finally {
+      loggingId = null
+    }
+  }
+
   async function saveFood(input: FoodInput): Promise<void> {
     await actions.createFood(input)
     addOpen = false
@@ -130,6 +169,13 @@
                 <div><dt>Carbs</dt><dd>{fmtMacro(food.carbsG)}</dd></div>
                 <div><dt>Fat</dt><dd>{fmtMacro(food.fatG)}</dd></div>
               </dl>
+              <button
+                class="button button--primary compact-button log-food"
+                type="button"
+                aria-label={`Log ${food.name} for today`}
+                disabled={loggingId !== null}
+                onclick={() => logFood(food)}
+              >{#if loggingId === food.id}<span class="spinner" aria-hidden="true"></span>{:else}<Icon name="plus" size={17} />{/if} Log for today</button>
               <button class="icon-button delete-food" type="button" aria-label={`Delete saved food ${food.name}`} onclick={() => { deletingFood = food }}><Icon name="trash" size={18} /></button>
             </li>
           {/each}
@@ -248,6 +294,7 @@
   .food-macros div { min-width: 0; padding: var(--space-2); border-radius: var(--radius-sm); background: var(--color-surface-sunken); }
   .food-macros dt { color: var(--color-text-muted); font-size: var(--text-xs); }
   .food-macros dd { margin: 0; font-size: var(--text-sm); font-variant-numeric: tabular-nums; font-weight: var(--weight-semibold); }
+  .log-food { grid-column: 1 / -1; justify-self: start; }
   .delete-food { position: absolute; top: var(--space-2); right: var(--space-2); }
   .delete-food:hover { color: var(--color-danger); }
   .import-sidebar { display: flex; flex-direction: column; gap: var(--space-4); }
