@@ -178,6 +178,23 @@ export interface Metrics {
   goalWeightKg: number | null
   intake: Intake
   intakeHistory: IntakeHistoryDay[]
+  adaptiveTdee?: AdaptiveTdee
+}
+
+/** Observed maintenance calories (SPEC §6). Shown beside kcalTarget; never replaces it. */
+export interface AdaptiveTdee {
+  kcal: number | null
+  avgIntakeKcal: number | null
+  weightSlopeKgPerWeek: number | null
+  windowStart: DayString
+  windowEnd: DayString
+  windowDays: number
+  loggedDays: number
+  weighIns: number
+  confidence: 'high' | 'medium' | 'low' | null
+  reason: string | null
+  formulaKcal: number | null
+  kcalTarget: number | null
 }
 
 export interface DashboardPayload {

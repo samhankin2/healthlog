@@ -371,6 +371,10 @@ async function run() {
   eq('dashboard: intake kcal 0 before meals', m.intake?.kcal, 0)
   eq('dashboard: intakeHistory length = days', m.intakeHistory?.length, 30)
   eq('dashboard: intakeHistory ends today', m.intakeHistory?.[29]?.day, TODAY)
+  eq('dashboard: adaptiveTdee kcal null without enough data', m.adaptiveTdee?.kcal, null)
+  ok('dashboard: adaptiveTdee explains what is missing', typeof m.adaptiveTdee?.reason === 'string' && m.adaptiveTdee.reason.length > 0)
+  eq('dashboard: adaptiveTdee window ends yesterday', m.adaptiveTdee?.windowEnd, YESTERDAY)
+  eq('dashboard: adaptiveTdee echoes kcalTarget, untouched', m.adaptiveTdee?.kcalTarget, m.intake?.kcalTarget)
 
   // bmi must be null without a height
   const savedHeight = 180

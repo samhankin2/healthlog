@@ -317,6 +317,21 @@ GET /api/dashboard?days=90 -> 200 { ok:true, metrics:{ ...same metric names as t
 `intake:{ day, kcal, kcalTarget, proteinG, carbG, fatG, proteinPct, carbPct, fatPct }`
 and `intakeHistory:[{ day, kcal, proteinG, carbsG, fatG }]` for the last `days`.
 
+`metrics.adaptiveTdee` is an **observed maintenance estimate**, shown alongside —
+never written to — `profile.kcalTarget` or `activityLevel`:
+```
+{ kcal|null, avgIntakeKcal|null, weightSlopeKgPerWeek|null, windowStart, windowEnd,
+  windowDays:28, loggedDays, weighIns, confidence:"high"|"medium"|"low"|null,
+  reason|null, formulaKcal|null, kcalTarget|null }
+```
+Window: the 28 complete days ending the day before `day`, independent of `days`.
+`avgIntakeKcal` averages only days with meals; the weight change is the
+least-squares slope through the window's weigh-ins;
+`kcal = avgIntake − slopeKgPerDay × 7700`. `kcal` is null (with a human
+`reason`) until there are ≥ 14 logged days and ≥ 8 weigh-ins spanning ≥ 14 days.
+`formulaKcal` is Mifflin–St Jeor × activity multiplier at the current 7-day
+average weight, for comparison.
+
 The **metric maths is ported from the old `src/metrics.ts`** — same definitions,
 same edge cases. Read `C:\Users\hanki\Development\weight-tracker\src\metrics.ts`
 and mirror it in `server/lib/metrics.js`.

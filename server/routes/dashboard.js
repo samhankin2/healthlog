@@ -7,7 +7,16 @@
 import { getDb } from '../db.js'
 import { requireUser } from '../auth.js'
 import { sendJson, HttpError } from '../lib/http.js'
-import { clampDays, computeOverallStats, isISODate, sumIntake, today } from '../lib/metrics.js'
+import {
+  ADAPTIVE_TDEE_RULES,
+  clampDays,
+  computeAdaptiveTdee,
+  computeOverallStats,
+  isISODate,
+  mifflinStJeor,
+  sumIntake,
+  today,
+} from '../lib/metrics.js'
 import { profilePayload } from '../lib/shape.js'
 
 const r0 = (n) => (n === null || n === undefined ? null : Math.round(Number(n)))
@@ -82,6 +91,21 @@ export function registerDashboardRoutes(router) {
       })
     }
 
+    // Adaptive TDEE always looks at its own fixed window, whatever the chart range.
+    const tdeeRows = intakeByDay(db, user.id, addDaysLocal(day, -ADAPTIVE_TDEE_RULES.windowDays), addDaysLocal(day, -1))
+    const adaptive = computeAdaptiveTdee(
+      tdeeRows.map((row) => ({ day: row.day, kcal: Number(row.kcal) })),
+      entries,
+      day,
+    )
+    const formulaKcal = mifflinStJeor({
+      heightCm: profile?.heightCm,
+      weightKg: stats.avg7Kg ?? stats.latestKg ?? profile?.startWeightKg,
+      age: profile?.age,
+      sex: profile?.sex,
+      activityLevel: profile?.activityLevel,
+    })
+
     const metrics = {
       /* trend / weight (old-tracker names) */
       currentWeightKg: r2(stats.latestKg),
@@ -117,6 +141,9 @@ export function registerDashboardRoutes(router) {
         fatPct: intakeBlock.fatPct,
       },
       intakeHistory,
+
+      /* observed maintenance — shown beside kcalTarget, never written to it */
+      adaptiveTdee: { ...adaptive, formulaKcal, kcalTarget: profile?.kcalTarget ?? null },
     }
 
     sendJson(res, 200, { ok: true, metrics })

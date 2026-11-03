@@ -392,3 +392,84 @@ export function roundOrNull(v, digits = 2) {
   const f = 10 ** digits
   return Math.round(n * f) / f
 }
+
+/* ------------------------------------------------------------------ */
+/* Adaptive TDEE — an observed maintenance estimate, shown alongside   */
+/* (never replacing) the profile's kcal target and activity level.     */
+/* ------------------------------------------------------------------ */
+
+/** Energy in one kg of body-mass change (the usual ~7700 kcal/kg rule). */
+export const KCAL_PER_KG = 7700
+
+export const ADAPTIVE_TDEE_RULES = { windowDays: 28, minLoggedDays: 14, minWeighIns: 8, minSpanDays: 14 }
+
+/**
+ * Estimate maintenance calories from what was eaten and what the scale did.
+ *
+ * Window: the `windowDays` complete days ending the day before `endDay` (today
+ * is still being logged). Intake is averaged over days with at least one meal
+ * — unlogged days are treated as missing, not as zero. Weight change is the
+ * least-squares slope through every weigh-in in the window, which is far less
+ * noisy than first-vs-last.
+ *
+ *   tdee = avgIntake − slopeKgPerDay × KCAL_PER_KG
+ *
+ * `intakeDays`: [{ day, kcal }] (only days with meals). `entries`: [{ date, weightKg }].
+ * Returns `kcal: null` with a `reason` when there is not enough data.
+ */
+export function computeAdaptiveTdee(intakeDays, entries, endDay, rules = ADAPTIVE_TDEE_RULES) {
+  const { windowDays, minLoggedDays, minWeighIns, minSpanDays } = rules
+  const to = addDays(endDay, -1)
+  const from = addDays(to, -(windowDays - 1))
+
+  const logged = intakeDays.filter((d) => d.day >= from && d.day <= to && Number(d.kcal) > 0)
+  const weighIns = sortEntries(entries).filter((e) => e.date >= from && e.date <= to)
+  const spanDays = weighIns.length > 1 ? daysBetween(weighIns[0].date, weighIns[weighIns.length - 1].date) : 0
+
+  const base = {
+    kcal: null,
+    avgIntakeKcal: logged.length ? round0(logged.reduce((a, d) => a + Number(d.kcal), 0) / logged.length) : null,
+    weightSlopeKgPerWeek: null,
+    windowStart: from,
+    windowEnd: to,
+    windowDays,
+    loggedDays: logged.length,
+    weighIns: weighIns.length,
+    confidence: null,
+    reason: null,
+  }
+
+  const missing = []
+  if (logged.length < minLoggedDays) missing.push(`${minLoggedDays - logged.length} more day${minLoggedDays - logged.length === 1 ? '' : 's'} of food logging`)
+  if (weighIns.length < minWeighIns) missing.push(`${minWeighIns - weighIns.length} more weigh-in${minWeighIns - weighIns.length === 1 ? '' : 's'}`)
+  else if (spanDays < minSpanDays) missing.push(`weigh-ins spread over at least ${minSpanDays} days`)
+  if (missing.length) return { ...base, reason: `Needs ${missing.join(' and ')} in the last ${windowDays} days.` }
+
+  // Least-squares slope, x in days from the window start.
+  const xs = weighIns.map((e) => daysBetween(from, e.date))
+  const ys = weighIns.map((e) => e.weightKg)
+  const n = xs.length
+  const mx = xs.reduce((a, b) => a + b, 0) / n
+  const my = ys.reduce((a, b) => a + b, 0) / n
+  let sxy = 0
+  let sxx = 0
+  for (let i = 0; i < n; i++) {
+    sxy += (xs[i] - mx) * (ys[i] - my)
+    sxx += (xs[i] - mx) ** 2
+  }
+  const slopePerDay = sxx > 0 ? sxy / sxx : 0
+  const avgIntake = logged.reduce((a, d) => a + Number(d.kcal), 0) / logged.length
+  const kcal = avgIntake - slopePerDay * KCAL_PER_KG
+
+  const coverage = logged.length / windowDays
+  const weighCoverage = weighIns.length / windowDays
+  const confidence = coverage >= 0.85 && weighCoverage >= 0.5 ? 'high' : coverage >= 0.65 && weighCoverage >= 0.35 ? 'medium' : 'low'
+
+  return {
+    ...base,
+    kcal: round0(kcal),
+    avgIntakeKcal: round0(avgIntake),
+    weightSlopeKgPerWeek: Math.round(slopePerDay * 7 * 100) / 100,
+    confidence,
+  }
+}
