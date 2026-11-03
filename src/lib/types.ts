@@ -284,7 +284,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity'
+export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights'
 
 export interface ViewContext {
   state: AppState
@@ -348,4 +348,139 @@ export interface FoodCsvPreview {
   suggestedMapping: Partial<FoodCsvMapping>
   rows: FoodCsvPreviewRow[]
   skipped: { line: number; reason: string }[]
+}
+
+/* -------------------------------------------------------------------------- */
+/* Garmin insights (GET /api/insights)                                        */
+/* -------------------------------------------------------------------------- */
+
+export interface InsightDay {
+  day: DayString
+  steps: number | null
+  activeKcal: number | null
+  totalKcal: number | null
+  bmrKcal: number | null
+  restingHr: number | null
+  sleepSeconds: number | null
+  intensityMinutes: number | null
+  distanceM: number | null
+  floorsM: number | null
+  moderateMin: number | null
+  vigorousMin: number | null
+  stepGoal: number | null
+  minHr: number | null
+  maxHr: number | null
+  stressAvg: number | null
+  stressMax: number | null
+  stressRestS: number | null
+  stressLowS: number | null
+  stressMediumS: number | null
+  stressHighS: number | null
+  bbHigh: number | null
+  bbLow: number | null
+  bbCharged: number | null
+  bbDrained: number | null
+  bbWake: number | null
+  spo2Avg: number | null
+  spo2Low: number | null
+  respAvg: number | null
+  hrvNight: number | null
+  hrvStatus: string | null
+}
+
+export interface SleepNight {
+  day: DayString
+  startLocal: string | null
+  endLocal: string | null
+  deepS: number | null
+  lightS: number | null
+  remS: number | null
+  awakeS: number | null
+  score: number | null
+  qualityScore: number | null
+  durationScore: number | null
+  recoveryScore: number | null
+  avgStress: number | null
+  avgResp: number | null
+  avgSpo2: number | null
+  avgHr: number | null
+  awakeCount: number | null
+  restlessCount: number | null
+  feedback: string | null
+}
+
+export interface FitnessMetric {
+  day: DayString
+  vo2max: number | null
+  race5kS: number | null
+  race10kS: number | null
+  raceHalfS: number | null
+  raceMarathonS: number | null
+  trainingStatus: string | null
+  weeklyLoad: number | null
+  loadMin: number | null
+  loadMax: number | null
+  fitnessAge: number | null
+  heatPct: number | null
+}
+
+export interface InsightActivity {
+  id: string
+  startLocal: string
+  day: DayString
+  name: string | null
+  type: string | null
+  durationS: number | null
+  movingS: number | null
+  distanceM: number | null
+  kcal: number | null
+  avgHr: number | null
+  maxHr: number | null
+  elevationGainM: number | null
+  avgSpeedMps: number | null
+  trainingEffect: number | null
+  anaerobicTe: number | null
+  trainingLoad: number | null
+  teLabel: string | null
+  vo2max: number | null
+  steps: number | null
+  cadence: number | null
+  location: string | null
+  hrZonesS: number[] | null
+  sets: number | null
+  reps: number | null
+}
+
+export interface PersonalRecord {
+  type: string
+  value: number
+  achievedAt: string | null
+  externalId: string | null
+}
+
+export interface InsightsPayload {
+  from: DayString
+  to: DayString
+  coverage: { first: DayString | null; last: DayString | null }
+  days: InsightDay[]
+  sleep: SleepNight[]
+  metrics: FitnessMetric[]
+  activities: InsightActivity[]
+  intake: { day: DayString; kcal: number; proteinG: number }[]
+  weights: { day: DayString; weightKg: number }[]
+  records: PersonalRecord[]
+  meta: {
+    hrZones?: Partial<Record<'z1' | 'z2' | 'z3' | 'z4' | 'z5' | 'max' | 'resting' | 'lthr', number>>
+    thresholds?: Partial<Record<'lthr' | 'ftp' | 'ltPaceSPerKm', number>>
+    lastImport?: { at: string; range: { from: DayString; to: DayString } | null; counts: Record<string, number> }
+  }
+}
+
+export interface GarminImportResult {
+  days: number
+  wellness: number
+  sleep: number
+  metrics: number
+  activities: number
+  records: number
 }

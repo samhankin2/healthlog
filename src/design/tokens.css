@@ -152,3 +152,37 @@
     --shadow-toast: 0 10px 32px rgb(0 0 0 / 44%);
   }
 }
+
+/* Data-viz palette (Insights). Categorical slots validated with the dataviz
+   validator: adjacent CVD ΔE ≥ 8 in both modes. Series identity always also
+   comes from a legend or label, never colour alone. */
+:root {
+  --viz-run: #2a78d6;
+  --viz-ride: #eb6834;
+  --viz-swim: #1baf7a;
+  --viz-strength: #eda100;
+  --viz-other: #8a948e;
+  --viz-deep: #6250d6;
+  --viz-rem: #e87ba4;
+  --viz-light: #2a78d6;
+  --viz-awake: #eda100;
+  --viz-grid: color-mix(in oklab, var(--color-border) 55%, var(--color-surface));
+  --viz-axis: var(--color-text-subtle);
+  --viz-line: var(--color-accent);
+  --viz-wash: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  --viz-band: color-mix(in oklab, var(--color-accent) 10%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --viz-run: #3987e5;
+    --viz-ride: #d95926;
+    --viz-swim: #199e70;
+    --viz-strength: #c98500;
+    --viz-other: #7d8882;
+    --viz-deep: #9085e9;
+    --viz-rem: #d55181;
+    --viz-light: #3987e5;
+    --viz-awake: #c98500;
+  }
+}

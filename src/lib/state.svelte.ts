@@ -71,7 +71,7 @@ store.subscribe((state) => {
 /* Routing                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export const ROUTES = ['chat', 'dashboard', 'calories', 'foods', 'settings', 'history', 'activity'] as const
+export const ROUTES = ['chat', 'dashboard', 'calories', 'foods', 'settings', 'history', 'activity', 'insights'] as const
 export type Route = (typeof ROUTES)[number]
 
 // A `$state` primitive cannot be exported and reassigned — only its

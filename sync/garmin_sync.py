@@ -11,7 +11,7 @@ it never touches the database. Two commands:
   garmin_sync.py fetch --tokens DIR --from YYYY-MM-DD --to YYYY-MM-DD
       Non-interactive. Resumes the saved tokens (refreshing them in place when
       they are about to expire) and prints one JSON object on stdout:
-        {"ok": true, "days": [...], "activities": [...]}
+        {"ok": true, "days": [...], "sleep": [...], "metrics": [...], "activities": [...]}
         {"ok": false, "error": "needs_login" | "rate_limited" | "error", "message": "..."}
       It is constructed WITHOUT credentials, so it cannot fall back to an SSO
       login: missing or rejected tokens end in "needs_login". That keeps the
@@ -28,7 +28,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 try:
     from garminconnect import (
@@ -77,20 +77,85 @@ def is_rate_limit(err):
 # fetch
 # --------------------------------------------------------------------------
 
-def day_summary(client, day):
-    iso = day.isoformat()
-    s = client.get_user_summary(iso) or {}
-    sleep_seconds = None
+def optional(what, fn, *args):
+    """Call an optional endpoint: auth / rate-limit errors propagate, anything else is a warning."""
     try:
-        sleep = client.get_sleep_data(iso) or {}
-        sleep_seconds = num((sleep.get("dailySleepDTO") or {}).get("sleepTimeSeconds"))
+        return fn(*args)
     except (GarminConnectAuthenticationError, GarminConnectTooManyRequestsError):
         raise
-    except Exception as e:  # sleep is optional; a missing night is not a failure
-        logging.warning("sleep for %s unavailable: %s", iso, e)
+    except Exception as e:  # a missing night or metric is not a failed sync
+        logging.warning("%s unavailable: %s", what, e)
+        return None
+
+
+def find(obj, key, depth=0):
+    """First non-null value for `key` anywhere in nested dicts/lists (Garmin nests these per device)."""
+    if depth > 6:
+        return None
+    if isinstance(obj, dict):
+        if obj.get(key) is not None:
+            return obj[key]
+        children = obj.values()
+    elif isinstance(obj, list):
+        children = obj
+    else:
+        return None
+    for v in children:
+        found = find(v, key, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def first_num(*values):
+    return next((v for v in (num(x) for x in values) if v is not None), None)
+
+
+def local_ts(ms):
+    """Garmin's *Local epoch-ms fields are wall-clock time encoded as if it were UTC."""
+    ms = num(ms)
+    if ms is None:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def sleep_night(iso, sleep):
+    dto = (sleep or {}).get("dailySleepDTO") or {}
+    if not dto.get("sleepStartTimestampLocal"):
+        return None
+    scores = dto.get("sleepScores") or {}
+    overall = scores.get("overall") or {}
+    return {
+        "day": iso,
+        "startLocal": local_ts(dto.get("sleepStartTimestampLocal")),
+        "endLocal": local_ts(dto.get("sleepEndTimestampLocal")),
+        "deepS": num(dto.get("deepSleepSeconds")),
+        "lightS": num(dto.get("lightSleepSeconds")),
+        "remS": num(dto.get("remSleepSeconds")),
+        "awakeS": num(dto.get("awakeSleepSeconds")),
+        "score": num(overall.get("value")),
+        "avgStress": num(dto.get("avgSleepStress")),
+        "avgResp": num(dto.get("averageRespirationValue")),
+        "avgSpo2": num(dto.get("averageSpO2Value")),
+        "avgHr": num(dto.get("avgHeartRate")),
+        "awakeCount": num(dto.get("awakeCount")),
+        "restlessCount": num((sleep or {}).get("restlessMomentsCount")),
+        "feedback": overall.get("qualifierKey") if isinstance(overall.get("qualifierKey"), str) else None,
+    }
+
+
+def day_summary(client, day):
+    """One day's summary row plus that morning's sleep night (or None)."""
+    iso = day.isoformat()
+    s = client.get_user_summary(iso) or {}
+    sleep = optional(f"sleep for {iso}", client.get_sleep_data, iso) or {}
+    hrv = optional(f"HRV for {iso}", client.get_hrv_data, iso) or {}
+    dto = sleep.get("dailySleepDTO") or {}
+    sleep_seconds = num(dto.get("sleepTimeSeconds"))
     moderate = num(s.get("moderateIntensityMinutes"))
     vigorous = num(s.get("vigorousIntensityMinutes"))
-    return {
+    hrv_summary = hrv.get("hrvSummary") or {}
+    summary = {
         "day": iso,
         "steps": num(s.get("totalSteps")),
         "activeKcal": num(s.get("activeKilocalories")),
@@ -99,11 +164,64 @@ def day_summary(client, day):
         "restingHr": num(s.get("restingHeartRate")),
         "sleepSeconds": sleep_seconds,
         "intensityMinutes": None if moderate is None and vigorous is None else (moderate or 0) + 2 * (vigorous or 0),
+        # Insights fields (daily_wellness)
+        "distanceM": num(s.get("totalDistanceMeters")),
+        "floorsM": num(s.get("floorsAscendedInMeters")),
+        "moderateMin": moderate,
+        "vigorousMin": vigorous,
+        "stepGoal": num(s.get("dailyStepGoal")),
+        "minHr": num(s.get("minHeartRate")),
+        "maxHr": num(s.get("maxHeartRate")),
+        "stressAvg": num(s.get("averageStressLevel")),
+        "stressMax": num(s.get("maxStressLevel")),
+        "stressRestS": num(s.get("restStressDuration")),
+        "stressLowS": num(s.get("lowStressDuration")),
+        "stressMediumS": num(s.get("mediumStressDuration")),
+        "stressHighS": num(s.get("highStressDuration")),
+        "bbHigh": num(s.get("bodyBatteryHighestValue")),
+        "bbLow": num(s.get("bodyBatteryLowestValue")),
+        "bbCharged": num(s.get("bodyBatteryChargedValue")),
+        "bbDrained": num(s.get("bodyBatteryDrainedValue")),
+        "bbWake": num(s.get("bodyBatteryAtWakeTime")),
+        "spo2Avg": num(s.get("averageSpo2")),
+        "spo2Low": num(s.get("lowestSpo2")),
+        "respAvg": num(s.get("avgWakingRespirationValue")),
+        "hrvNight": num(hrv_summary.get("lastNightAvg")),
+        "hrvStatus": hrv_summary.get("status") if isinstance(hrv_summary.get("status"), str) else None,
     }
+    return summary, sleep_night(iso, sleep)
+
+
+STATUSES = ("PRODUCTIVE", "MAINTAINING", "RECOVERY", "PEAKING", "OVERREACHING", "UNPRODUCTIVE", "DETRAINING", "STRAINED", "NO_STATUS")
+
+
+def fitness_snapshot(client, day):
+    """VO2max, race predictions and training status as of `day`: one row per sync (history comes from the export)."""
+    iso = day.isoformat()
+    maxm = optional("max metrics", client.get_max_metrics, iso)
+    status = optional("training status", client.get_training_status, iso)
+    races = optional("race predictions", client.get_race_predictions)
+    phrase = find(status, "trainingStatusFeedbackPhrase")
+    label = next((st for st in STATUSES if isinstance(phrase, str) and phrase.startswith(st)), None)
+    row = {
+        "day": iso,
+        "vo2max": first_num(find(maxm, "vo2MaxPreciseValue"), find(maxm, "vo2MaxValue")),
+        "fitnessAge": num(find(maxm, "fitnessAge")),
+        "race5kS": num(find(races, "time5K")),
+        "race10kS": num(find(races, "time10K")),
+        "raceHalfS": num(find(races, "timeHalfMarathon")),
+        "raceMarathonS": num(find(races, "timeMarathon")),
+        "trainingStatus": label,
+        "weeklyLoad": num(find(status, "weeklyTrainingLoad")),
+        "loadMin": num(find(status, "loadTunnelMin")),
+        "loadMax": num(find(status, "loadTunnelMax")),
+    }
+    return row if any(v is not None for k, v in row.items() if k != "day") else None
 
 
 def activity_row(a):
     t = a.get("activityType") or {}
+    zones = [num(a.get(f"hrTimeInZone_{i}")) for i in range(0, 6)]
     return {
         "externalId": str(a.get("activityId")),
         "name": a.get("activityName"),
@@ -118,6 +236,16 @@ def activity_row(a):
         "elevationGainM": num(a.get("elevationGain")),
         "avgSpeedMps": num(a.get("averageSpeed")),
         "trainingEffect": num(a.get("aerobicTrainingEffect")),
+        "anaerobicTe": num(a.get("anaerobicTrainingEffect")),
+        "trainingLoad": num(a.get("activityTrainingLoad")),
+        "teLabel": a.get("trainingEffectLabel") if isinstance(a.get("trainingEffectLabel"), str) else None,
+        "vo2max": num(a.get("vO2MaxValue")),
+        "steps": num(a.get("steps")),
+        "cadence": num(a.get("averageRunningCadenceInStepsPerMinute")),
+        "location": a.get("locationName") if isinstance(a.get("locationName"), str) else None,
+        "hrZonesS": [z or 0 for z in zones] if any(zones) else None,
+        "sets": num(a.get("totalSets")),
+        "reps": num(a.get("totalReps")),
     }
 
 
@@ -148,9 +276,15 @@ def cmd_fetch(args):
         fail("rate_limited" if is_rate_limit(e) else "error", e)
 
     try:
-        days = [day_summary(client, d) for d in daterange(start, end)]
+        days, sleep = [], []
+        for d in daterange(start, end):
+            summary, night = day_summary(client, d)
+            days.append(summary)
+            if night:
+                sleep.append(night)
         raw = client.get_activities_by_date(start.isoformat(), end.isoformat()) or []
         activities = [activity_row(a) for a in raw if a.get("activityId") and a.get("startTimeLocal")]
+        snapshot = fitness_snapshot(client, end)
     except GarminConnectTooManyRequestsError as e:
         fail("rate_limited", e)
     except GarminConnectAuthenticationError as e:
@@ -158,7 +292,7 @@ def cmd_fetch(args):
     except Exception as e:
         fail("rate_limited" if is_rate_limit(e) else "error", e)
 
-    emit({"ok": True, "days": days, "activities": activities})
+    emit({"ok": True, "days": days, "sleep": sleep, "metrics": [snapshot] if snapshot else [], "activities": activities})
 
 
 # --------------------------------------------------------------------------

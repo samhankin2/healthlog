@@ -214,6 +214,98 @@ CREATE TABLE IF NOT EXISTS integrations (
   PRIMARY KEY (user_id, provider)
 );
 
+-- Garmin insights (SPEC §6 "Garmin insights"): the richer watch data, filled by
+-- the live sync and by importing a Garmin Connect data export.
+CREATE TABLE IF NOT EXISTS daily_wellness (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day              TEXT NOT NULL,           -- YYYY-MM-DD
+  distance_m       REAL,
+  floors_m         REAL,                    -- metres climbed
+  moderate_min     INTEGER,
+  vigorous_min     INTEGER,
+  step_goal        INTEGER,
+  min_hr           INTEGER,
+  max_hr           INTEGER,
+  stress_avg       INTEGER,                 -- 0..100, whole day
+  stress_max       INTEGER,
+  stress_rest_s    INTEGER,
+  stress_low_s     INTEGER,
+  stress_medium_s  INTEGER,
+  stress_high_s    INTEGER,
+  bb_high          INTEGER,                 -- Body Battery
+  bb_low           INTEGER,
+  bb_charged       INTEGER,
+  bb_drained       INTEGER,
+  bb_wake          INTEGER,                 -- value when the night's sleep ended
+  spo2_avg         REAL,
+  spo2_low         REAL,
+  resp_avg         REAL,                    -- waking breaths / minute
+  hrv_night        REAL,                    -- ms, last-night average
+  hrv_status       TEXT,
+  synced_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS sleep_nights (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day              TEXT NOT NULL,           -- the morning the night ends on
+  start_local      TEXT,                    -- YYYY-MM-DDTHH:MM:SS local
+  end_local        TEXT,
+  deep_s           INTEGER,
+  light_s          INTEGER,
+  rem_s            INTEGER,
+  awake_s          INTEGER,
+  score            INTEGER,                 -- overall sleep score 0..100
+  quality_score    INTEGER,
+  duration_score   INTEGER,
+  recovery_score   INTEGER,
+  avg_stress       REAL,
+  avg_resp         REAL,
+  avg_spo2         REAL,
+  avg_hr           REAL,
+  awake_count      INTEGER,
+  restless_count   INTEGER,
+  feedback         TEXT,
+  synced_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS fitness_metrics (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day              TEXT NOT NULL,
+  vo2max           REAL,
+  race_5k_s        REAL,
+  race_10k_s       REAL,
+  race_half_s      REAL,
+  race_marathon_s  REAL,
+  training_status  TEXT,                    -- PRODUCTIVE | MAINTAINING | RECOVERY | ...
+  weekly_load      REAL,
+  load_min         REAL,
+  load_max         REAL,
+  fitness_age      REAL,
+  heat_pct         REAL,
+  synced_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS personal_records (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type             TEXT NOT NULL,           -- e.g. "Best 5km Run"
+  value            REAL NOT NULL,
+  achieved_at      TEXT,
+  external_id      TEXT,                    -- activities.external_id, when tied to one
+  synced_at        TEXT NOT NULL,
+  PRIMARY KEY (user_id, type)
+);
+
+CREATE TABLE IF NOT EXISTS garmin_meta (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key              TEXT NOT NULL,           -- hrZones | thresholds | lastImport
+  value            TEXT NOT NULL,           -- JSON
+  updated_at       TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_weight_entries_user_date ON weight_entries(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_meals_user_day            ON meals(user_id, day);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at);
@@ -231,6 +323,28 @@ export function migrate(db) {
   db.exec('PRAGMA busy_timeout = 5000')
   db.exec(SCHEMA)
   migrateMacroPctToGrams(db)
+  addColumns(db, 'activities', ACTIVITY_EXTRA_COLUMNS)
+}
+
+/** Insight columns on `activities` (added after the table first shipped). */
+const ACTIVITY_EXTRA_COLUMNS = {
+  anaerobic_te: 'REAL',
+  training_load: 'REAL',
+  te_label: 'TEXT',
+  vo2max: 'REAL',
+  steps: 'INTEGER',
+  cadence: 'REAL',
+  location: 'TEXT',
+  hr_zones: 'TEXT', // JSON [z0..z5] seconds
+  sets: 'INTEGER',
+  reps: 'INTEGER',
+}
+
+function addColumns(db, table, columns) {
+  const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name))
+  for (const [col, type] of Object.entries(columns)) {
+    if (!have.has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`)
+  }
 }
 
 /**

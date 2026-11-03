@@ -31,7 +31,7 @@ reference/
 src/
   main.ts             entry: mount(App) — Svelte 5
   App.svelte          shell: auth gate, hash router, tab bar / side rail
-  views/              Login, Chat, Dashboard, Foods, Settings, History
+  views/              Login, Chat, Dashboard, Calories, Insights, Foods, Settings, History, Activity
   lib/
     api.ts            the ONLY module that calls fetch
     auth.ts format.ts pwa.ts types.ts store.ts   framework-agnostic
@@ -39,6 +39,8 @@ src/
     icons.ts toast.svelte.ts
     components/       shared Svelte components
     panels/ charts/   view-specific components
+    viz/              hand-drawn SVG charts for Insights (no chart library)
+    zip.ts garminExport.ts insights.ts   Garmin export reader/normaliser + analysis (pure)
   design/             tokens.css + ui.css — the design system, global CSS
 index.html            Vite entry
 public/               files Vite copies verbatim into dist/
@@ -47,6 +49,7 @@ public/               files Vite copies verbatim into dist/
 server/               API — node:http + node:sqlite, zero runtime dependencies
   index.js            server, router, static fallback
   db.js auth.js ai.js lib/ routes/ cli.js   (cli.js: admin - stats, sql, backups, invites)
+  lib/garminStore.js  the only writer of Garmin rows (live sync + export import)
 sync/
   garmin_sync.py      Garmin fetcher (python-garminconnect); spawned by server/lib/garmin.js
   requirements.txt    the pinned version — the only Python dependency
@@ -59,6 +62,7 @@ deploy/
   install-vps.sh      scp + run bootstrap over ssh
 .github/workflows/    pages.yml (frontend), deploy.yml (API)
 qa/                   smoke / API / browser checks
+                      garmin-export-test.mjs <zip>: runs the browser importer on a real export
 ```
 
 ## Commands

@@ -255,6 +255,19 @@ recorded workout, unique on `(user_id, source, external_id)` so re-syncs
 upsert), and `integrations` (per user + provider: status, last attempt /
 success, last error, `backoff_until`). Exact DDL lives in `server/db.js`.
 
+Insights (§6 "Garmin insights"): `daily_wellness` (per user + day: distance,
+floors, intensity minutes, min/max HR, stress average/max and time per level,
+Body Battery high/low/charged/drained/at wake, SpO₂, respiration, HRV),
+`sleep_nights` (per user + the morning a night ends: local start/end, stage
+seconds, scores, overnight stress/respiration/SpO₂/HR), `fitness_metrics`
+(per user + day: VO₂ max, race predictions, training status and load tunnel,
+fitness age, heat acclimation), `personal_records` (per user + record type) and
+`garmin_meta` (per user + key: HR zones, thresholds, last import, as JSON).
+`activities` gains `anaerobic_te`, `training_load`, `te_label`, `vo2max`,
+`steps`, `cadence`, `location`, `hr_zones` (JSON seconds per zone 0–5),
+`sets`, `reps`. All Garmin upserts are `COALESCE(new, old)`: a null never
+overwrites a stored value.
+
 ## 5. Auth model
 
 - **Registration requires an invite code.** `POST /api/auth/register` with
@@ -451,6 +464,51 @@ only built-ins and runs normally when the venv is absent (`available:false`).
   (or a gap longer than 30 days) backfills 30 days; `days` on a manual sync
   forces the last N (max 120). Finished days stay stored and are not re-fetched.
 
+### Garmin insights (phase 2 of the Garmin integration)
+
+```
+POST /api/garmin/import { range?, days?, sleep?, metrics?, activities?, records?, meta? }
+     -> 200 { ok:true, imported:{ days, wellness, sleep, metrics, activities, records } }
+        400 nothing to import / a list over 20 000 rows; body limit 12 MB
+GET  /api/insights?from&to   (default: the last 365 days)
+     -> 200 { ok:true, from, to, coverage:{ first, last }, days:[...daily_activity + daily_wellness],
+              sleep:[...], metrics:[...], activities:[...with insight columns], intake:[{ day, kcal, proteinG }],
+              weights:[{ day, weightKg }], records:[...], meta:{ hrZones?, thresholds?, lastImport? } }
+```
+
+- **Two sources, one store.** `server/lib/garminStore.js` is the only writer of
+  Garmin rows. The live sync (§6 "Garmin") and the export import both go
+  through it; each field is range-checked there and out-of-range or sentinel
+  values (Garmin's -1/-2) are dropped, never stored.
+- **Export import.** The Garmin Connect data-export ZIP is read in the browser
+  (`src/lib/zip.ts`, native `DecompressionStream`; `src/lib/garminExport.ts`
+  normalises it). Only these entries are read: `UDSFile_*` (daily summaries),
+  `*_sleepData`, `summarizedActivities`, `TrainingHistory_*`,
+  `RunRacePredictions_*`, `MetricsMaxMetData_*`,
+  `MetricsHeatAltitudeAcclimation_*`, `fitnessAgeData`, `personalRecord`,
+  `heartRateZones`, `bioMetrics_latest`. FIT files, GPS courses, golf and
+  profile files are never read or uploaded. Unit traps, verified on a real
+  export: activity calories are kJ, durations ms, distance/elevation cm, speed
+  cm/ms; `startTimeLocal` is wall-clock epoch ms; sleep times are GMT and get the
+  same day's offset from the daily summary. The newest daily summary is the
+  day the export was made, so only its resting HR and Body Battery are kept.
+- **Live sync, extended.** `sync/garmin_sync.py fetch` additionally returns
+  wellness fields from the same daily summary, the night's sleep (stages,
+  score), last-night HRV (one extra call per day), and one fitness snapshot for
+  the last day of the range (VO₂ max, race predictions, training status: three
+  calls per sync). All of them are optional — a failure is a warning, not a
+  failed sync; auth and 429 errors still propagate. The login rules, interval,
+  range and backoff of §6 "Garmin" are unchanged.
+- **Analysis is client-side** (`src/lib/insights.ts`, pure): the view loads the
+  whole history once and re-slices per range. Definitions: a night belongs to
+  the morning it ends; a day's training affects the next night and morning;
+  baselines are the 30 days before (the day excluded). Recovery = weighted mean
+  of sleep score (0.35), Body Battery at wake (0.35), resting HR vs norm
+  (0.3; 60 at the norm, -12 per bpm above) and HRV vs norm (0.25, when
+  present); needs at least 2 parts. Findings need at least 8 days per side, a
+  practical minimum difference and |Cohen's d| ≥ 0.3; strong ≥ 0.8,
+  moderate ≥ 0.5.
+
 ### Imports
 ```
 POST /api/import/weight-json { json: <the old weight-tracker export as an object> }
@@ -621,9 +679,19 @@ that the frontend can read.
   stay unscoped.
 - **Mobile-first**, and good on desktop: bottom tab bar on narrow screens,
   a sidebar/rail on wide screens. Same as the old app's shell, extended.
-- **Tabs:** Chat (default) · Dashboard · Calories · Foods · Settings. The
-  desktop side rail also lists History (between Foods and Settings); the mobile
-  bottom bar keeps five tabs and reaches History from the Dashboard and Calories views.
+- **Tabs:** Chat (default) · Dashboard · Calories · Insights · Foods · Settings.
+  The desktop side rail also lists History and Activity; the mobile bottom bar
+  holds these six and reaches History from the Dashboard and Calories views.
+- **Insights view** (`#/insights`): Garmin analysis over a 30D / 90D / 6M / 1Y /
+  All range — a recovery hero (score ring, its parts, four vitals vs the 30-day
+  norm with sparklines), findings, fitness (VO₂ max, race predictions, training
+  status strip), sleep (stages per night, or weekly averages past 120 days;
+  share of stages; by night of the week; sleep window), resting HR with a norm
+  band, Body Battery range, stress, training (weekly hours by sport, calendar,
+  HR zones, totals table), energy in vs out when meals are logged, personal
+  records, and the export import. Charts are hand-drawn SVG (`src/lib/viz/`):
+  hover and arrow-key reading (ARIA slider with value text), a legend for every
+  multi-series chart, palette validated for colour-vision deficiency.
 - **Login screen** when there is no token: email, password, and an "I have an
   invite code" toggle for registration.
 - **Chat view**: message list (user bubbles right / assistant left), an input

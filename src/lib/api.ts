@@ -5,6 +5,8 @@ import type {
   DailyActivity,
   GarminStatus,
   GarminSyncResult,
+  GarminImportResult,
+  InsightsPayload,
   ChatInput,
   ChatMessage,
   DashboardPayload,
@@ -26,6 +28,7 @@ import type {
   WeightInput,
   WeightPatch,
 } from './types'
+import type { GarminImportPayload } from './garminExport'
 
 declare global {
   interface Window {
@@ -280,5 +283,15 @@ export const api = {
 
   getDailyActivity(range: { from?: DayString; to?: DayString } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & { days: DailyActivity[] }> {
     return request(`/activity/daily${queryString(range)}`, {}, options)
+  },
+
+  /** Everything the Insights tab charts, for one date range. */
+  getInsights(range: { from?: DayString; to?: DayString } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & InsightsPayload> {
+    return request(`/insights${queryString(range)}`, {}, { timeoutMs: 30_000, ...options })
+  },
+
+  /** A Garmin Connect data export, already unpacked + normalised in the browser. */
+  importGarminExport(payload: GarminImportPayload, options?: ApiRequestOptions): Promise<SuccessResponse & { imported: GarminImportResult }> {
+    return request('/garmin/import', { method: 'POST', body: payload }, { timeoutMs: 120_000, ...options })
   },
 }

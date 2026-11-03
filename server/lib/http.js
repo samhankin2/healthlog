@@ -55,7 +55,7 @@ export function readJsonBody(req, { limit = 1024 * 1024 } = {}) {
     const onData = (chunk) => {
       size += chunk.length
       if (size > limit) {
-        fail(new HttpError(400, 'Request body too large (1 MB limit)'))
+        fail(new HttpError(400, `Request body too large (${Math.round(limit / 1048576)} MB limit)`))
         return
       }
       chunks.push(chunk)

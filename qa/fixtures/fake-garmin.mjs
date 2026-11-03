@@ -17,11 +17,16 @@ if (mode !== 'ok') {
 }
 const from = arg('--from'), to = arg('--to')
 const days = []
+const sleep = []
 for (let d = new Date(from + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= to; d.setUTCDate(d.getUTCDate() + 1)) {
-  days.push({ day: d.toISOString().slice(0, 10), steps: 9000, activeKcal: 600, totalKcal: 2600, bmrKcal: 2000, restingHr: 52, sleepSeconds: 27000, intensityMinutes: 40 })
+  const day = d.toISOString().slice(0, 10)
+  const prev = new Date(d.getTime() - 86_400_000).toISOString().slice(0, 10)
+  days.push({ day, steps: 9000, activeKcal: 600, totalKcal: 2600, bmrKcal: 2000, restingHr: 52, sleepSeconds: 27000, intensityMinutes: 40, stressAvg: 25, bbWake: 80, bbHigh: 85, bbLow: 20, hrvNight: 60 })
+  sleep.push({ day, startLocal: `${prev}T23:00:00`, endLocal: `${day}T06:30:00`, deepS: 5400, lightS: 16200, remS: 5400, awakeS: 600, score: 81 })
 }
+const metrics = [{ day: to, vo2max: 52, race5kS: 1300, trainingStatus: 'PRODUCTIVE' }]
 const activities = [
   { externalId: '111', name: 'Morning Run', type: 'running', startLocal: `${to} 07:15:00`, durationS: 1800, movingS: 1750, distanceM: 5000, kcal: 350, avgHr: 150, maxHr: 172, elevationGainM: 40, avgSpeedMps: 2.78, trainingEffect: 3.1 },
   { externalId: '112', name: 'Strength', type: 'strength_training', startLocal: `${from} 18:00:00`, durationS: 2700, movingS: null, distanceM: null, kcal: 250, avgHr: 110, maxHr: 140, elevationGainM: null, avgSpeedMps: null, trainingEffect: 2.0 },
 ]
-console.log(JSON.stringify({ ok: true, days, activities }))
+console.log(JSON.stringify({ ok: true, days, sleep, metrics, activities }))

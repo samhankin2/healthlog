@@ -795,6 +795,64 @@ async function run() {
     eq('garmin: days out of range is 400', r.status, 400)
   }
 
+  /* ---------- garmin insights: export import + GET /api/insights ---------- */
+  {
+    r = await api('GET', `/api/insights?from=${isoDay(-6)}&to=${TODAY}`, { token: authToken })
+    eq('insights: GET 200', r.status, 200)
+    eq('insights: live sync stored sleep nights', r.json?.sleep?.length, 7)
+    eq('insights: live sync stored wellness fields', [r.json?.days?.at(-1)?.stressAvg, r.json?.days?.at(-1)?.bbWake, r.json?.days?.at(-1)?.hrvNight], [25, 80, 60])
+    eq('insights: live sync stored a fitness snapshot', r.json?.metrics?.at(-1)?.vo2max, 52)
+    eq('insights: sleep fields', [r.json?.sleep?.[0]?.score, r.json?.sleep?.[0]?.deepS, r.json?.sleep?.[0]?.endLocal?.slice(11)], [81, 5400, '06:30:00'])
+
+    const OLD = '2025-03-10'
+    const exportPayload = {
+      range: { from: OLD, to: '2025-03-11' },
+      days: [
+        { day: OLD, steps: 12000, totalKcal: 2700, restingHr: 48, stressAvg: 30, bbWake: 90, spo2Avg: 96 },
+        { day: '2025-03-11', steps: 8000, restingHr: 49, stressAvg: -1, bbWake: 140 },
+      ],
+      sleep: [{ day: OLD, startLocal: '2025-03-09T22:45:00', endLocal: '2025-03-10T06:40:00', deepS: 4000, lightS: 15000, remS: 6000, awakeS: 300, score: 88 }],
+      metrics: [{ day: OLD, vo2max: 50, race5kS: 1400, raceMarathonS: 15000, trainingStatus: 'PRODUCTIVE', fitnessAge: 24.5 }],
+      activities: [{ externalId: 'exp-1', name: 'Old Run', type: 'running', startLocal: `${OLD}T07:00:00`, durationS: 1800, distanceM: 5000, kcal: 360, hrZonesS: [10, 100, 900, 700, 90, 0], trainingLoad: 80 }],
+      records: [{ type: 'Best 5km Run', value: 1290, achievedAt: `${OLD}T07:00:00`, externalId: 'exp-1' }],
+      meta: { hrZones: { z1: 111, z2: 136, max: 187, evil: 'x' }, thresholds: { lthr: 170 } },
+    }
+    r = await api('POST', '/api/garmin/import', { token: authToken, body: exportPayload })
+    eq('import: 200', r.status, 200)
+    eq('import: counts (day 2 has no valid wellness values)', r.json?.imported, { days: 2, wellness: 1, sleep: 1, metrics: 1, activities: 1, records: 1 })
+    r = await api('POST', '/api/garmin/import', { token: authToken, body: exportPayload })
+    eq('import: repeat import upserts (same counts)', r.json?.imported?.activities, 1)
+
+    r = await api('GET', `/api/insights?from=${OLD}&to=2025-03-11`, { token: authToken })
+    eq('insights: imported days', r.json?.days?.length, 2)
+    eq('insights: imported day fields', [r.json?.days?.[0]?.steps, r.json?.days?.[0]?.stressAvg, r.json?.days?.[0]?.spo2Avg], [12000, 30, 96])
+    eq('insights: out-of-range values dropped, not stored', [r.json?.days?.[1]?.stressAvg, r.json?.days?.[1]?.bbWake], [null, null])
+    eq('insights: imported night', r.json?.sleep?.[0]?.score, 88)
+    eq('insights: imported metrics', [r.json?.metrics?.[0]?.vo2max, r.json?.metrics?.[0]?.raceMarathonS, r.json?.metrics?.[0]?.trainingStatus], [50, 15000, 'PRODUCTIVE'])
+    eq('insights: activity once, zones parsed', [r.json?.activities?.length, r.json?.activities?.[0]?.hrZonesS?.[2]], [1, 900])
+    eq('insights: records', r.json?.records?.find((x) => x.type === 'Best 5km Run')?.value, 1290)
+    eq('insights: meta keeps numbers only', r.json?.meta?.hrZones, { z1: 111, z2: 136, max: 187 })
+    eq('insights: lastImport recorded', r.json?.meta?.lastImport?.range, { from: OLD, to: '2025-03-11' })
+    eq('insights: coverage starts at the import', r.json?.coverage?.first, OLD)
+
+    // A later partial row (all nulls but one field) must not blank what is stored.
+    r = await api('POST', '/api/garmin/import', { token: authToken, body: { days: [{ day: OLD, restingHr: 47 }] } })
+    r = await api('GET', `/api/insights?from=${OLD}&to=${OLD}`, { token: authToken })
+    eq('import: null fields keep stored values', [r.json?.days?.[0]?.restingHr, r.json?.days?.[0]?.steps, r.json?.days?.[0]?.stressAvg], [47, 12000, 30])
+
+    r = await api('GET', `/api/activity/daily?from=${OLD}&to=${OLD}`, { token: authToken })
+    eq('import: feeds the existing daily_activity table', r.json?.days?.[0]?.totalKcal, 2700)
+
+    r = await api('POST', '/api/garmin/import', { token: authToken, body: { nothing: true } })
+    eq('import: empty payload is 400', r.status, 400)
+    r = await api('POST', '/api/garmin/import', { token: authToken, body: { days: 'nope' } })
+    eq('import: non-list is 400', r.status, 400)
+    r = await api('GET', '/api/insights?from=2025-13-01', { token: authToken })
+    eq('insights: bad date is 400', r.status, 400)
+    r = await api('POST', '/api/garmin/import', { body: exportPayload })
+    eq('import: needs auth', r.status, 401)
+  }
+
   /* ---------- auth scoping + logout ---------- */
   r = await api('POST', '/api/auth/register', { body: { email: 'owner@example.com', password: 'whatever1' } })
   eq('register: duplicate email without an invite is 409', r.status, 409)
@@ -806,6 +864,8 @@ async function run() {
   const ownerToken = ownerLogin.json?.token
   r = await api('GET', '/api/meals', { token: ownerToken })
   eq('scoping: another user sees no meals', r.json?.meals?.length, 0)
+  r = await api('GET', '/api/insights?from=2000-01-01', { token: ownerToken })
+  eq('scoping: another user sees no Garmin insights', [r.json?.days?.length, r.json?.sleep?.length, r.json?.activities?.length, r.json?.records?.length], [0, 0, 0, 0])
   r = await api('GET', `/api/analyses/${agreeAnalysis?.id}`, { token: ownerToken })
   eq('scoping: another user cannot read an analysis', r.status, 404)
   r = await api('DELETE', `/api/weights/${firstEntryId}`, { token: ownerToken })

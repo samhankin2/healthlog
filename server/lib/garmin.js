@@ -22,11 +22,11 @@
  * GARMIN_BACKOFF_HOURS (default 6).
  */
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dataDir, withTx } from '../db.js'
+import { dataDir } from '../db.js'
+import { storeGarmin } from './garminStore.js'
 import { addDays, today } from './metrics.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -148,42 +148,8 @@ function runFetch(userId, from, to) {
   })
 }
 
-const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-const isDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
-
 function store(db, userId, result) {
-  const days = Array.isArray(result.days) ? result.days.filter((d) => isDay(d?.day)) : []
-  const acts = Array.isArray(result.activities) ? result.activities.filter((a) => a?.externalId && typeof a.startLocal === 'string') : []
-  const now = new Date().toISOString()
-  withTx(db, () => {
-    const upDay = db.prepare(`
-      INSERT INTO daily_activity (user_id, day, steps, active_kcal, total_kcal, bmr_kcal, resting_hr, sleep_seconds, intensity_minutes, source, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'garmin', ?)
-      ON CONFLICT (user_id, day) DO UPDATE SET
-        steps = excluded.steps, active_kcal = excluded.active_kcal, total_kcal = excluded.total_kcal,
-        bmr_kcal = excluded.bmr_kcal, resting_hr = excluded.resting_hr, sleep_seconds = excluded.sleep_seconds,
-        intensity_minutes = excluded.intensity_minutes, source = excluded.source, synced_at = excluded.synced_at`)
-    for (const d of days) {
-      // A day Garmin has nothing for (watch off) is skipped rather than stored as zeros.
-      if ([d.steps, d.activeKcal, d.totalKcal, d.restingHr, d.sleepSeconds].every((v) => n(v) === null)) continue
-      upDay.run(userId, d.day, n(d.steps), n(d.activeKcal), n(d.totalKcal), n(d.bmrKcal), n(d.restingHr), n(d.sleepSeconds), n(d.intensityMinutes), now)
-    }
-    const upAct = db.prepare(`
-      INSERT INTO activities (id, user_id, source, external_id, name, type, start_local, day, duration_s, moving_s, distance_m, kcal, avg_hr, max_hr, elevation_gain_m, avg_speed_mps, training_effect, synced_at)
-      VALUES (?, ?, 'garmin', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (user_id, source, external_id) DO UPDATE SET
-        name = excluded.name, type = excluded.type, start_local = excluded.start_local, day = excluded.day,
-        duration_s = excluded.duration_s, moving_s = excluded.moving_s, distance_m = excluded.distance_m, kcal = excluded.kcal,
-        avg_hr = excluded.avg_hr, max_hr = excluded.max_hr, elevation_gain_m = excluded.elevation_gain_m,
-        avg_speed_mps = excluded.avg_speed_mps, training_effect = excluded.training_effect, synced_at = excluded.synced_at`)
-    for (const a of acts) {
-      const start = a.startLocal.replace(' ', 'T').slice(0, 19)
-      upAct.run(randomUUID(), userId, String(a.externalId).slice(0, 64), a.name ? String(a.name).slice(0, 200) : null,
-        a.type ? String(a.type).slice(0, 64) : null, start, start.slice(0, 10), n(a.durationS), n(a.movingS), n(a.distanceM),
-        n(a.kcal), n(a.avgHr), n(a.maxHr), n(a.elevationGainM), n(a.avgSpeedMps), n(a.trainingEffect), now)
-    }
-  })
-  return { days: days.length, activities: acts.length }
+  return storeGarmin(db, userId, result)
 }
 
 /* ------------------------------------------------------------------ */
@@ -253,8 +219,8 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
     if (result.ok) {
       const counts = store(db, userId, result)
       saveState(db, userId, { status: 'connected', last_success_at: new Date().toISOString(), last_error: null, backoff_until: null })
-      console.log(`[garmin] ${trigger} sync ok for ${userId}: ${counts.days} days, ${counts.activities} activities (${from}..${to})`)
-      return { ok: true, from, to, ...counts }
+      console.log(`[garmin] ${trigger} sync ok for ${userId}: ${counts.days} days, ${counts.sleep} nights, ${counts.activities} activities (${from}..${to})`)
+      return { ok: true, from, to, days: counts.days, activities: counts.activities, sleep: counts.sleep, metrics: counts.metrics }
     }
     const kind = ['needs_login', 'rate_limited'].includes(result.error) ? result.error : 'error'
     const fields = { status: kind, last_error: String(result.message || kind).slice(0, 500) }

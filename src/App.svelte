@@ -19,13 +19,15 @@
   import History from './views/History.svelte'
   import Calories from './views/Calories.svelte'
   import ActivityView from './views/Activity.svelte'
+  import Insights from './views/Insights.svelte'
 
   // `railOnly` tabs appear in the desktop side rail but not the mobile bottom
-  // bar, which has no room for a sixth button.
+  // bar, which holds six buttons at most.
   const TABS: { id: Route; label: string; icon: IconName; railOnly?: boolean }[] = [
     { id: 'chat', label: 'Chat', icon: 'chat' },
     { id: 'dashboard', label: 'Dashboard', icon: 'activity' },
     { id: 'calories', label: 'Calories', icon: 'flame' },
+    { id: 'insights', label: 'Insights', icon: 'insights' },
     { id: 'foods', label: 'Foods', icon: 'food' },
     { id: 'history', label: 'History', icon: 'calendar', railOnly: true },
     { id: 'activity', label: 'Activity', icon: 'trending-up', railOnly: true },
@@ -40,6 +42,7 @@
     settings: 'Settings',
     history: 'History',
     activity: 'Activity',
+    insights: 'Insights',
   }
 
   let booting = $state(isAuthenticated())
@@ -196,6 +199,8 @@
           <History />
         {:else if current === 'activity'}
           <ActivityView />
+        {:else if current === 'insights'}
+          <Insights />
         {/if}
       </main>
     </div>

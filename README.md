@@ -32,6 +32,24 @@ Cloud VM, SQLite on disk, Caddy for TLS.
 - Save the meal, edit it, or ask again. Day totals and targets on the dashboard,
   a 7-day intake bar chart, saved foods, and CSV import with column mapping.
 
+**Garmin insights** (`#/insights`)
+- Import a **Garmin Connect data export** (Account → Export your data → the ZIP).
+  The ZIP is unpacked and normalised **in the browser**; only daily numbers go to
+  the server — no GPS tracks, no FIT files, no profile. Safe to repeat.
+- The scheduled Garmin sync keeps it current: steps and calories plus stress,
+  Body Battery, SpO₂, respiration, HRV, sleep stages and score, and a daily
+  VO₂ max / race-prediction / training-status snapshot.
+- A recovery score for the morning (sleep score, Body Battery at wake, resting HR
+  and HRV against your own 30-day norm), fitness (VO₂ max, race predictions,
+  training status, fitness age), sleep (stages, timing, consistency, weekday
+  pattern), resting HR with a norm band, Body Battery and stress, weekly training
+  by sport, a training calendar, HR zones, personal records, and energy in vs out
+  when meals are logged.
+- **Findings**: comparisons tested on your own days (bedtime vs sleep score,
+  hard days vs deep sleep and next-morning RHR, calm vs tense days vs Body Battery,
+  and more). One appears only with at least 8 days per side and a real effect
+  (|Cohen's d| ≥ 0.3).
+
 ---
 
 ## Repository layout
@@ -349,6 +367,8 @@ and uses only Node built-ins (`node:sqlite`, `node:http`, `node:crypto`). The
 - When you send a chat message, the message text, today's intake totals and your
   profile numbers (weight, goal, calorie target) are sent to the AI provider so it
   can estimate the meal. Nothing else, and only when you press send.
-- Weight entries, phases, meals and foods are never sent to the AI provider.
+- Weight entries, phases, meals, foods and Garmin data are never sent to the AI provider.
+- A Garmin export ZIP never leaves your browser whole: it is read locally and only
+  the daily summary rows are uploaded to your own server.
 
 Back up `/var/lib/healthlog/healthlog.db` — it is the only copy of your data.
