@@ -164,12 +164,15 @@ async function run() {
   eq('health: ok', r.json?.ok, true)
   eq('health: service', r.json?.service, 'healthlog')
   eq('health: commit null without COMMIT_FILE', r.json?.commit, null)
-  eq('health: users 0 on empty db', r.json?.users, 0)
-  eq('health: meals 0 on empty db', r.json?.meals, 0)
-  ok('health: users/meals are numbers', typeof r.json?.users === 'number' && typeof r.json?.meals === 'number')
+  ok('health: no usage numbers on the public endpoint', !('users' in (r.json ?? {})) && !('meals' in (r.json ?? {})))
 
-  r = await api('GET', '/api/health', { headers: { origin: 'https://example.github.io' } })
-  eq('cors: echoes Origin', r.headers.get('access-control-allow-origin'), 'https://example.github.io')
+  r = await api('GET', '/api/health', { headers: { origin: 'https://samhankin2.github.io' } })
+  eq('cors: echoes the Pages origin', r.headers.get('access-control-allow-origin'), 'https://samhankin2.github.io')
+  r = await api('GET', '/api/health', { headers: { origin: 'http://localhost:5173' } })
+  eq('cors: echoes a localhost dev origin', r.headers.get('access-control-allow-origin'), 'http://localhost:5173')
+  r = await api('OPTIONS', '/api/auth/me', { headers: { origin: 'https://evil.example' } })
+  eq('cors: unknown origin gets no allow-origin', r.headers.get('access-control-allow-origin'), null)
+  r = await api('GET', '/api/health', { headers: { origin: 'https://samhankin2.github.io' } })
   ok('cors: vary Origin', (r.headers.get('vary') || '').toLowerCase().includes('origin'))
   ok(
     'cors: allow-methods',
@@ -819,6 +822,31 @@ async function run() {
   r = await api('GET', '/api/nope', { token: ownerToken })
   eq('unknown api route: 404 json', r.status, 404)
   eq('unknown api route: ok false', r.json?.ok, false)
+
+  /* ---------- rate limits ---------- */
+  // X-Forwarded-For stands in for Caddy, so each block gets its own client IP.
+  const victim = { email: 'owner@example.com', password: 'wrong-guess' }
+  for (let i = 0; i < 10; i++) {
+    await api('POST', '/api/auth/login', { body: victim, headers: { 'x-forwarded-for': `10.9.0.${i}` } })
+  }
+  r = await api('POST', '/api/auth/login', { body: { ...victim, password: 'own3r-pass' }, headers: { 'x-forwarded-for': '10.9.1.1' } })
+  eq('rate limit: account paused after 10 failures, even with the right password', r.status, 429)
+  ok('rate limit: 429 carries Retry-After', Number(r.headers.get('retry-after')) > 0, r.headers.get('retry-after') ?? '')
+
+  let ipStatus = 0
+  for (let i = 0; i < 21; i++) {
+    r = await api('POST', '/api/auth/login', {
+      body: { email: `nobody${i}@example.com`, password: 'whatever1' },
+      headers: { 'x-forwarded-for': '10.9.2.2' },
+    })
+    ipStatus = r.status
+  }
+  eq('rate limit: one IP is cut off after 20 login attempts', ipStatus, 429)
+  r = await api('POST', '/api/auth/login', {
+    body: { email: 'nobody@example.com', password: 'whatever1' },
+    headers: { 'x-forwarded-for': '10.9.3.3' },
+  })
+  eq('rate limit: other IPs are unaffected', r.status, 401)
 }
 
 /* ------------------------------------------------------------------ */

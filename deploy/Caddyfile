@@ -24,6 +24,21 @@
 # HTTP-01 needs port 80 and TLS-ALPN-01 needs 443. Oracle's Ubuntu image
 # REJECTs both before the ufw chains - see deploy/bootstrap.sh, which inserts
 # the accepts and persists them.
+#
+# The admin API is OFF. Left on, it listens on 127.0.0.1:2019 with no auth, and
+# any local process (including another app sharing this box) could rewrite the
+# config and proxy healthlog traffic - passwords and tokens - through itself.
+# Consequence: `systemctl reload caddy` no longer works (it uses that API);
+# apply a changed Caddyfile with `systemctl restart caddy` instead. Certificates
+# are cached on disk, so one restart does not touch Let's Encrypt limits.
+#
+# SHARED BOX: the live /etc/caddy/Caddyfile also serves other sites (e.g.
+# arena.<ip>.sslip.io). bootstrap.sh will not overwrite a Caddyfile that
+# contains sites other than healthlog's - edit the live file by hand instead.
+
+{
+	admin off
+}
 
 healthlog.__PUBLIC_IP__.sslip.io {
 	encode zstd gzip
@@ -32,6 +47,9 @@ healthlog.__PUBLIC_IP__.sslip.io {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		# This host only ever answers JSON: nothing may render or frame it.
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		X-Frame-Options "DENY"
 		-Server
 	}
 

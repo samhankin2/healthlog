@@ -16,8 +16,11 @@ import {
 import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
 import { requireString } from '../lib/validate.js'
 import { profilePayload } from '../lib/shape.js'
+import { clientIp, loginByIp, loginFailsByAccount, registerByIp } from '../lib/ratelimit.js'
 export function registerAuthRoutes(router) {
   router.post('/api/auth/register', async ({ req, res }) => {
+    // Every attempt counts: it is how invite codes would be guessed.
+    registerByIp.consume(`ip:${clientIp(req)}`)
     const body = await readJsonBody(req)
     const { email, password } = validateCredentials(body.email, body.password)
     const db = getDb()
@@ -54,11 +57,20 @@ export function registerAuthRoutes(router) {
     const password = String(body.password ?? '')
     if (!email || !password) throw new HttpError(400, 'Email and password are required')
 
+    // Rate limits run before scrypt, so a flood cannot burn the CPU either.
+    const accountKey = `acct:${email.toLowerCase()}`
+    loginByIp.consume(`ip:${clientIp(req)}`)
+    loginFailsByAccount.check(accountKey)
+
     const db = getDb()
     const user = findUserByEmail(db, email)
     // Verify even when the user is missing-shaped, to keep the timing similar.
     const ok = user ? verifyPassword(password, user.password_hash) : verifyPassword(password, 'scrypt$00$00')
-    if (!user || !ok) throw new HttpError(401, 'Email or password is incorrect')
+    if (!user || !ok) {
+      loginFailsByAccount.hit(accountKey)
+      throw new HttpError(401, 'Email or password is incorrect')
+    }
+    loginFailsByAccount.reset(accountKey)
     if (user.disabled_at) throw new HttpError(401, 'This account is disabled')
 
     pruneSessions(db)

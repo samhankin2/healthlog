@@ -41,6 +41,21 @@ AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictSUIDSGID=true
 LockPersonality=true
+# Files the service creates (DB, WAL, backups, Garmin tokens) are owner-only.
+UMask=0077
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+# Deliberately NOT MemoryDenyWriteExecute: V8's JIT needs writable+executable
+# pages and Node will not start with it.
 
 [Install]
 WantedBy=multi-user.target

@@ -230,7 +230,18 @@ else
     TEMPLATE="$APP_DIR/deploy/Caddyfile"
   fi
 
-  if [ -f "$TEMPLATE" ]; then
+  # Shared box: if the live Caddyfile serves any other site, never overwrite it
+  # (that would silently take the other app offline). Edit it by hand instead.
+  OTHER_SITES=""
+  if [ -f /etc/caddy/Caddyfile ]; then
+    OTHER_SITES="$(grep -E '^[^#[:space:]{][^{]*\{[[:space:]]*$' /etc/caddy/Caddyfile | grep -v "^${APP_NAME}\." || true)"
+  fi
+
+  if [ -n "$OTHER_SITES" ]; then
+    echo "WARNING: /etc/caddy/Caddyfile also serves other sites - leaving it alone:" >&2
+    echo "$OTHER_SITES" >&2
+    echo "         Merge deploy/Caddyfile changes into it by hand, then: systemctl restart caddy" >&2
+  elif [ -f "$TEMPLATE" ]; then
     TMP_CADDY="$(mktemp)"
     sed "s/__PUBLIC_IP__/${PUBLIC_IP}/g" "$TEMPLATE" > "$TMP_CADDY"
     if cmp -s "$TMP_CADDY" /etc/caddy/Caddyfile 2>/dev/null; then
@@ -282,6 +293,15 @@ else
   mkdir -p /etc/iptables
   iptables-save > /etc/iptables/rules.v4 || true
   echo "wrote /etc/iptables/rules.v4 (install iptables-persistent to load it at boot)"
+fi
+
+# ---------------------------------------------------------------------------
+# 7b. Host hardening (sshd, fail2ban, unattended reboots, unused services)
+# ---------------------------------------------------------------------------
+if [ -f "$SCRIPT_DIR/harden.sh" ]; then
+  bash "$SCRIPT_DIR/harden.sh" || echo "WARNING: harden.sh failed - see above" >&2
+elif [ -f "$APP_DIR/deploy/harden.sh" ]; then
+  bash "$APP_DIR/deploy/harden.sh" || echo "WARNING: harden.sh failed - see above" >&2
 fi
 
 # ---------------------------------------------------------------------------

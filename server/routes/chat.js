@@ -15,6 +15,7 @@ import { isISODate, sumIntake, today } from '../lib/metrics.js'
 import { chatMessagePayload } from '../lib/shape.js'
 import { analysisPayload, runAnalysis, userTextFromPrompt } from '../ai.js'
 import { findMeal, insertMeal } from '../lib/meals.js'
+import { chatByUser } from '../lib/ratelimit.js'
 
 /** In-memory idempotency cache: `${userId}|${key}` → {at, body}. */
 const replyCache = new Map()
@@ -160,6 +161,9 @@ export function registerChatRoutes(router) {
         return
       }
     }
+
+    // Counted after the idempotency replay, so a retried request is free.
+    chatByUser.consume(`user:${user.id}`)
 
     const profileRow = db.prepare('SELECT * FROM profile WHERE user_id = ?').get(user.id)
     const latestWeight = db

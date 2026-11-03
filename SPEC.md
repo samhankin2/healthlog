@@ -29,7 +29,11 @@ Two products in one app:
 | Database | `/var/lib/healthlog/healthlog.db` | SQLite via `node:sqlite`. Never inside the repo. |
 
 - **Two origins** → the API must be HTTPS and must send CORS headers echoing
-  the `Origin` header. `OPTIONS` returns `204` without running the endpoint.
+  the `Origin` header **for allow-listed origins only**: the Pages origin
+  (`https://samhankin2.github.io`), any `http://localhost:*` /
+  `http://127.0.0.1:*` dev origin, the API's own origin, and anything in the
+  `CORS_ORIGINS` env var (comma-separated). Other origins get no
+  `Access-Control-Allow-Origin`. `OPTIONS` returns `204` without running the endpoint.
 - **Auth is a bearer token**, not a cookie — this avoids credentialed
   cross-origin requests entirely. The frontend stores the token in
   `localStorage` and sends `Authorization: Bearer <token>`.
@@ -267,18 +271,32 @@ success, last error, `backoff_until`). Exact DDL lives in `server/db.js`.
   looks up the session, checks `expires_at > now`, and loads the user.
   No session → `401 { ok: false, error: "Not signed in" }`.
 - Email uniqueness is case-insensitive (`COLLATE NOCASE`).
+- **Rate limits** (in-memory, `server/lib/ratelimit.js`; client IP is the last
+  `X-Forwarded-For` entry when the peer is loopback, i.e. Caddy). Over the limit
+  → `429 { ok:false, error }` with a `Retry-After` header (seconds).
+  - login: 20 attempts / 15 min per IP; 10 failed attempts / 15 min per
+    account, after which that account's sign-in is paused for the rest of the
+    window. Both checks run before scrypt.
+  - register: 10 attempts / hour per IP.
+  - `POST /api/chat`: 60 AI calls / hour per user (idempotent replays are free).
+  - every `/api/*` request except health: 600 / 5 min per IP. Direct loopback
+    calls without `X-Forwarded-For` are not counted.
+  - `RATE_LIMIT=off` disables them (local experiments only).
 
 ## 6. API contract
 
 Base path `/api`. Every response is JSON. Success responses carry
 `{ "ok": true, ... }`; failures carry `{ "ok": false, "error": "human message" }`.
 Status codes: `400` bad input, `401` not signed in / bad credentials,
-`404` not found, `409` conflict (duplicate email, used invite), `500` server error.
+`404` not found, `409` conflict (duplicate email, used invite), `429` rate
+limited (§5), `500` server error.
 
 ### Health
 ```
-GET /api/health -> 200 { ok:true, service:"healthlog", commit:"<sha>", users:<n>, meals:<n> }
+GET /api/health -> 200 { ok:true, service:"healthlog", commit:"<sha>" }
 ```
+Public and unauthenticated, so it carries no usage numbers — those are
+`node server/cli.js stats` (`scripts/hl stats`).
 
 ### Auth
 ```

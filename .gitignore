@@ -40,3 +40,6 @@ desktop.ini
 
 # NOTE: public/ is deliberately NOT ignored. api-config.js, manifest.webmanifest,
 # sw.js and the icons ship to GitHub Pages.
+
+# private ops notes - security hardening log + pre-launch TODO (box details, never published)
+SECURITY-HARDENING.md

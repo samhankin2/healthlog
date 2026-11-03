@@ -1,11 +1,13 @@
 /**
  * HealthLog API server — SPEC §2 / §6 / §9.
  *
- * Zero runtime dependencies. CORS echoes `Origin` (bearer-token auth, no
- * cookies), `OPTIONS` always answers 204 without running a handler.
+ * Zero runtime dependencies. CORS echoes `Origin` only for allow-listed
+ * origins (bearer-token auth, no cookies); `OPTIONS` always answers 204 without
+ * running a handler.
  *
  * Env: PORT (8787), HOST (127.0.0.1), DATA_DIR (./data), COMMIT_FILE
- *      (DATA_DIR/commit.txt), DIST_DIR (optional built frontend to serve).
+ *      (DATA_DIR/commit.txt), DIST_DIR (optional built frontend to serve),
+ *      CORS_ORIGINS (comma-separated extra allowed origins).
  */
 import http from 'node:http'
 import fs from 'node:fs'
@@ -27,6 +29,7 @@ import { registerImportRoutes } from './routes/imports.js'
 import { registerGarminRoutes } from './routes/garmin.js'
 import { scheduleBackups } from './lib/backup.js'
 import { scheduleGarminSync } from './lib/garmin.js'
+import { clientIp, requestsByIp } from './lib/ratelimit.js'
 
 const SERVICE = 'healthlog'
 const VERSION = '1.0'
@@ -55,6 +58,28 @@ export function buildRouter() {
 /* CORS                                                                */
 /* ------------------------------------------------------------------ */
 
+// The GitHub Pages frontend. Extra origins come from CORS_ORIGINS.
+const DEFAULT_ORIGINS = ['https://samhankin2.github.io']
+const ALLOWED_ORIGINS = new Set(
+  [...DEFAULT_ORIGINS, ...(process.env.CORS_ORIGINS || '').split(',')]
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean),
+)
+// Local development: Vite (:5173) and the API serving dist/ itself, any port.
+const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
+
+/** Is this browser origin allowed to call the API? */
+export function originAllowed(origin, host) {
+  if (!origin) return false
+  if (ALLOWED_ORIGINS.has(origin) || LOCAL_ORIGIN.test(origin)) return true
+  // Same origin (the API serving the built frontend via DIST_DIR).
+  try {
+    return Boolean(host) && new URL(origin).host === host
+  } catch {
+    return false
+  }
+}
+
 function corsHeaders(origin) {
   return {
     ...(origin ? { 'access-control-allow-origin': origin } : {}),
@@ -79,11 +104,11 @@ function readCommit() {
   }
 }
 
+// Public and unauthenticated, so it reports only what a deploy check needs.
+// Usage numbers live behind `node server/cli.js stats` (scripts/hl stats).
 function healthPayload() {
-  const db = getDb()
-  const users = db.prepare('SELECT COUNT(*) AS n FROM users').get()?.n ?? 0
-  const meals = db.prepare('SELECT COUNT(*) AS n FROM meals').get()?.n ?? 0
-  return { ok: true, service: SERVICE, commit: readCommit(), users: Number(users), meals: Number(meals) }
+  getDb().prepare('SELECT 1').get() // fail the check if the DB is unusable
+  return { ok: true, service: SERVICE, commit: readCommit() }
 }
 
 /* ------------------------------------------------------------------ */
@@ -188,7 +213,8 @@ export function createServer() {
 
   return http.createServer(async (req, res) => {
     logRequest(req, res)
-    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null
+    const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : null
+    const origin = originAllowed(rawOrigin, req.headers.host) ? rawOrigin : null
     const cors = corsHeaders(origin)
     for (const [k, v] of Object.entries(cors)) res.setHeader(k, v)
 
@@ -227,6 +253,12 @@ export function createServer() {
         return
       }
 
+      // Coarse per-IP flood guard. Direct loopback calls (the deploy health
+      // check, local tests) carry no X-Forwarded-For and are not counted.
+      if (req.headers['x-forwarded-for'] || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket?.remoteAddress)) {
+        requestsByIp.consume(`ip:${clientIp(req)}`)
+      }
+
       const match = router.match(req.method || 'GET', pathname)
       if (!match) {
         sendJson(res, 404, { ok: false, error: 'Not found' }, cors)
@@ -244,7 +276,8 @@ export function createServer() {
         console.error(`[healthlog] ${req.method} ${pathname} failed:`, err)
       }
       if (!res.headersSent) {
-        sendJson(res, status, { ok: false, error: message }, cors)
+        const extra = err?.retryAfter ? { ...cors, 'retry-after': String(err.retryAfter) } : cors
+        sendJson(res, status, { ok: false, error: message }, extra)
       } else {
         try {
           res.end()

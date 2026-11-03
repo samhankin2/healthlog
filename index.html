@@ -2,6 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      CSP: scripts only from this origin (no inline, no eval), API calls only to
+      this origin or the sslip.io API host. If the API ever moves to another
+      domain, add it to connect-src or every request will be blocked.
+      frame-ancestors cannot be set from a meta tag (GitHub Pages sets no headers).
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.sslip.io; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#f3f5f1" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#101613" media="(prefers-color-scheme: dark)" />

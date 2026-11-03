@@ -134,9 +134,7 @@ async function request<T>(
 
 export interface HealthPayload extends SuccessResponse {
   service: string
-  commit: string
-  users: number
-  meals: number
+  commit: string | null
 }
 
 export const api = {
