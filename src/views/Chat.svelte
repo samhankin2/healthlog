@@ -150,30 +150,34 @@
     if (!analysis.reconciled || mealActionBusy) return
     mealActionBusy = message.id
     try {
-      const total = analysis.reconciled.total
-      const items = analysis.reconciled.items
-      const input: MealInput = {
-        name: items.slice(0, 3).map((item) => item.name).join(', ') || prompt,
-        description: prompt,
-        day: today(),
-        eatenAt: new Date().toISOString(),
-        kcal: total.kcal,
-        proteinG: total.protein_g,
-        carbsG: total.carbs_g,
-        fatG: total.fat_g,
-        source: 'ai',
-        analysisId: analysis.id,
-        items: items.map((item) => ({
-          name: item.name,
-          quantity: item.quantity,
-          kcal: item.kcal,
-          proteinG: item.protein_g,
-          carbsG: item.carbs_g,
-          fatG: item.fat_g,
-        })),
+      const groups = analysis.reconciled.meals?.length
+        ? analysis.reconciled.meals
+        : [{ name: null, items: analysis.reconciled.items, total: analysis.reconciled.total }]
+      const baseTime = Date.now()
+      for (const [index, group] of groups.entries()) {
+        const input: MealInput = {
+          name: group.name || group.items.slice(0, 3).map((item) => item.name).join(', ') || prompt,
+          description: prompt,
+          day: today(),
+          eatenAt: new Date(baseTime + index).toISOString(),
+          kcal: group.total.kcal,
+          proteinG: group.total.protein_g,
+          carbsG: group.total.carbs_g,
+          fatG: group.total.fat_g,
+          source: 'ai',
+          analysisId: analysis.id,
+          items: group.items.map((item) => ({
+            name: item.name,
+            quantity: item.quantity,
+            kcal: item.kcal,
+            proteinG: item.protein_g,
+            carbsG: item.carbs_g,
+            fatG: item.fat_g,
+          })),
+        }
+        await actions.createMeal(input)
       }
-      await actions.createMeal(input)
-      showToast('Meal saved', 'success')
+      showToast(groups.length > 1 ? `${groups.length} meals saved` : 'Meal saved', 'success')
       void actions.loadDashboard().catch(() => {})
     } catch (cause: unknown) {
       showToast(cause instanceof Error ? cause.message : 'Could not save the meal.', 'error')

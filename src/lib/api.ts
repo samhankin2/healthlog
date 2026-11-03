@@ -196,11 +196,12 @@ export const api = {
     return request(`/phases/${encodeURIComponent(id)}`, { method: 'DELETE' }, options)
   },
 
-  getDashboard(days = 90, options?: ApiRequestOptions): Promise<SuccessResponse & DashboardPayload> {
-    return request(`/dashboard${queryString({ days })}`, {}, options)
+  /** `day` pins "today" to the client's calendar day; the server's clock is UTC. */
+  getDashboard(days: number, day: DayString, options?: ApiRequestOptions): Promise<SuccessResponse & DashboardPayload> {
+    return request(`/dashboard${queryString({ days, day })}`, {}, options)
   },
 
-  getMeals(filter: { day?: DayString; limit?: number } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & { meals: Meal[] }> {
+  getMeals(filter: { day?: DayString; limit?: number; offset?: number } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & { meals: Meal[] }> {
     return request(`/meals${queryString(filter)}`, {}, options)
   },
 
@@ -232,7 +233,7 @@ export const api = {
     return request(`/chat/messages${queryString(filter)}`, {}, options)
   },
 
-  sendChat(input: ChatInput, options?: ApiRequestOptions): Promise<SuccessResponse & { message: ChatMessage; meal: Meal | null; analysis: Analysis | null }> {
+  sendChat(input: ChatInput, options?: ApiRequestOptions): Promise<SuccessResponse & { message: ChatMessage; meal: Meal | null; meals?: Meal[]; analysis: Analysis | null }> {
     // Worst case on the server: both models time out at 45 s (they run in
     // parallel) and then the judge model adds up to 30 s. 100 s leaves headroom
     // without letting a hung request hang the composer forever.

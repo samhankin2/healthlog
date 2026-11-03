@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "api": "node --env-file=.env server/index.js",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "preview": "vite preview"

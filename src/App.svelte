@@ -17,22 +17,26 @@
   import Foods from './views/Foods.svelte'
   import Settings from './views/Settings.svelte'
   import History from './views/History.svelte'
+  import Calories from './views/Calories.svelte'
 
-  type TabRoute = Exclude<Route, 'history'>
-
-  const TABS: { id: TabRoute; label: string; icon: IconName }[] = [
+  // `railOnly` tabs appear in the desktop side rail but not the mobile bottom
+  // bar, which has no room for a sixth button.
+  const TABS: { id: Route; label: string; icon: IconName; railOnly?: boolean }[] = [
     { id: 'chat', label: 'Chat', icon: 'chat' },
     { id: 'dashboard', label: 'Dashboard', icon: 'activity' },
+    { id: 'calories', label: 'Calories', icon: 'flame' },
     { id: 'foods', label: 'Foods', icon: 'food' },
+    { id: 'history', label: 'History', icon: 'calendar', railOnly: true },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ]
 
   const TITLES: Record<Route, string> = {
     chat: 'Food journal',
     dashboard: 'Your trends',
+    calories: 'Calories',
     foods: 'Saved foods',
     settings: 'Settings',
-    history: 'Weight history',
+    history: 'History',
   }
 
   let booting = $state(isAuthenticated())
@@ -106,9 +110,9 @@
   </div>
 {/snippet}
 
-{#snippet navigation(className: string)}
+{#snippet navigation(className: string, rail: boolean)}
   <nav class="tab-bar {className}" aria-label="Main navigation">
-    {#each TABS as tab (tab.id)}
+    {#each TABS.filter((tab) => rail || !tab.railOnly) as tab (tab.id)}
       <button
         class="tab-button"
         type="button"
@@ -150,7 +154,7 @@
   <div class="health-app">
     <aside class="side-rail" aria-label="HealthLog sidebar">
       {@render brand()}
-      {@render navigation('rail-nav')}
+      {@render navigation('rail-nav', true)}
       <div class="rail-footer">
         <button
           class="account-chip"
@@ -179,6 +183,8 @@
           <Chat />
         {:else if current === 'dashboard'}
           <Dashboard />
+        {:else if current === 'calories'}
+          <Calories />
         {:else if current === 'foods'}
           <Foods />
         {:else if current === 'settings'}
@@ -188,7 +194,7 @@
         {/if}
       </main>
     </div>
-    {@render navigation('bottom-nav')}
+    {@render navigation('bottom-nav', false)}
   </div>
 {/if}
 

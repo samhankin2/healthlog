@@ -120,9 +120,17 @@ export interface ModelFailure {
   error: string
 }
 
+export interface AnalysisMeal {
+  name: string | null
+  items: AnalysisItem[]
+  total: AnalysisTotal
+}
+
 export interface ReconciledOutput {
   items: AnalysisItem[]
   total: AnalysisTotal
+  /** Separate meals found in one message. Absent on analyses saved before multi-meal support. */
+  meals?: AnalysisMeal[]
 }
 
 export interface Analysis {
@@ -191,7 +199,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'foods' | 'settings' | 'history'
+export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history'
 
 export interface ViewContext {
   state: AppState

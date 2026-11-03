@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import Icon from '../lib/components/Icon.svelte'
   import SegmentedControl from '../lib/components/SegmentedControl.svelte'
   import WeightJsonPanel from '../lib/panels/WeightJsonPanel.svelte'
@@ -37,9 +37,12 @@
   let signOutOpen = $state(false)
   let macroKcal = $derived(Math.round(((Number(protein) || 0) + (Number(carbs) || 0)) * 4 + (Number(fat) || 0) * 9))
 
-  function optionalNumber(value: string, min: number, max: number, integer = false): number | null | undefined {
-    if (!value.trim()) return null
-    const parsed = Number(value)
+  // `bind:value` on a type="number" input hands back a number (or null when
+  // empty) once the user edits it, not the string the state started as.
+  function optionalNumber(value: string | number | null, min: number, max: number, integer = false): number | null | undefined {
+    const text = String(value ?? '').trim()
+    if (!text) return null
+    const parsed = Number(text)
     if (!Number.isFinite(parsed) || parsed < min || parsed > max || (integer && !Number.isInteger(parsed))) return undefined
     return parsed
   }
@@ -57,7 +60,7 @@
     const fatG = optionalNumber(fat, 0, 2000, true)
     const numeric = [heightCm, startWeightKg, goalWeightKg, parsedAge, parsedKcal, proteinG, carbG, fatG]
     if (numeric.some((value) => value === undefined)) {
-      error = 'Check the highlighted ranges: height 80â€“260 cm, weight 20â€“400 kg, age 1â€“130, and whole-number nutrition values.'
+      error = 'Check the highlighted ranges: height 80–260 cm, weight 20–400 kg, age 1–130, and whole-number nutrition values.'
       return
     }
     const apiDays = chartRange === 0 ? 3650 : chartRange
@@ -158,7 +161,7 @@
         <div class="settings-grid nutrition-grid">
           <div class="field"><label class="field-label" for="settings-kcal">Calorie target</label><div class="field-with-unit"><input class="field-input" id="settings-kcal" type="number" inputmode="numeric" min="0" max="20000" step="1" placeholder="2000" bind:value={kcalTarget} disabled={saving} /><span class="field-unit">kcal</span></div><p class="field-hint">Your explicit target is kept when profile details change.</p></div>
           <fieldset class="macro-fieldset" disabled={saving}>
-            <legend>Daily macro targets <span>(â‰ˆ {macroKcal} kcal)</span></legend>
+            <legend>Daily macro targets <span>(≈ {macroKcal} kcal)</span></legend>
             <div class="macro-settings-grid">
               <div class="field"><label class="field-label" for="settings-protein">Protein</label><div class="field-with-unit"><input class="field-input" id="settings-protein" type="number" inputmode="numeric" min="0" max="2000" step="1" bind:value={protein} /><span class="field-unit">g</span></div></div>
               <div class="field"><label class="field-label" for="settings-carbs">Carbs</label><div class="field-with-unit"><input class="field-input" id="settings-carbs" type="number" inputmode="numeric" min="0" max="2000" step="1" bind:value={carbs} /><span class="field-unit">g</span></div></div>
@@ -175,7 +178,7 @@
     </section>
 
     {#if error}<p class="form-error" role="alert"><Icon name="alert" size={19} /> {error}</p>{/if}
-    <button class="button button--primary save-settings" type="submit" disabled={saving}>{#if saving}<span class="spinner" aria-hidden="true"></span> Savingâ€¦{:else}<Icon name="check" size={19} /> Save settings{/if}</button>
+    <button class="button button--primary save-settings" type="submit" disabled={saving}>{#if saving}<span class="spinner" aria-hidden="true"></span> Saving…{:else}<Icon name="check" size={19} /> Save settings{/if}</button>
   </form>
 
   <section class="metric-card settings-card" aria-labelledby="data-title">
@@ -184,7 +187,7 @@
       <p class="card-note">Restore the old weight-tracker format, or download your HealthLog profile, weigh-ins, phases, meals, foods, and recent chat messages as JSON.</p>
       <div class="data-actions">
         <button class="button button--secondary" type="button" onclick={() => { jsonOpen = true }}><Icon name="upload" size={18} /> Import old JSON</button>
-        <button class="button button--secondary" type="button" disabled={exporting} onclick={exportData}><Icon name="download" size={18} /> {exporting ? 'Preparing exportâ€¦' : 'Export account data'}</button>
+        <button class="button button--secondary" type="button" disabled={exporting} onclick={exportData}><Icon name="download" size={18} /> {exporting ? 'Preparing export…' : 'Export account data'}</button>
       </div>
     </div>
   </section>

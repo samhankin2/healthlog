@@ -6,20 +6,70 @@
   import WeightJsonPanel from '../lib/panels/WeightJsonPanel.svelte'
   import ConfirmPanel from '../lib/panels/ConfirmPanel.svelte'
   import { actions, app } from '../lib/state.svelte'
-  import { fmtMacro, fmtNumber, today } from '../lib/format'
+  import { fmtMacro, fmtNumber, fmtRelative, today } from '../lib/format'
+  import { groupEatenFoods, toFoodInput, type EatenFood } from '../lib/eatenFoods'
   import { showToast } from '../lib/toast.svelte'
-  import type { Food, FoodInput } from '../lib/types'
+  import type { Food, FoodInput, Meal } from '../lib/types'
 
   let addOpen = $state(false)
   let csvOpen = $state(false)
   let jsonOpen = $state(false)
   let deletingFood = $state<Food | null>(null)
 
+  const EATEN_PAGE = 12
+  let history = $state<Meal[]>([])
+  let historyLoading = $state(true)
+  let historyError = $state('')
+  let search = $state('')
+  let showAll = $state(false)
+  let savingKey = $state<string | null>(null)
+
+  let eaten = $derived(groupEatenFoods(history, app.foods))
+  let savedCount = $derived(eaten.filter((food) => food.saved).length)
+  let filtered = $derived.by(() => {
+    const term = search.trim().toLocaleLowerCase()
+    return term ? eaten.filter((food) => food.key.includes(term)) : eaten
+  })
+  let visible = $derived(showAll || search.trim() ? filtered : filtered.slice(0, EATEN_PAGE))
+
   onMount(() => {
     actions.loadFoods().catch((error: unknown) => {
       showToast(error instanceof Error ? error.message : 'Could not load saved foods.', 'error')
     })
+    void loadHistory()
   })
+
+  async function loadHistory(): Promise<void> {
+    historyLoading = true
+    historyError = ''
+    try {
+      history = await actions.loadMealHistory()
+    } catch (error) {
+      historyError = error instanceof Error ? error.message : 'Could not load the foods you have eaten.'
+    } finally {
+      historyLoading = false
+    }
+  }
+
+  async function saveEaten(food: EatenFood): Promise<void> {
+    if (savingKey) return
+    savingKey = food.key
+    try {
+      await actions.createFood(toFoodInput(food))
+      showToast(`${food.name} saved to your library.`, 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not save this food.', 'error')
+    } finally {
+      savingKey = null
+    }
+  }
+
+  function eatenDetail(food: EatenFood): string {
+    const times = food.count === 1 ? 'Eaten once' : `Eaten ${food.count}×`
+    const when = fmtRelative(food.lastDay)
+    const last = when === 'Today' || when === 'Yesterday' ? when.toLowerCase() : when
+    return `${times} · last ${last}${food.serving ? ` · ${food.serving}` : ''}`
+  }
 
   async function saveFood(input: FoodInput): Promise<void> {
     await actions.createFood(input)
@@ -36,6 +86,7 @@
 
   async function afterCsvImport(): Promise<void> {
     await Promise.all([
+      loadHistory(),
       actions.loadMeals(today()),
       actions.loadDashboard(Math.max(1, app.profile?.chartWindowDays ?? 90)),
     ])
@@ -54,7 +105,9 @@
   <div class="foods-layout">
     <section class="foods-library" aria-labelledby="saved-foods-title">
       <div class="section-heading"><h2 id="saved-foods-title">Saved foods</h2><span class="badge">{app.foods.length} saved</span></div>
-      {#if app.foods.length === 0}
+      {#if app.foods.length === 0 && (historyLoading || eaten.length > 0)}
+        <p class="library-hint">No saved foods yet. Save any of the foods you've eaten below to reuse it.</p>
+      {:else if app.foods.length === 0}
         <div class="empty-state">
           <span class="empty-state-icon"><Icon name="food" size={28} /></span>
           <h2 class="empty-state-title">Build your food library</h2>
@@ -82,6 +135,56 @@
           {/each}
         </ul>
       {/if}
+
+      <section class="eaten-foods" aria-labelledby="eaten-foods-title">
+        <div class="section-heading">
+          <div><h2 id="eaten-foods-title">Foods you've eaten</h2><p class="section-note">From the meals you've logged in Chat, by import, or in History.</p></div>
+          {#if eaten.length > 0}<span class="badge">{eaten.length} foods{savedCount > 0 ? ` · ${savedCount} saved` : ''}</span>{/if}
+        </div>
+        {#if historyLoading}
+          <div class="eaten-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading your meals…</div>
+        {:else if historyError}
+          <div class="form-error" role="alert"><Icon name="alert" size={19} /><span>{historyError}</span></div>
+          <button class="button button--secondary" type="button" onclick={loadHistory}>Try again</button>
+        {:else if eaten.length === 0}
+          <p class="library-hint">Nothing logged yet. Meals you save from Chat or import by CSV will appear here.</p>
+        {:else}
+          {#if eaten.length > EATEN_PAGE}
+            <input class="field-input eaten-search" type="search" placeholder="Search foods you've eaten" aria-label="Search foods you've eaten" bind:value={search} />
+          {/if}
+          {#if visible.length === 0}
+            <p class="library-hint">No eaten foods match “{search.trim()}”.</p>
+          {:else}
+            <ul class="eaten-list">
+              {#each visible as food (food.key)}
+                <li class="eaten-row">
+                  <div class="eaten-copy">
+                    <strong>{food.name}</strong>
+                    <span>{eatenDetail(food)}</span>
+                    <span class="eaten-macros">{fmtNumber(food.kcal, 0)} kcal · P {fmtNumber(food.proteinG, 0)} g · C {fmtNumber(food.carbsG, 0)} g · F {fmtNumber(food.fatG, 0)} g</span>
+                  </div>
+                  {#if food.saved}
+                    <span class="badge saved-badge"><Icon name="check" size={15} /> Saved</span>
+                  {:else}
+                    <button
+                      class="button button--secondary compact-button"
+                      type="button"
+                      aria-label={`Save ${food.name} to your food library`}
+                      disabled={savingKey !== null}
+                      onclick={() => saveEaten(food)}
+                    >{#if savingKey === food.key}<span class="spinner" aria-hidden="true"></span>{:else}<Icon name="plus" size={17} />{/if} Save</button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+            {#if !search.trim() && filtered.length > EATEN_PAGE}
+              <button class="button button--secondary show-more" type="button" onclick={() => { showAll = !showAll }}>
+                {showAll ? 'Show fewer' : `Show all ${filtered.length}`}
+              </button>
+            {/if}
+          {/if}
+        {/if}
+      </section>
     </section>
 
     <aside class="import-sidebar" aria-label="Import options">
@@ -116,6 +219,22 @@
   .foods-library, .import-sidebar { min-width: 0; }
   .section-heading { display: flex; margin-bottom: var(--space-4); align-items: center; justify-content: space-between; gap: var(--space-3); }
   .section-heading h2 { margin: 0; font-size: var(--text-xl); letter-spacing: -0.025em; }
+  .library-hint { margin: 0; padding: var(--space-4); border: 1px dashed var(--color-border-strong); border-radius: var(--radius-card); color: var(--color-text-muted); font-size: var(--text-sm); }
+  .eaten-foods { margin-top: var(--space-8); }
+  .eaten-foods .section-heading { align-items: flex-end; flex-wrap: wrap; }
+  .section-note { margin: var(--space-1) 0 0; color: var(--color-text-muted); font-size: var(--text-sm); }
+  .eaten-loading { display: flex; min-height: 8rem; align-items: center; justify-content: center; gap: var(--space-3); color: var(--color-text-muted); }
+  .eaten-search { margin-bottom: var(--space-3); }
+  .eaten-list { margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); box-shadow: var(--shadow-card); list-style: none; }
+  .eaten-row { display: flex; min-width: 0; min-height: 4.5rem; padding: var(--space-3) var(--space-4); align-items: center; gap: var(--space-3); border-top: 1px solid var(--color-border); }
+  .eaten-row:first-child { border-top: 0; }
+  .eaten-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+  .eaten-copy strong { overflow-wrap: anywhere; }
+  .eaten-copy span { color: var(--color-text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+  .eaten-copy .eaten-macros { color: var(--color-text); }
+  .compact-button { flex: 0 0 auto; min-height: var(--touch-target); padding: var(--space-2) var(--space-3); }
+  .saved-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); }
+  .show-more { margin-top: var(--space-3); }
   .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
   .food-list { display: flex; margin: 0; padding: 0; flex-direction: column; gap: var(--space-3); list-style: none; }
   .food-row { position: relative; display: grid; min-width: 0; padding: var(--space-4); grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); box-shadow: var(--shadow-card); }

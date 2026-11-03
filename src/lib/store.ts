@@ -10,6 +10,8 @@ import type {
   DayString,
   Food,
   FoodInput,
+  Intake,
+  IntakeHistoryDay,
   Meal,
   MealInput,
   MealPatch,
@@ -91,7 +93,7 @@ export const store = {
         api.getMeals({ day, limit: 50 }, options),
         api.getFoods(options),
         api.getChatMessages({ limit: 100 }, options),
-        api.getDashboard(days, options),
+        api.getDashboard(days, day, options),
       ])
       commit({
         user: session.user,
@@ -172,8 +174,33 @@ export const store = {
   },
 
   async loadDashboard(days = state.profile?.chartWindowDays ?? 90, options?: ApiRequestOptions): Promise<void> {
-    const response = await api.getDashboard(days, options)
+    const response = await api.getDashboard(days, today(), options)
     commit({ metrics: response.metrics })
+  },
+
+  /**
+   * Calorie history for the Calories view. Uses the dashboard endpoint but does
+   * not commit: the weight dashboard's `metrics` keep their own window.
+   */
+  async loadIntakeHistory(days: number, options?: ApiRequestOptions): Promise<{ intake: Intake; history: IntakeHistoryDay[] }> {
+    const response = await api.getDashboard(days, today(), options)
+    return { intake: response.metrics.intake, history: response.metrics.intakeHistory }
+  },
+
+  /**
+   * Meals across every day, newest first, for the Foods view's "eaten" list.
+   * Pages through the API (200 per request) and does not commit: `meals` in
+   * state is the Chat/History day, and this must not replace it.
+   */
+  async loadMealHistory(max = 1000, options?: ApiRequestOptions): Promise<Meal[]> {
+    const pageSize = 200
+    const all: Meal[] = []
+    while (all.length < max) {
+      const response = await api.getMeals({ limit: pageSize, offset: all.length }, options)
+      all.push(...response.meals)
+      if (response.meals.length < pageSize) break
+    }
+    return all.slice(0, max)
   },
 
   async loadMeals(day: DayString = today(), limit = 50, options?: ApiRequestOptions): Promise<Meal[]> {
@@ -227,7 +254,10 @@ export const store = {
     const messages = await api.getChatMessages({ limit: 100 }, options)
     commit({
       messages: messages.messages,
-      meals: response.meal ? upsertById(state.meals, response.meal) : state.meals,
+      meals: (response.meals?.length ? response.meals : response.meal ? [response.meal] : []).reduce(
+        (list, saved) => upsertById(list, saved),
+        state.meals,
+      ),
       analysis: response.analysis,
     })
     return response

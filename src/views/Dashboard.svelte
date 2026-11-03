@@ -151,7 +151,7 @@
       <section class="metric-card calorie-card">
         <div class="metric-card-header">
           <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="flame" size={20} /></span><h2 class="metric-card-title">Today’s calories</h2></div>
-          <span class="badge">{fmtKcal(metrics.intake.kcal)}</span>
+          <button class="button button--secondary compact-button" type="button" onclick={() => navigate('calories')}>Details <Icon name="chevron-right" size={17} /></button>
         </div>
         <div class="metric-card-content">
           <div class="calorie-summary">
@@ -188,7 +188,7 @@
 
     {#if metrics}
       <section class="metric-card intake-card">
-        <div class="metric-card-header"><div class="metric-card-heading"><span class="metric-card-icon"><Icon name="activity" size={20} /></span><h2 class="metric-card-title">Last 7 days</h2></div><span class="badge">Calories</span></div>
+        <div class="metric-card-header"><div class="metric-card-heading"><span class="metric-card-icon"><Icon name="activity" size={20} /></span><h2 class="metric-card-title">Last 7 days</h2></div><button class="button button--secondary compact-button" type="button" aria-label="Open calorie history" onclick={() => navigate('calories')}>History <Icon name="chevron-right" size={17} /></button></div>
         <div class="metric-card-content"><IntakeChart days={metrics.intakeHistory} target={metrics.intake.kcalTarget} /></div>
       </section>
     {/if}

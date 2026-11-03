@@ -24,6 +24,7 @@
 
   const modelA = $derived(isModelOutput(analysis.modelAOutput) ? analysis.modelAOutput : null)
   const modelB = $derived(isModelOutput(analysis.modelBOutput) ? analysis.modelBOutput : null)
+  const splitMeals = $derived(analysis.reconciled?.meals ?? [])
   const assumption = $derived(modelA?.notes || modelB?.notes || '')
   const agreement = $derived(`${analysis.agreement[0]?.toUpperCase() ?? ''}${analysis.agreement.slice(1)} agreement`)
   const agreementTone = $derived(
@@ -96,7 +97,25 @@
       </div>
     {/if}
 
-    {#if analysis.reconciled.items.length > 0}
+    {#if splitMeals.length > 1}
+      <section class="item-breakdown" aria-labelledby="breakdown-{analysis.id}">
+        <h3 id="breakdown-{analysis.id}">Logged as {splitMeals.length} separate meals</h3>
+        <ul>
+          {#each splitMeals as group, index (index)}
+            <li>
+              <div class="item-copy">
+                <strong>{group.name || group.items[0]?.name || `Meal ${index + 1}`}</strong>
+                <span>
+                  P {fmtNumber(group.total.protein_g, 0)} g · C {fmtNumber(group.total.carbs_g, 0)} g · F {fmtNumber(group.total.fat_g, 0)} g
+                  {#if group.items.length > 1} · {group.items.map((item) => item.name).join(', ')}{/if}
+                </span>
+              </div>
+              <span class="item-kcal">{fmtKcal(group.total.kcal)}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {:else if analysis.reconciled.items.length > 0}
       <section class="item-breakdown" aria-labelledby="breakdown-{analysis.id}">
         <h3 id="breakdown-{analysis.id}">Item breakdown</h3>
         <ul>
@@ -121,9 +140,11 @@
       {:else}
         <span class="badge" data-tone="success"><Icon name="check" size={15} /> Meal saved</span>
       {/if}
-      <Button variant="secondary" onclick={onedit} disabled={busy}>
-        <Icon name="edit" size={17} /> Edit
-      </Button>
+      {#if splitMeals.length <= 1}
+        <Button variant="secondary" onclick={onedit} disabled={busy}>
+          <Icon name="edit" size={17} /> Edit
+        </Button>
+      {/if}
       <Button variant="ghost" onclick={onaskagain} disabled={busy}>
         <Icon name="sparkles" size={17} /> Ask again
       </Button>
