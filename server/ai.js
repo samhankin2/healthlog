@@ -18,12 +18,13 @@ const DEFAULT_BASE_URL = 'https://opencode.ai/inference/go/openai/v1'
 const DEFAULT_MODEL_A = 'claude-haiku-5-5'
 const DEFAULT_MODEL_B = 'gemini-4-argon'
 const DEFAULT_JUDGE_MODEL = 'minimax-m3.1-flash'
-// Free-tier fallback: used when the primary call fails because the key is out
-// of credit / rate limited. Free models live on the non-"go" endpoint.
-const DEFAULT_FALLBACK_BASE_URL = 'https://opencode.ai/inference/openai/v1'
-const DEFAULT_FALLBACK_MODEL_A = 'deepseek-v4.1-flash-free'
-const DEFAULT_FALLBACK_MODEL_B = 'glm-5.3-flash-free'
-const DEFAULT_FALLBACK_JUDGE_MODEL = 'nemotron-3.5-lightning-free'
+// Fallback provider (Groq free tier, OpenAI-compatible): used when the primary
+// call fails because the key is out of credit / rate limited. Only active when
+// GROQ_API_KEY (or AI_FALLBACK_API_KEY) is set.
+const DEFAULT_FALLBACK_BASE_URL = 'https://api.groq.com/openai/v1'
+const DEFAULT_FALLBACK_MODEL_A = 'llama-3.3-70b-versatile'
+const DEFAULT_FALLBACK_MODEL_B = 'llama-3.1-8b-instant'
+const DEFAULT_FALLBACK_JUDGE_MODEL = 'llama-3.1-8b-instant'
 // 401/403 auth, 402 payment required, 429 rate/usage limit.
 const FALLBACK_STATUSES = new Set([401, 402, 403, 429])
 // Measured against the live OpenCode Go endpoint: a two-model nutrition
@@ -47,6 +48,7 @@ export function aiConfig() {
     modelB: process.env.AI_MODEL_B || DEFAULT_MODEL_B,
     judgeModel: process.env.AI_JUDGE_MODEL || DEFAULT_JUDGE_MODEL,
     mock: (process.env.AI_MOCK || '').trim().toLowerCase(),
+    fallbackApiKey: process.env.AI_FALLBACK_API_KEY || process.env.GROQ_API_KEY || '',
     fallback: !['0', 'off', 'false', 'no'].includes((process.env.AI_FALLBACK || '').trim().toLowerCase()),
     fallbackBaseUrl: (process.env.AI_FALLBACK_BASE_URL || DEFAULT_FALLBACK_BASE_URL).replace(/\/+$/, ''),
     fallbackModelA: process.env.AI_FALLBACK_MODEL_A || DEFAULT_FALLBACK_MODEL_A,
@@ -82,15 +84,28 @@ export function mockModeFor(text, cfg = aiConfig()) {
 
 function systemPrompt() {
   return [
-    'You estimate the calories and macronutrients of a meal described in plain language.',
+    'You estimate the calories and macronutrients of food described in plain language.',
+    'The message may describe SEVERAL separate things; return each one as its own entry in `meals`.',
     'Reply with STRICT JSON only — no prose, no markdown, no code fences.',
     'JSON shape:',
-    '{"items":[{"name":"2 eggs","quantity":"2 large","kcal":144,"protein_g":12.6,"carbs_g":1.2,"fat_g":9.6}],',
-    ' "total":{"kcal":320,"protein_g":18,"carbs_g":30,"fat_g":12},',
+    '{"meals":[{"name":"Avo toast with egg",',
+    '   "items":[{"name":"2 eggs","quantity":"2 large","kcal":144,"protein_g":12.6,"carbs_g":1.2,"fat_g":9.6}],',
+    '   "total":{"kcal":320,"protein_g":18,"carbs_g":30,"fat_g":12}}],',
     ' "confidence":0.7,',
     ' "notes":"assumed scrambled eggs, no oil"}',
+    'Splitting rules:',
+    '- Everything described as the ingredients, toppings or sides of ONE dish is a single meal',
+    '  (e.g. "avo on toast with 200g avocado, 90g bread, half a tomato, an egg" is one meal).',
+    '- A drink, shake, coffee, supplement, snack, or packaged/branded product mentioned alongside',
+    '  it is its OWN meal, even when the user says "with" or "and" (e.g. "... with a protein shake").',
+    '- Anything the user gives its own calories or macros for is its own meal.',
+    '- List meals in the order the user mentioned them. If it is all one dish, return one meal.',
+    'Stated numbers: when the user gives calories or protein/carbs/fat for something, use those',
+    'numbers EXACTLY for that meal and only estimate whichever macros they did not state, keeping the',
+    'meal consistent with the stated calories. For a meal with fully stated numbers use a single item.',
+    'When the user gives weights or quantities, use them; otherwise assume a typical portion.',
     'Rules: all numbers are non-negative; kcal are kilocalories; macros are grams;',
-    '`total` must be the sum of `items`; `confidence` is 0..1 and reflects how well the',
+    "each meal's `total` must be the sum of its `items`; `confidence` is 0..1 and reflects how well the",
     'description pins down portions; `notes` is one short sentence listing assumptions.',
   ].join('\n')
 }
@@ -134,14 +149,14 @@ export function buildPrompt({ message, intake = null, profile = null, day = null
  * One OpenAI-compatible chat completion call.
  * Never throws — returns `{ ok: true, content }` or `{ ok: false, error }`.
  */
-async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId, cfg, baseUrl = cfg.baseUrl }) {
+async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId, cfg, baseUrl = cfg.baseUrl, apiKey = cfg.apiKey }) {
   try {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${cfg.apiKey}`,
+        authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
-        'x-opencode-session': sessionHeader(sessionId),
+        ...(baseUrl.includes('opencode.ai') ? { 'x-opencode-session': sessionHeader(sessionId) } : {}),
         'user-agent': 'healthlog/1.0',
       },
       body: JSON.stringify({
@@ -181,10 +196,10 @@ async function chatCompletion({ model, messages, timeoutMs, jsonMode, sessionId,
 async function chatWithFallback({ model, fallbackModel, ...rest }) {
   const first = await chatCompletion({ model, ...rest })
   const cfg = rest.cfg
-  if (first.ok || !cfg.fallback || !FALLBACK_STATUSES.has(first.status) || !fallbackModel) {
+  if (first.ok || !cfg.fallback || !cfg.fallbackApiKey || !FALLBACK_STATUSES.has(first.status) || !fallbackModel) {
     return { ...first, model }
   }
-  const second = await chatCompletion({ model: fallbackModel, ...rest, baseUrl: cfg.fallbackBaseUrl })
+  const second = await chatCompletion({ model: fallbackModel, ...rest, baseUrl: cfg.fallbackBaseUrl, apiKey: cfg.fallbackApiKey })
   if (second.ok) return { ...second, model: fallbackModel, fellBack: true }
   return { ...second, model: fallbackModel, error: `${first.error}; fallback: ${second.error}` }
 }
@@ -281,17 +296,40 @@ export function normaliseModelOutput(content) {
   const parsed = parseLooseJson(content)
   if (!parsed || typeof parsed !== 'object') return { error: 'unparseable JSON' }
 
+  const rawConf = Number(parsed.confidence)
+  const confidence = Number.isFinite(rawConf) ? Math.max(0, Math.min(1, rawConf)) : 0.5
+  const notes = typeof parsed.notes === 'string' ? parsed.notes.trim().slice(0, 500) : ''
+
+  // New shape: several separate meals. `items` / `total` stay as the flattened
+  // overall so everything that only knows one meal keeps working.
+  if (Array.isArray(parsed.meals)) {
+    const meals = parsed.meals.map(normaliseMeal).filter(Boolean)
+    if (meals.length > 0) {
+      const items = meals.flatMap((m) => m.items)
+      return { items, total: sumItems(meals.map((m) => m.total)), meals, confidence, notes }
+    }
+  }
+
   const items = Array.isArray(parsed.items) ? parsed.items.map(normaliseItem).filter(Boolean) : []
   let total = normaliseTotal(parsed.total)
   if (!total && items.length > 0) total = sumItems(items)
   if (!total) return { error: 'no totals in model output' }
 
-  const rawConf = Number(parsed.confidence)
-  const confidence = Number.isFinite(rawConf) ? Math.max(0, Math.min(1, rawConf)) : 0.5
-  const notes = typeof parsed.notes === 'string' ? parsed.notes.trim().slice(0, 500) : ''
-
   return { items, total, confidence, notes }
 }
+
+/** One entry of `meals`: `{name, items, total}` or null when it carries no numbers. */
+function normaliseMeal(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const items = Array.isArray(raw.items) ? raw.items.map(normaliseItem).filter(Boolean) : []
+  const total = normaliseTotal(raw.total) ?? (items.length > 0 ? sumItems(items) : null)
+  if (!total) return null
+  const name = String(raw.name ?? '').trim().slice(0, 120)
+  return { name: name || null, items, total }
+}
+
+/** A model output's meals; legacy single-meal outputs count as one unnamed meal. */
+const mealsOf = (out) => (out.meals?.length ? out.meals : [{ name: null, items: out.items ?? [], total: out.total }])
 
 const isModelOutput = (o) => Boolean(o && !o.error && o.total)
 
@@ -340,7 +378,7 @@ export function agreementBucket(deltaPct) {
  *            deltaPct: number, agreement: 'high'|'medium'|'low',
  *            single: boolean, reason: string}}
  */
-export function reconcile(a, b) {
+function reconcileUnit(a, b) {
   const validA = isModelOutput(a)
   const validB = isModelOutput(b)
 
@@ -410,6 +448,55 @@ export function reconcile(a, b) {
     agreement,
     single: false,
     reason: 'confidence',
+  }
+}
+
+/**
+ * Reconcile two model outputs that may each describe several separate meals.
+ *
+ * The overall agreement / delta / chosen come from `reconcileUnit` on the
+ * flattened totals. `reconciled.meals` is then built per meal:
+ *  - both models gave the same number of meals → each pair is reconciled
+ *    independently (pairs are matched by position, hence "in the order the user
+ *    mentioned them" in the prompt) and the overall total is their sum;
+ *  - they split differently → use the model with more meals (tie: the one the
+ *    overall reconcile picked), since splitting is what the user asked for;
+ *  - one model valid → that model's meals.
+ * `reconciled.items` is always the flattened item list of those meals.
+ */
+export function reconcile(a, b) {
+  const base = reconcileUnit(a, b)
+  if (!base.reconciled) return base
+
+  const validA = isModelOutput(a)
+  const validB = isModelOutput(b)
+  const ma = validA ? mealsOf(a) : []
+  const mb = validB ? mealsOf(b) : []
+
+  let meals
+  let chosen = base.chosen
+  if (validA && validB && ma.length === mb.length) {
+    meals = ma.map((mealA, i) => {
+      const r = reconcileUnit(
+        { items: mealA.items, total: mealA.total, confidence: a.confidence },
+        { items: mb[i].items, total: mb[i].total, confidence: b.confidence },
+      ).reconciled
+      return { name: mealA.name || mb[i].name, items: r.items, total: r.total }
+    })
+  } else {
+    const useB = validA && validB ? mb.length > ma.length || (mb.length === ma.length && base.chosen === 'B') : validB
+    meals = (useB ? mb : ma).map((m) => ({ name: m.name, items: m.items, total: m.total }))
+    if (meals.length > 1 || ma.length !== mb.length) chosen = useB ? 'B' : 'A'
+  }
+
+  if (meals.length === 1) {
+    // Single meal: keep exactly what the unit reconcile produced.
+    return { ...base, reconciled: { ...base.reconciled, meals: [{ name: meals[0].name, ...base.reconciled }] } }
+  }
+  return {
+    ...base,
+    chosen,
+    reconciled: { items: meals.flatMap((m) => m.items), total: sumItems(meals.map((m) => m.total)), meals },
   }
 }
 

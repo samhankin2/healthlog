@@ -418,17 +418,31 @@ AI_MODEL_B=gemini-4-argon
 AI_JUDGE_MODEL=minimax-m3.1-flash
 ```
 
-**Free-model fallback.** If a call fails with HTTP 401/402/403/429 (key out of
-usage, rate limited, rejected), it is retried once with a free model on
-`AI_FALLBACK_BASE_URL` (default `https://opencode.ai/inference/openai/v1`, no
-`/go`), using the same key:
+**Fallback provider (Groq free tier).** If a call fails with HTTP 401/402/403/429
+(key out of usage, rate limited, rejected), it is retried once on
+`AI_FALLBACK_BASE_URL` (default `https://api.groq.com/openai/v1`) with its own
+key. The fallback is only active when `GROQ_API_KEY` (or `AI_FALLBACK_API_KEY`)
+is set. (OpenCode's own free models were tried and rejected: they return
+`FreeUsageLimitError` to API callers.)
 ```
-AI_FALLBACK_MODEL_A=deepseek-v4.1-flash-free
-AI_FALLBACK_MODEL_B=glm-5.3-flash-free
-AI_FALLBACK_JUDGE_MODEL=nemotron-3.5-lightning-free
+GROQ_API_KEY=                          # secret; env file only
+AI_FALLBACK_MODEL_A=llama-3.3-70b-versatile
+AI_FALLBACK_MODEL_B=llama-3.1-8b-instant
+AI_FALLBACK_JUDGE_MODEL=llama-3.1-8b-instant
 AI_FALLBACK=off        # optional: disable the fallback
 ```
 The model actually used is what gets stored as `model_a` / `model_b`.
+
+**Several meals in one message.** Models return `{ meals: [{ name, items, total }],
+confidence, notes }`. Ingredients of one dish stay in one meal; drinks, shakes,
+coffees, supplements, packaged products and anything with its own stated numbers
+are separate meals. Numbers the user states are used exactly. Output without
+`meals` (the older `{items,total}` shape) counts as one meal. Reconciliation: if
+both models return the same number of meals they are paired by position and
+reconciled one by one; if they split differently the model with more meals wins.
+`reconciled` carries `meals` plus a flattened `items` / summed `total`.
+`POST /api/chat` saves one `meals` row per group (all sharing the `analysis_id`)
+and returns `meal` (the first) and `meals` (all).
 
 **Flow for one chat message:**
 
@@ -515,7 +529,9 @@ that the frontend can read.
   stay unscoped.
 - **Mobile-first**, and good on desktop: bottom tab bar on narrow screens,
   a sidebar/rail on wide screens. Same as the old app's shell, extended.
-- **Tabs:** Chat (default) · Dashboard · Foods · Settings.
+- **Tabs:** Chat (default) · Dashboard · Calories · Foods · Settings. The
+  desktop side rail also lists History (between Foods and Settings); the mobile
+  bottom bar keeps five tabs and reaches History from the Dashboard and Calories views.
 - **Login screen** when there is no token: email, password, and an "I have an
   invite code" toggle for registration.
 - **Chat view**: message list (user bubbles right / assistant left), an input
@@ -529,7 +545,21 @@ that the frontend can read.
 - **Dashboard view**: the old trend chart (7-day average + raw dots + phase
   shading) plus a calorie panel for today (kcal vs target, macro split) and a
   7-day intake bar chart.
-- **Foods view**: saved foods list, add-food sheet, and the CSV import flow
+- **Calories view** (`#/calories`): today in detail (kcal vs target with a
+  progress bar, each macro against its gram target, today's meals) and the
+  intake history over a 7d / 30d / 90d / 1y / All range — a swipeable carousel
+  of four charts (Calories, Protein, Carbs, Fat), each with daily bars, a 7-day
+  average line and that metric's target, then summary tiles (average intake, vs target,
+  days logged, days on target within ±10 %, net balance vs target with a
+  ≈ kg estimate at 7700 kcal/kg, macro averages, weekday vs weekend,
+  highest / lowest day, logging streak) and a Monday-start week-by-week table.
+  Averages use completed days with meals only: zero-filled gaps and today (in
+  progress) are excluded. Data comes from `GET /api/dashboard?days=N`'s
+  `intake` / `intakeHistory`; no extra endpoint.
+- **Foods view**: saved foods list, a "Foods you've eaten" list (logged meals
+  grouped by name, most-eaten first, each with one-tap **Save** to the library
+  using its most recent nutrition; built from `GET /api/meals` without `day`),
+  add-food sheet, and the CSV import flow
   (paste or file → preview table with column mapping → commit).
 - **Settings view**: profile (height, start/goal weight, sex, age, activity,
   macro split), chart range, **import old weight JSON**, export data, sign out.

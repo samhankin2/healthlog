@@ -43,6 +43,12 @@ function cacheSet(key, body) {
 function assistantText(result) {
   const reconciled = result.reconciled
   if (!reconciled) {
+    if (/HTTP (402|429)/.test(result.error || '')) {
+      return (
+        'The AI usage limit has been reached for now (limits reset every few hours). ' +
+        'Nothing was saved — please try again later.'
+      )
+    }
     const why = result.error ? ` (${result.error})` : ''
     return (
       `Sorry — I couldn't estimate that one${why}. Nothing was saved. ` +
@@ -50,11 +56,21 @@ function assistantText(result) {
     )
   }
   const t = reconciled.total
+  const groups = reconciled.meals ?? []
   const lines = [
-    `About ${Math.round(t.kcal)} kcal — protein ${Math.round(t.protein_g)} g, carbs ${Math.round(t.carbs_g)} g, fat ${Math.round(t.fat_g)} g.`,
-    '',
-    result.comparison,
+    groups.length > 1
+      ? `Logged ${groups.length} separate meals, about ${Math.round(t.kcal)} kcal in total:`
+      : `About ${Math.round(t.kcal)} kcal — protein ${Math.round(t.protein_g)} g, carbs ${Math.round(t.carbs_g)} g, fat ${Math.round(t.fat_g)} g.`,
   ]
+  if (groups.length > 1) {
+    for (const g of groups) {
+      const gt = g.total
+      lines.push(
+        `• ${g.name || mealName(g, '')} — ${Math.round(gt.kcal)} kcal (protein ${Math.round(gt.protein_g)} g, carbs ${Math.round(gt.carbs_g)} g, fat ${Math.round(gt.fat_g)} g)`,
+      )
+    }
+  }
+  lines.push('', result.comparison)
 
   const notes =
     result.chosen === 'B'
@@ -64,7 +80,7 @@ function assistantText(result) {
         : null
   if (notes) lines.push('', `Assumption: ${notes}`)
 
-  if (Array.isArray(reconciled.items) && reconciled.items.length > 0) {
+  if ((reconciled.meals ?? []).length <= 1 && Array.isArray(reconciled.items) && reconciled.items.length > 0) {
     const parts = reconciled.items.map((i) => `${i.name}${i.quantity ? ` (${i.quantity})` : ''} — ${Math.round(i.kcal)} kcal`)
     lines.push('', `Breakdown: ${parts.join('; ')}.`)
   }
@@ -169,38 +185,48 @@ export function registerChatRoutes(router) {
     const analysisId = randomUUID()
     let mealId = null
     let meal = null
+    let meals = []
 
     if (result.reconciled && save) {
-      const t = result.reconciled.total
       const confidence =
         result.chosen === 'B'
           ? result.outputB?.confidence
           : result.chosen === 'A' || result.chosen === 'mean'
             ? result.outputA?.confidence
             : null
-      mealId = insertMeal(db, user.id, {
-        eatenAt: new Date().toISOString(),
-        day,
-        name: mealName(result.reconciled, message),
-        description: message,
-        kcal: t.kcal,
-        proteinG: t.protein_g,
-        carbsG: t.carbs_g,
-        fatG: t.fat_g,
-        source: 'ai',
-        confidence: typeof confidence === 'number' ? confidence : null,
-        analysisId,
-        items: (result.reconciled.items ?? []).map((i) => ({
-          name: i.name,
-          quantity: i.quantity,
-          kcal: i.kcal,
-          proteinG: i.protein_g,
-          carbsG: i.carbs_g,
-          fatG: i.fat_g,
-        })),
+      // One saved meal per group the models identified (a dish, a shake, a coffee…).
+      const groups = result.reconciled.meals?.length
+        ? result.reconciled.meals
+        : [{ name: null, items: result.reconciled.items ?? [], total: result.reconciled.total }]
+      const baseTime = Date.now()
+      const mealIds = groups.map((g, index) => {
+        const id = insertMeal(db, user.id, {
+          eatenAt: new Date(baseTime + index).toISOString(),
+          day,
+          name: g.name || mealName(g, message),
+          description: groups.length > 1 ? `${g.name || mealName(g, message)} — from: ${message}` : message,
+          kcal: g.total.kcal,
+          proteinG: g.total.protein_g,
+          carbsG: g.total.carbs_g,
+          fatG: g.total.fat_g,
+          source: 'ai',
+          confidence: typeof confidence === 'number' ? confidence : null,
+          analysisId,
+          items: (g.items ?? []).map((i) => ({
+            name: i.name,
+            quantity: i.quantity,
+            kcal: i.kcal,
+            proteinG: i.protein_g,
+            carbsG: i.carbs_g,
+            fatG: i.fat_g,
+          })),
+        })
+        db.prepare('UPDATE meals SET analysis_id = ? WHERE id = ?').run(analysisId, id)
+        return id
       })
-      db.prepare("UPDATE meals SET analysis_id = ? WHERE id = ?").run(analysisId, mealId)
-      meal = findMeal(db, user.id, mealId)
+      mealId = mealIds[0]
+      meals = mealIds.map((id) => findMeal(db, user.id, id))
+      meal = meals[0]
     }
 
     db.prepare(
@@ -233,6 +259,7 @@ export function registerChatRoutes(router) {
       ok: true,
       message: chatMessagePayload(assistantRow),
       meal,
+      meals,
       analysis: analysisPayload(analysisRow),
     }
     if (cacheKey) cacheSet(cacheKey, payload)
