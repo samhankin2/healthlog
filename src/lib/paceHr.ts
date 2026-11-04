@@ -191,7 +191,8 @@ export interface Lab {
   earlierFit: Fit | null
   recentFit: Fit | null
   table: { hr: number; earlier: number | null; recent: number | null; changePct: number | null }[]
-  trend: { day: string; adj: number; roll: number | null; run: Run }[]
+  /** seg: the stretch of running between breaks; inBreak: a lone run during a lay-off (no trend). */
+  trend: { day: string; adj: number; roll: number | null; rollN: number; run: Run; seg: number; inBreak: boolean }[]
   nowPace: number | null
   bestPace: { value: number; day: string } | null
   startPace: number | null
@@ -223,16 +224,23 @@ export function buildLab(acts: InsightActivity[], f: Filters, ref: number, from:
     const r = recentFit ? paceAt(recentFit, hr) : null
     return { hr, earlier: e, recent: r, changePct: isNum(e) && isNum(r) ? ((e - r) / e) * 100 : null }
   })
+  // Breaks split the trend: the rolling median never mixes runs from either
+  // side of a break, and lone runs inside a break get no trend value.
+  const allBreaks = breaks(runs, ref, slope)
   const trend = inWindow.map((r) => {
     const adj = adjustedPace(r, ref, slope)
-    return { day: r.day, adj, roll: null as number | null, run: r }
+    const inBreak = allBreaks.some((b) => r.day > b.from && r.day < b.to)
+    const seg = allBreaks.filter((b) => b.to <= r.day).length
+    return { day: r.day, adj, roll: null as number | null, rollN: 0, run: r, seg, inBreak }
   })
   for (const t of trend) {
-    const win = trend.filter((x) => x.day <= t.day && dayNum(t.day) - dayNum(x.day) < 28).map((x) => x.adj)
-    t.roll = win.length >= 2 ? (median(win) as number) : null
+    if (t.inBreak) continue
+    const win = trend.filter((x) => !x.inBreak && x.seg === t.seg && x.day <= t.day && dayNum(t.day) - dayNum(x.day) < 28).map((x) => x.adj)
+    t.rollN = win.length
+    t.roll = win.length >= 3 ? (median(win) as number) : null
   }
   const rolls = trend.filter((t) => isNum(t.roll))
-  const best = rolls.reduce<{ value: number; day: string } | null>((b, t) => (!b || (t.roll as number) < b.value ? { value: t.roll as number, day: t.day } : b), null)
+  const best = rolls.filter((t) => t.rollN >= 4).reduce<{ value: number; day: string } | null>((b, t) => (!b || (t.roll as number) < b.value ? { value: t.roll as number, day: t.day } : b), null)
   const efficiency = inWindow.map((r) => ({ day: r.day, value: (r.speed * 60) / r.hr }))
   const third = Math.max(1, Math.floor(efficiency.length / 3))
   const typicalSpeed = median(inWindow.map((r) => r.speed))
@@ -245,7 +253,7 @@ export function buildLab(acts: InsightActivity[], f: Filters, ref: number, from:
     effNow: efficiency.length ? mean(efficiency.slice(-third).map((e) => e.value)) : null,
     effStart: efficiency.length ? mean(efficiency.slice(0, third).map((e) => e.value)) : null,
     blocks: blocks(runs, g),
-    breaks: breaks(runs, ref, slope).filter((b) => b.to >= from && b.from <= to),
+    breaks: allBreaks.filter((b) => b.to >= from && b.from <= to),
     // d(pace)/d(hr) at your typical speed: how many s/km one extra bpm buys.
     slopeSecPerBpm: isNum(typicalSpeed) ? (1000 / (typicalSpeed * typicalSpeed)) * slope : null,
   }

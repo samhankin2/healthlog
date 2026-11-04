@@ -93,8 +93,8 @@
         <h3>Pace at {ref} bpm, every run</h3>
         <p>Drag across the chart to zoom. Grey bands are breaks of 2+ weeks.</p>
       </div>
-      <PaceTrend label="Pace normalised to {ref} bpm" points={lab.trend.map((t) => ({ day: t.day, adj: t.adj, roll: t.roll, detail: detail(t.run) }))} breaks={lab.breaks} {from} {to} onzoom={(a, b) => zoomTo(a, b)} />
-      <ul class="legend"><li><i class="dot"></i>One run, adjusted to {ref} bpm</li><li><i class="line"></i>4-week rolling median</li></ul>
+      <PaceTrend label="Pace normalised to {ref} bpm" points={lab.trend.map((t) => ({ day: t.day, adj: t.adj, roll: t.roll, detail: detail(t.run), seg: t.seg, inBreak: t.inBreak }))} breaks={lab.breaks} {from} {to} onzoom={(a, b) => zoomTo(a, b)} />
+      <ul class="legend"><li><i class="dot"></i>One run, adjusted to {ref} bpm</li><li><i class="line"></i>4-week rolling median (restarts after each break)</li><li><i class="dot lone"></i>One-off run during a break</li></ul>
     </article>
 
     <div class="grid">
@@ -184,6 +184,7 @@
   .legend li { display: inline-flex; align-items: center; gap: 6px; }
   .legend .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--viz-run); }
   .legend .dot.grey { background: var(--color-border-strong); }
+  .legend .dot.lone { background: var(--color-surface); box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--viz-run) 55%, var(--color-surface)); }
   .legend .line { width: 14px; height: 3px; border-radius: 2px; background: var(--viz-run); }
   .legend .vline { width: 1px; height: 12px; background: var(--color-text-muted); }
   .callout { margin: var(--space-3) 0 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-surface-sunken); font-size: var(--text-sm); }

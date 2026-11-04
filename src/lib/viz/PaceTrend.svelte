@@ -6,7 +6,7 @@
   import { dayNum, fmtRace, isNum, numDay } from '../insights'
   import { dayTicks, fmtDayLong, linear, linePath } from './scale'
 
-  interface P { day: string; adj: number; roll: number | null; detail: string }
+  interface P { day: string; adj: number; roll: number | null; detail: string; seg: number; inBreak: boolean }
   interface Props {
     label: string
     points: P[]
@@ -45,7 +45,18 @@
     return numDay(Math.round(d0 + ((Math.max(r0, Math.min(r1, px)) - r0) / (r1 - r0 || 1)) * (d1 - d0)))
   }
   const ticks = $derived(dayTicks(from, to, width < 420 ? 4 : 6))
-  const line = $derived(linePath(shown.map((p) => ({ x: xOf(p.day), y: isNum(p.roll) ? y.scale(p.roll) : null }))))
+  /** The line lifts its pen at every break: one path per stretch of running. */
+  const line = $derived.by(() => {
+    const pts: { x: number; y: number | null }[] = []
+    let seg: number | null = null
+    for (const p of shown) {
+      if (p.inBreak) continue
+      if (seg !== null && p.seg !== seg) pts.push({ x: 0, y: null })
+      seg = p.seg
+      pts.push({ x: xOf(p.day), y: isNum(p.roll) ? y.scale(p.roll) : null })
+    }
+    return linePath(pts)
+  })
   const breakBands = $derived(breaks.filter((b) => b.to >= from && b.from <= to).map((b) => ({ ...b, x0: xOf(b.from < from ? from : b.from), x1: xOf(b.to > to ? to : b.to) })))
 
   function localX(e: PointerEvent): number {
@@ -107,7 +118,7 @@
         <text class="tick" x={xOf(t.day)} y={height - 6} text-anchor="middle">{t.label}</text>
       {/each}
       {#each shown as p, i (p.day + i)}
-        <circle cx={xOf(p.day)} cy={y.scale(p.adj)} r={hover === i ? 5.5 : 3.5} class="dot" class:on={hover === i} />
+        <circle cx={xOf(p.day)} cy={y.scale(p.adj)} r={hover === i ? 5.5 : 3.5} class="dot" class:on={hover === i} class:lone={p.inBreak} />
       {/each}
       <path d={line} fill="none" stroke="var(--viz-run)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
       {#if drag}
@@ -118,7 +129,7 @@
       <div class="tip" style:left="{Math.min(Math.max(xOf(hp.day), 100), width - 100)}px" role="status">
         <span class="tip-day">{fmtDayLong(hp.day)}</span>
         <span><b>{fmtRace(hp.adj)} /km</b> at the reference HR</span>
-        {#if isNum(hp.roll)}<span class="muted">4-week median {fmtRace(hp.roll)} /km</span>{/if}
+        {#if hp.inBreak}<span class="muted">One-off run during a break — not part of the trend</span>{:else if isNum(hp.roll)}<span class="muted">4-week median {fmtRace(hp.roll)} /km</span>{/if}
         <span class="muted">{hp.detail}</span>
       </div>
     {/if}
@@ -136,6 +147,7 @@
   .brk-label { fill: var(--color-text-muted); font-size: 0.6875rem; font-weight: var(--weight-semibold); }
   .dot { fill: color-mix(in oklab, var(--viz-run) 40%, var(--color-surface)); stroke: var(--color-surface); stroke-width: 1.5; }
   .dot.on { fill: var(--viz-run); }
+  .dot.lone { fill: var(--color-surface); stroke: color-mix(in oklab, var(--viz-run) 55%, var(--color-surface)); stroke-width: 1.5; }
   .brush { fill: color-mix(in oklab, var(--color-accent) 18%, transparent); stroke: var(--color-accent); stroke-width: 1; }
   .tip {
     position: absolute; top: 0; z-index: 2; display: flex; padding: var(--space-2) var(--space-3);
