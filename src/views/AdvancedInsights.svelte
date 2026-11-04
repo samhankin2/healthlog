@@ -6,6 +6,7 @@
   import MultiLine from '../lib/viz/MultiLine.svelte'
   import BalanceBars from '../lib/viz/BalanceBars.svelte'
   import SegmentBar from '../lib/viz/SegmentBar.svelte'
+  import PaceHrLab from '../lib/panels/PaceHrLab.svelte'
   import { api } from '../lib/api'
   import { today } from '../lib/format'
   import { navigate } from '../lib/state.svelte'
@@ -83,13 +84,6 @@
   ] : [])
   const hourMax = $derived(sport ? Math.max(1, ...sport.hours24) : 1)
   const wdMax = $derived(sport ? Math.max(1, ...sport.weekdays) : 1)
-  /** s/km lost per extra bpm at your typical pace (from the regression). */
-  const secPerBpm = $derived.by(() => {
-    const e = adv?.efficiency
-    if (!e || !isNum(e.hrPerSpeed) || !isNum(e.lastAvg)) return null
-    const v = 1000 / e.lastAvg // m/s
-    return (1000 / (v * v)) * (1 / e.hrPerSpeed)
-  })
 
   const race = $derived(adv ? adv.races[raceKey] : null)
   const rhythmScale = (vals: (number | null)[], v: number | null): number => {
@@ -205,26 +199,10 @@
       {/if}
     </section>
 
-    <!-- ===================== 3. PACE VS HEART RATE ===================== -->
+    <!-- ===================== 3. PACE VS HEART RATE (lab) ===================== -->
     <section class="block" id="adv-efficiency" aria-labelledby="h-eff">
-      <div class="block-head"><h2 id="h-eff">Running: pace at the same heart rate</h2><p>Each run’s pace adjusted to one heart rate, so easy and hard days compare fairly. The cleanest read of your aerobic engine.</p></div>
-      {#if adv.efficiency}
-        {@const e = adv.efficiency}
-        <div class="stats">
-          <div class="stat"><span>Now at {e.refHr} bpm</span><b>{fmtEff(e.lastAvg, e.unit)}</b><em>last third of runs</em></div>
-          <div class="stat"><span>At the start</span><b>{fmtEff(e.firstAvg, e.unit)}</b><em>first third of runs</em></div>
-          <div class="stat"><span>Change</span><b class:good={(e.changePct ?? 0) > 0}>{isNum(e.changePct) ? `${fmtSigned(e.changePct, 1)}%` : '—'}</b><em>{(e.changePct ?? 0) >= 0 ? 'faster' : 'slower'} for the same effort</em></div>
-          <div class="stat"><span>Cost of 1 bpm</span><b>{isNum(secPerBpm) ? `${secPerBpm.toFixed(1)} s` : '—'}</b><em>per km, at your pace</em></div>
-        </div>
-        <article class="card pad">
-          <div class="chart-head"><h3>Pace at {e.refHr} bpm, per run</h3><ul class="legend"><li><i class="dot" style:background="color-mix(in oklab, var(--viz-run) 45%, var(--color-surface))"></i>Run (adjusted)</li><li><i style:background="var(--viz-run)"></i>30-day trend</li></ul></div>
-          <MultiLine label="Running pace normalised to {e.refHr} bpm" {from} to={todayDay} height={220} format={(v) => fmtRace(v)} tickStep={15}
-            series={[{ label: 'Run', points: e.runs.map((r) => ({ day: r.day, value: r.adjPaceS })), color: 'color-mix(in oklab, var(--viz-run) 45%, var(--color-surface))', dots: true }, { label: '30-day trend', points: e.trend, color: 'var(--viz-run)' }]} />
-          <p class="note">Lower is faster. Based on {e.runs.length} runs over 1.5 km with heart-rate data.</p>
-        </article>
-      {:else}
-        <p class="empty">Needs at least 6 runs with heart rate and distance in this range.</p>
-      {/if}
+      <div class="block-head"><h2 id="h-eff">Running: pace vs heart rate lab</h2><p>Every run re-expressed at one heart rate, so easy and hard days compare fairly — the cleanest read of your aerobic engine. Zoom into any stretch, pick any heart rate, and see what breaks cost you.</p></div>
+      <PaceHrLab acts={data.activities} today={todayDay} lthr={data.meta.hrZones?.lthr ?? data.meta.thresholds?.lthr ?? null} />
     </section>
 
     <!-- ===================== 1 + 2. TRAINING LOAD ===================== -->

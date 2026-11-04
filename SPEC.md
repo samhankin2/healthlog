@@ -701,7 +701,13 @@ that the frontend can read.
   own; the Insights tab stays highlighted), built by `src/lib/advanced.ts` from
   the same payload: sport deep dive (volume per month, speed at a fixed heart
   rate, zones, weekday / hour pattern, bests), running pace normalised to one
-  heart rate by a regression across all runs, acute:chronic load (7-day sum vs
+  heart rate by a regression across all runs — the **pace vs heart rate lab**
+  (`src/lib/paceHr.ts`): reference HR 130-170 or LTHR, distance and treadmill
+  filters, drag-to-zoom trend with breaks (14+ days, lone runs folded in)
+  shaded, auto training blocks (split at 21+ days) as zoom presets, a
+  pace-vs-HR scatter with fitted lines for the earlier and later half of the
+  window, pace at every 5 bpm, and per break the 45-day pre-break pace, first
+  runs back and time to return within 1% — acute:chronic load (7-day sum vs
   28-day sum / 4, sweet spot 0.8-1.3), fitness / fatigue / form (42- and 7-day
   EWMA of activity load), race-prediction progression with the training done in
   its biggest 28-day moves, recovery after the top-quartile sessions, sleep need
