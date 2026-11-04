@@ -284,7 +284,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights'
+export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced'
 
 export interface ViewContext {
   state: AppState

@@ -697,7 +697,18 @@ that the frontend can read.
   shades by quantile of your own active days, so a short session never looks
   like a rest day. Personal records show only the ones picked in a sheet
   (default 5K, 10K, half marathon; saved in `localStorage`). Findings sit after
-  Training. Charts are hand-drawn SVG (`src/lib/viz/`):
+  Training. A card links to **Advanced insights** (`#/advanced`, no tab of its
+  own; the Insights tab stays highlighted), built by `src/lib/advanced.ts` from
+  the same payload: sport deep dive (volume per month, speed at a fixed heart
+  rate, zones, weekday / hour pattern, bests), running pace normalised to one
+  heart rate by a regression across all runs, acute:chronic load (7-day sum vs
+  28-day sum / 4, sweet spot 0.8-1.3), fitness / fatigue / form (42- and 7-day
+  EWMA of activity load), race-prediction progression with the training done in
+  its biggest 28-day moves, recovery after the top-quartile sessions, sleep need
+  (median night when waking with Body Battery 90+), 14-night debt, bedtime
+  consistency, sleep-score correlations, weekday heatmap, month table, calories
+  vs the scale, protein, stress fingerprint, 90-day baselines and record days.
+  Charts are hand-drawn SVG (`src/lib/viz/`):
   hover and arrow-key reading (ARIA slider with value text), a legend for every
   multi-series chart, palette validated for colour-vision deficiency.
 - **Login screen** when there is no token: email, password, and an "I have an

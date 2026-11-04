@@ -20,6 +20,7 @@
   import Calories from './views/Calories.svelte'
   import ActivityView from './views/Activity.svelte'
   import Insights from './views/Insights.svelte'
+  import AdvancedInsights from './views/AdvancedInsights.svelte'
 
   // `railOnly` tabs appear in the desktop side rail but not the mobile bottom
   // bar, which holds six buttons at most.
@@ -43,6 +44,7 @@
     history: 'History',
     activity: 'Activity',
     insights: 'Insights',
+    advanced: 'Advanced insights',
   }
 
   let booting = $state(isAuthenticated())
@@ -123,7 +125,7 @@
         class="tab-button"
         type="button"
         data-tab={tab.id}
-        aria-current={current === tab.id ? 'page' : 'false'}
+        aria-current={current === tab.id || (tab.id === 'insights' && current === 'advanced') ? 'page' : 'false'}
         onclick={() => navigate(tab.id)}
       >
         <Icon name={tab.icon} size={22} />
@@ -201,6 +203,8 @@
           <ActivityView />
         {:else if current === 'insights'}
           <Insights />
+        {:else if current === 'advanced'}
+          <AdvancedInsights />
         {/if}
       </main>
     </div>

@@ -27,11 +27,13 @@
     endLabel?: boolean
     /** Smallest tick step (1 for whole-number metrics). */
     minStep?: number
+    /** Cap the y-axis (e.g. 100 for a score). */
+    max?: number
   }
 
   let {
     label, from, to, line, raw = [], band = [], bandLabel = 'Your normal range', lineLabel = '7-day average', rawLabel = 'Day',
-    format = (v: number) => `${Math.round(v)}`, height = 200, include = [], step = false, color = 'var(--viz-line)', endLabel = true, minStep = 0,
+    format = (v: number) => `${Math.round(v)}`, height = 200, include = [], step = false, color = 'var(--viz-line)', endLabel = true, minStep = 0, max,
   }: Props = $props()
 
   let width = $state(0)
@@ -52,7 +54,9 @@
     const pad = (hi - lo) * 0.08 || 1
     // Never invent negative space for a metric that cannot go below zero.
     const floor = lo >= 0 ? 0 : -Infinity
-    const { ticks, domain } = niceTicks(Math.max(floor, lo - pad), hi + pad, height < 160 ? 3 : 4, minStep)
+    const nt = niceTicks(Math.max(floor, lo - pad), hi + pad, height < 160 ? 3 : 4, minStep)
+    const domain: [number, number] = max !== undefined ? [nt.domain[0], Math.min(nt.domain[1], max)] : nt.domain
+    const ticks = nt.ticks.filter((t) => t <= domain[1])
     return { ticks, scale: linear(domain, [height - PAD.bottom, PAD.top]) }
   })
   const x = $derived(linear([d0, d1], [PAD.left, Math.max(PAD.left + 1, width - PAD.right)]))

@@ -14,6 +14,7 @@
   import Sheet from '../lib/components/Sheet.svelte'
   import { api } from '../lib/api'
   import { today } from '../lib/format'
+  import { navigate } from '../lib/state.svelte'
   import { activityTypeLabel } from '../lib/activity'
   import { fmtDayLong, fmtDayShort } from '../lib/viz/scale'
   import {
@@ -287,6 +288,12 @@
         {/each}
       </div>
     </section>
+
+    <button class="adv-link" type="button" onclick={() => navigate('advanced')}>
+      <span class="adv-icon" aria-hidden="true"><Icon name="sparkles" size={20} /></span>
+      <span class="adv-copy"><b>Advanced insights</b><span>Sport deep dives, pace at the same heart rate, training load, sleep debt, recovery and 10 more analyses.</span></span>
+      <Icon name="chevron-right" size={20} />
+    </button>
 
     <!-- ============================ FITNESS ============================ -->
     {#if ins.fitness.vo2.length || ins.fitness.races.some((r) => r.now)}
@@ -660,6 +667,13 @@
   .delta { font-size: var(--text-xs); color: var(--color-text-muted); }
   .delta.good { color: var(--color-up); }
   .delta.bad { color: var(--color-down); }
+
+  .adv-link { display: flex; width: 100%; padding: var(--space-4) var(--space-5); align-items: center; gap: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: linear-gradient(120deg, var(--color-accent-soft), var(--color-surface) 65%); box-shadow: var(--shadow-card); color: var(--color-text); text-align: left; transition: border-color var(--duration-fast); }
+  .adv-link:hover { border-color: var(--color-accent); }
+  .adv-icon { display: grid; width: 2.75rem; height: 2.75rem; flex: 0 0 auto; place-items: center; border-radius: var(--radius-md); background: var(--color-accent); color: var(--color-on-accent); }
+  .adv-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+  .adv-copy b { font-size: var(--text-lg); letter-spacing: -0.01em; }
+  .adv-copy span { color: var(--color-text-muted); font-size: var(--text-sm); }
 
   /* blocks */
   .block { display: flex; flex-direction: column; gap: var(--space-4); }

@@ -14,8 +14,10 @@
     upLabel?: string
     downLabel?: string
     height?: number
+    upColor?: string
+    downColor?: string
   }
-  let { label, bars, from, to, keyDays = 1, format = (v: number) => `${Math.round(v)}`, upLabel = 'Surplus', downLabel = 'Deficit', height = 200 }: Props = $props()
+  let { label, bars, from, to, keyDays = 1, format = (v: number) => `${Math.round(v)}`, upLabel = 'Surplus', downLabel = 'Deficit', height = 200, upColor = 'var(--viz-surplus)', downColor = 'var(--viz-deficit)' }: Props = $props()
 
   let width = $state(0)
   let hover = $state<number | null>(null)
@@ -82,14 +84,14 @@
         <text class="tick" x={x(dayNum(t.day))} y={height - 6} text-anchor="middle">{t.label}</text>
       {/each}
       {#each bars as b, i (b.key)}
-        <path d={path(x(dayNum(b.key)) + (slot - barW) / 2, b.value)} fill={b.value >= 0 ? 'var(--viz-surplus)' : 'var(--viz-deficit)'} opacity={hover === null || hover === i ? 1 : 0.4} />
+        <path d={path(x(dayNum(b.key)) + (slot - barW) / 2, b.value)} fill={b.value >= 0 ? upColor : downColor} opacity={hover === null || hover === i ? 1 : 0.4} />
       {/each}
       <line class="zero" x1={PAD.left} x2={width - PAD.right} y1={zero} y2={zero} />
     </svg>
     {#if hb}
       <div class="tip" style:left="{Math.min(Math.max(x(dayNum(hb.key)) + slot / 2, 80), width - 80)}px" role="status">
         <span class="tip-day">{hb.heading}</span>
-        <span><i style:background={hb.value >= 0 ? 'var(--viz-surplus)' : 'var(--viz-deficit)'}></i>{hb.value >= 0 ? upLabel : downLabel} <b>{format(Math.abs(hb.value))}</b></span>
+        <span><i style:background={hb.value >= 0 ? upColor : downColor}></i>{hb.value >= 0 ? upLabel : downLabel} <b>{format(Math.abs(hb.value))}</b></span>
         {#if hb.detail}<span class="muted">{hb.detail}</span>{/if}
       </div>
     {/if}
