@@ -179,6 +179,42 @@ export function breaks(runs: Run[], ref: number, slope: number, minDays = 14): B
 }
 
 /* ------------------------------------------------------------------ */
+/* trend smoother                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Local linear regression (LOESS-style) at day `x`: a weighted straight-line
+ * fit through the runs within ±h days, tricube weights so nearby runs count
+ * most. Unlike a trailing average it does not lag, so a real recent
+ * improvement shows at the end of the line. The window widens (up to ±49
+ * days) until it holds 5 runs, and the result is clamped to the range of the
+ * runs it used so a lopsided edge cannot extrapolate wildly.
+ */
+export function smoothAt(pool: { d: number; v: number }[], x: number): { value: number | null; n: number } {
+  let h = 21
+  let near = pool.filter((p) => Math.abs(p.d - x) < h)
+  while (near.length < 5 && h < 49) {
+    h += 7
+    near = pool.filter((p) => Math.abs(p.d - x) < h)
+  }
+  if (near.length < 3) return { value: null, n: near.length }
+  const w = near.map((p) => (1 - (Math.abs(p.d - x) / h) ** 3) ** 3)
+  const sw = w.reduce((a, b) => a + b, 0)
+  const mx = near.reduce((a, p, i) => a + w[i] * p.d, 0) / sw
+  const my = near.reduce((a, p, i) => a + w[i] * p.v, 0) / sw
+  let sxy = 0
+  let sxx = 0
+  near.forEach((p, i) => {
+    sxy += w[i] * (p.d - mx) * (p.v - my)
+    sxx += w[i] * (p.d - mx) ** 2
+  })
+  const value = sxx > 0 ? my + (sxy / sxx) * (x - mx) : my
+  const lo = Math.min(...near.map((p) => p.v))
+  const hi = Math.max(...near.map((p) => p.v))
+  return { value: Math.max(lo, Math.min(hi, value)), n: near.length }
+}
+
+/* ------------------------------------------------------------------ */
 /* window analysis (the zoomed range)                                  */
 /* ------------------------------------------------------------------ */
 
@@ -235,9 +271,10 @@ export function buildLab(acts: InsightActivity[], f: Filters, ref: number, from:
   })
   for (const t of trend) {
     if (t.inBreak) continue
-    const win = trend.filter((x) => !x.inBreak && x.seg === t.seg && x.day <= t.day && dayNum(t.day) - dayNum(x.day) < 28).map((x) => x.adj)
-    t.rollN = win.length
-    t.roll = win.length >= 3 ? (median(win) as number) : null
+    const pool = trend.filter((x) => !x.inBreak && x.seg === t.seg).map((x) => ({ d: dayNum(x.day), v: x.adj }))
+    const s = smoothAt(pool, dayNum(t.day))
+    t.rollN = s.n
+    t.roll = s.value
   }
   const rolls = trend.filter((t) => isNum(t.roll))
   const best = rolls.filter((t) => t.rollN >= 4).reduce<{ value: number; day: string } | null>((b, t) => (!b || (t.roll as number) < b.value ? { value: t.roll as number, day: t.day } : b), null)

@@ -82,8 +82,8 @@
     <p class="empty">Not enough runs with heart rate in this window ({lab.inWindow.length}). Widen the zoom or lower the distance filter.</p>
   {:else}
     <div class="stats">
-      <div class="stat"><span>Pace at {ref} bpm {zoom ? 'at end of window' : 'now'}</span><b>{fmtRace(lab.nowPace)}<small> /km</small></b><em>median of the last 4 weeks of the window</em></div>
-      <div class="stat"><span>Best 4-week stretch</span><b>{lab.bestPace ? fmtRace(lab.bestPace.value) : '—'}<small> /km</small></b><em>{lab.bestPace ? `around ${fmtDate(lab.bestPace.day)}` : ''}</em></div>
+      <div class="stat"><span>Pace at {ref} bpm {zoom ? 'at end of window' : 'now'}</span><b>{fmtRace(lab.nowPace)}<small> /km</small></b><em>the trend line at your latest run</em></div>
+      <div class="stat"><span>Best point on the trend</span><b>{lab.bestPace ? fmtRace(lab.bestPace.value) : '—'}<small> /km</small></b><em>{lab.bestPace ? `around ${fmtDate(lab.bestPace.day)}` : ''}</em></div>
       <div class="stat"><span>Across this window</span><b class:good={(lab.startPace ?? 0) > (lab.nowPace ?? 0)} class:bad={(lab.startPace ?? 0) < (lab.nowPace ?? 0)}>{isNum(lab.startPace) && isNum(lab.nowPace) ? `${lab.nowPace < lab.startPace ? '−' : '+'}${fmtRace(Math.abs(lab.nowPace - lab.startPace))}` : '—'}<small> /km</small></b><em>{isNum(lab.startPace) ? `from ${fmtRace(lab.startPace)}` : ''}</em></div>
       <div class="stat"><span>Metres per heartbeat</span><b>{isNum(lab.effNow) ? lab.effNow.toFixed(2) : '—'}</b><em>{isNum(lab.effStart) && isNum(lab.effNow) ? `${fmtSigned(((lab.effNow - lab.effStart) / lab.effStart) * 100, 1)}% vs start · 1 bpm ≈ ${lab.slopeSecPerBpm?.toFixed(1)} s/km` : ''}</em></div>
     </div>
@@ -94,7 +94,7 @@
         <p>Drag across the chart to zoom. Grey bands are breaks of 2+ weeks.</p>
       </div>
       <PaceTrend label="Pace normalised to {ref} bpm" points={lab.trend.map((t) => ({ day: t.day, adj: t.adj, roll: t.roll, detail: detail(t.run), seg: t.seg, inBreak: t.inBreak }))} breaks={lab.breaks} {from} {to} onzoom={(a, b) => zoomTo(a, b)} />
-      <ul class="legend"><li><i class="dot"></i>One run, adjusted to {ref} bpm</li><li><i class="line"></i>4-week rolling median (restarts after each break)</li><li><i class="dot lone"></i>One-off run during a break</li></ul>
+      <ul class="legend"><li><i class="dot"></i>One run, adjusted to {ref} bpm</li><li><i class="line"></i>Trend: weighted fit over ±3 weeks (restarts after each break)</li><li><i class="dot lone"></i>One-off run during a break</li></ul>
     </article>
 
     <div class="grid">

@@ -129,7 +129,7 @@
       <div class="tip" style:left="{Math.min(Math.max(xOf(hp.day), 100), width - 100)}px" role="status">
         <span class="tip-day">{fmtDayLong(hp.day)}</span>
         <span><b>{fmtRace(hp.adj)} /km</b> at the reference HR</span>
-        {#if hp.inBreak}<span class="muted">One-off run during a break — not part of the trend</span>{:else if isNum(hp.roll)}<span class="muted">4-week median {fmtRace(hp.roll)} /km</span>{/if}
+        {#if hp.inBreak}<span class="muted">One-off run during a break — not part of the trend</span>{:else if isNum(hp.roll)}<span class="muted">Trend {fmtRace(hp.roll)} /km</span>{/if}
         <span class="muted">{hp.detail}</span>
       </div>
     {/if}
