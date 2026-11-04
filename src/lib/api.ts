@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   DashboardPayload,
   DayString,
+  Exercise,
   Food,
   FoodCsvMapping,
   FoodCsvPreview,
@@ -21,12 +22,14 @@ import type {
   Phase,
   PhaseInput,
   PhasePatch,
+  LiftingPayload,
   Profile,
   ProfilePatch,
   User,
   WeightEntry,
   WeightInput,
   WeightPatch,
+  Workout,
 } from './types'
 import type { GarminImportPayload } from './garminExport'
 
@@ -293,5 +296,34 @@ export const api = {
   /** A Garmin Connect data export, already unpacked + normalised in the browser. */
   importGarminExport(payload: GarminImportPayload, options?: ApiRequestOptions): Promise<SuccessResponse & { imported: GarminImportResult }> {
     return request('/garmin/import', { method: 'POST', body: payload }, { timeoutMs: 120_000, ...options })
+  },
+
+  /** The exercise library and every workout with its sets. */
+  getLifting(options?: ApiRequestOptions): Promise<SuccessResponse & LiftingPayload> {
+    return request('/lifting', {}, { timeoutMs: 30_000, ...options })
+  },
+
+  /** Idempotent: a known id or an existing name returns the stored exercise. */
+  createExercise(input: Pick<Exercise, 'name' | 'muscle' | 'equipment'> & { id?: string; incrementKg?: number | null }, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
+    return request('/lifting/exercises', { method: 'POST', body: input }, options)
+  },
+
+  updateExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'archived'>>, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
+    return request(`/lifting/exercises/${encodeURIComponent(id)}`, { method: 'PUT', body: patch }, options)
+  },
+
+  /** Archives an exercise that has history; deletes an unused one. */
+  deleteExercise(id: string, options?: ApiRequestOptions): Promise<SuccessResponse & { deleted?: string; archived?: string }> {
+    return request(`/lifting/exercises/${encodeURIComponent(id)}`, { method: 'DELETE' }, options)
+  },
+
+  /** Upsert a whole workout, sets included (replace-all; safe to retry). */
+  saveWorkout(workout: Workout, options?: ApiRequestOptions): Promise<SuccessResponse & { workout: Workout }> {
+    const { id, day, name, notes, startedAt, endedAt, sets } = workout
+    return request(`/lifting/workouts/${encodeURIComponent(id)}`, { method: 'PUT', body: { day, name, notes, startedAt, endedAt, sets } }, options)
+  },
+
+  deleteWorkout(id: string, options?: ApiRequestOptions): Promise<SuccessResponse & { deleted: string }> {
+    return request(`/lifting/workouts/${encodeURIComponent(id)}`, { method: 'DELETE' }, options)
   },
 }

@@ -31,7 +31,7 @@ reference/
 src/
   main.ts             entry: mount(App) — Svelte 5
   App.svelte          shell: auth gate, hash router, tab bar / side rail
-  views/              Login, Chat, Dashboard, Calories, Insights, Foods, Settings, History, Activity
+  views/              Login, Chat, Dashboard, Calories, Lifting, Insights, Foods, Settings, History, Activity
   lib/
     api.ts            the ONLY module that calls fetch
     auth.ts format.ts pwa.ts types.ts store.ts   framework-agnostic
@@ -41,6 +41,9 @@ src/
     panels/ charts/   view-specific components
     viz/              hand-drawn SVG charts for Insights (no chart library)
     zip.ts garminExport.ts insights.ts   Garmin export reader/normaliser + analysis (pure)
+    lifting.ts        lift analysis: e1RM, records, progression, targets, load, Insights merge (pure)
+    lifting.svelte.ts lifting state + offline outbox + rest timer
+    lift/             the gym logger, exercise picker/page, steppers, rest timer
   design/             tokens.css + ui.css — the design system, global CSS
 index.html            Vite entry
 public/               files Vite copies verbatim into dist/
@@ -63,6 +66,7 @@ deploy/
 .github/workflows/    pages.yml (frontend), deploy.yml (API)
 qa/                   smoke / API / browser checks
                       garmin-export-test.mjs <zip>: runs the browser importer on a real export
+                      lifting-browser-test.mjs: headless-Edge run of the gym logger (after npm run build)
 ```
 
 ## Commands

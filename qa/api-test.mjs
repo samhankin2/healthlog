@@ -853,6 +853,59 @@ async function run() {
     eq('import: needs auth', r.status, 401)
   }
 
+  /* ---------- lifting ---------- */
+  r = await api('GET', '/api/lifting', { token: authToken })
+  eq('lifting: 200', r.status, 200)
+  ok('lifting: starter library seeded', r.json?.exercises?.length >= 40, String(r.json?.exercises?.length))
+  eq('lifting: no workouts yet', r.json?.workouts?.length, 0)
+  const bench = r.json?.exercises?.find((e) => e.name === 'Bench press')
+  ok('lifting: bench press is a chest barbell lift', bench?.muscle === 'chest' && bench?.equipment === 'barbell')
+  r = await api('GET', '/api/lifting', { token: authToken })
+  ok('lifting: seeding happens once', r.json?.exercises?.length === r.json?.exercises?.filter((e, i, all) => all.findIndex((x) => x.name === e.name) === i).length)
+
+  r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { id: 'ex-local-0001', name: 'Pendlay row', muscle: 'back', equipment: 'barbell' } })
+  eq('lifting: create exercise 201', r.status, 201)
+  eq('lifting: client id kept', r.json?.exercise?.id, 'ex-local-0001')
+  r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { id: 'ex-local-0001', name: 'Pendlay row' } })
+  eq('lifting: same id again is idempotent', [r.status, r.json?.exercise?.id], [200, 'ex-local-0001'])
+  r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { id: 'ex-local-0002', name: 'pendlay ROW' } })
+  eq('lifting: same name returns the existing exercise', [r.status, r.json?.exercise?.id], [200, 'ex-local-0001'])
+  r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { name: 'Thing', muscle: 'wings' } })
+  eq('lifting: unknown muscle is 400', r.status, 400)
+
+  const workoutBody = {
+    day: TODAY, name: 'Push', startedAt: new Date(Date.now() - 3600e3).toISOString(),
+    sets: [
+      { id: 'set-aaaa-0001', exerciseId: bench?.id, weightKg: 60, reps: 8, kind: 'warmup' },
+      { id: 'set-aaaa-0002', exerciseId: bench?.id, weightKg: 80, reps: 8, rpe: 8 },
+      { id: 'set-aaaa-0003', exerciseId: bench?.id, weightKg: 80, reps: 7, rpe: 9 },
+    ],
+  }
+  r = await api('PUT', '/api/lifting/workouts/wk-local-0001', { token: authToken, body: workoutBody })
+  eq('lifting: new workout 201', r.status, 201)
+  eq('lifting: sets stored in order', r.json?.workout?.sets?.map((s) => `${s.weightKg}x${s.reps}`), ['60x8', '80x8', '80x7'])
+  eq('lifting: kind defaults to working', r.json?.workout?.sets?.[1]?.kind, 'working')
+  r = await api('PUT', '/api/lifting/workouts/wk-local-0001', { token: authToken, body: { ...workoutBody, endedAt: new Date().toISOString(), sets: workoutBody.sets.slice(1) } })
+  eq('lifting: re-save replaces the sets (200)', [r.status, r.json?.workout?.sets?.length], [200, 2])
+  ok('lifting: endedAt stored', typeof r.json?.workout?.endedAt === 'string')
+  r = await api('PUT', '/api/lifting/workouts/wk-local-0001', { token: authToken, body: { ...workoutBody, sets: [{ id: 'set-bad-00001', exerciseId: 'nope-nope-nope', weightKg: 1, reps: 1 }] } })
+  eq('lifting: unknown exercise is 400', r.status, 400)
+  r = await api('GET', '/api/lifting/workouts/wk-local-0001', { token: authToken })
+  eq('lifting: a rejected save leaves the workout untouched', r.json?.workout?.sets?.length, 2)
+  r = await api('PUT', '/api/lifting/workouts/wk-local-0001', { token: authToken, body: { ...workoutBody, sets: [{ id: 'set-neg-00001', exerciseId: bench?.id, weightKg: -5, reps: 5 }] } })
+  eq('lifting: negative weight is 400', r.status, 400)
+  r = await api('PUT', '/api/lifting/workouts/wk-local-0001', { token: authToken, body: { ...workoutBody, day: 'yesterday' } })
+  eq('lifting: bad day is 400', r.status, 400)
+
+  r = await api('DELETE', `/api/lifting/exercises/${bench?.id}`, { token: authToken })
+  eq('lifting: deleting a used exercise archives it', r.json?.archived, bench?.id)
+  r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { name: 'Bench press' } })
+  eq('lifting: re-adding by name un-archives it', [r.json?.exercise?.id, r.json?.exercise?.archived], [bench?.id, false])
+  r = await api('DELETE', '/api/lifting/exercises/ex-local-0001', { token: authToken })
+  eq('lifting: deleting an unused exercise deletes it', r.json?.deleted, 'ex-local-0001')
+  r = await api('GET', '/api/lifting', { token: authToken })
+  eq('lifting: list shows the workout', r.json?.workouts?.map((w) => w.id), ['wk-local-0001'])
+
   /* ---------- auth scoping + logout ---------- */
   r = await api('POST', '/api/auth/register', { body: { email: 'owner@example.com', password: 'whatever1' } })
   eq('register: duplicate email without an invite is 409', r.status, 409)
@@ -870,6 +923,12 @@ async function run() {
   eq('scoping: another user cannot read an analysis', r.status, 404)
   r = await api('DELETE', `/api/weights/${firstEntryId}`, { token: ownerToken })
   eq('scoping: another user cannot delete a weight entry', r.status, 404)
+  r = await api('GET', '/api/lifting/workouts/wk-local-0001', { token: ownerToken })
+  eq('scoping: another user cannot read a workout', r.status, 404)
+  r = await api('PUT', '/api/lifting/workouts/wk-local-0001', { token: ownerToken, body: { day: TODAY, sets: [] } })
+  eq('scoping: another user cannot overwrite a workout', r.status, 404)
+  r = await api('GET', '/api/lifting', { token: ownerToken })
+  eq('scoping: another user sees none of the workouts', r.json?.workouts?.length, 0)
 
   r = await api('POST', '/api/auth/logout', { token: authToken })
   eq('logout: 200', r.status, 200)

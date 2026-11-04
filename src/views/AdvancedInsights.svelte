@@ -10,6 +10,8 @@
   import { api } from '../lib/api'
   import { today } from '../lib/format'
   import { navigate } from '../lib/state.svelte'
+  import { lift, loadLifting } from '../lib/lifting.svelte'
+  import { mergeLifting } from '../lib/lifting'
   import { activityTypeLabel } from '../lib/activity'
   import { fmtDayLong, fmtDayShort } from '../lib/viz/scale'
   import { RANGES, dayNum, fmtClockMin, fmtHM, fmtKm, fmtRace, fmtSigned, isNum, shiftDay, type RangeKey, type SportGroup } from '../lib/insights'
@@ -20,7 +22,10 @@
   const SPORT_KEY = 'healthlog.advanced.sport'
   const todayDay = today()
 
-  let data = $state<InsightsPayload | null>(null)
+  let raw = $state<InsightsPayload | null>(null)
+  // Logged lifting sessions join the watch's activities (SPEC §6 "Lifting").
+  const liftingData = $derived(lift.loaded ? { exercises: lift.exercises, workouts: lift.workouts } : null)
+  const data = $derived(raw ? mergeLifting(raw, liftingData) : null)
   let loading = $state(true)
   let loadError = $state('')
   let range = $state<RangeKey>((localStorage.getItem(RANGE_KEY) as RangeKey | null) ?? '90d')
@@ -46,7 +51,8 @@
     loading = !data
     loadError = ''
     try {
-      data = await api.getInsights({ from: '2000-01-01', to: todayDay })
+      const [payload] = await Promise.all([api.getInsights({ from: '2000-01-01', to: todayDay }), loadLifting().catch(() => {})])
+      raw = payload
     } catch (cause) {
       loadError = cause instanceof Error ? cause.message : 'Could not load your data.'
     } finally {

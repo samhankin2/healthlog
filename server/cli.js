@@ -190,6 +190,7 @@ function cmdStats(args) {
     printTable([
       { what: 'meals logged', n: count("SELECT COUNT(*) AS n FROM meals WHERE created_at >= datetime('now', ?)") },
       { what: 'weigh-ins', n: count("SELECT COUNT(*) AS n FROM weight_entries WHERE created_at >= datetime('now', ?)") },
+      { what: 'workouts logged', n: count("SELECT COUNT(*) AS n FROM workouts WHERE created_at >= datetime('now', ?)") },
       { what: 'chat messages', n: count("SELECT COUNT(*) AS n FROM chat_messages WHERE created_at >= datetime('now', ?)") },
       { what: 'AI analyses', n: count("SELECT COUNT(*) AS n FROM analyses WHERE created_at >= datetime('now', ?)") },
       {

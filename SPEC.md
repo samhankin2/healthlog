@@ -268,6 +268,19 @@ fitness age, heat acclimation), `personal_records` (per user + record type) and
 `sets`, `reps`. All Garmin upserts are `COALESCE(new, old)`: a null never
 overwrites a stored value.
 
+### Lifting tables
+
+`exercises` (per user: name — unique case-insensitively — `muscle`
+chest|back|shoulders|biceps|triceps|quads|hamstrings|glutes|calves|core|other,
+`equipment` barbell|dumbbell|machine|cable|bodyweight|kettlebell|other,
+`increment_kg` (null = equipment default), `archived_at`), `workouts` (per user:
+`day`, `name`, `notes`, `started_at` / `ended_at` ISO from the client clock,
+`ended_at` null while in progress) and `workout_sets` (`workout_id` cascade,
+`exercise_id`, `position`, `weight_kg` — added load for bodyweight lifts —
+`reps`, `rpe` 1–10 optional, `kind` working|warmup|drop|failure, `done_at`).
+Ids are client-generated (8–64 of `[A-Za-z0-9_-]`) so an offline phone can create
+them. Exact DDL lives in `server/db.js`.
+
 ## 5. Auth model
 
 - **Registration requires an invite code.** `POST /api/auth/register` with
@@ -509,6 +522,54 @@ GET  /api/insights?from&to   (default: the last 365 days)
   practical minimum difference and |Cohen's d| ≥ 0.3; strong ≥ 0.8,
   moderate ≥ 0.5.
 
+### Lifting
+
+```
+GET    /api/lifting?from&to              -> 200 { ok:true, exercises:[{id,name,muscle,equipment,incrementKg,archived,createdAt}],
+                                                  workouts:[{id,day,name,notes,startedAt,endedAt,createdAt,updatedAt,
+                                                  sets:[{id,exerciseId,weightKg,reps,rpe,kind,doneAt}]}] }
+POST   /api/lifting/exercises { id?, name, muscle?, equipment?, incrementKg? } -> 201 { ok:true, exercise }
+       # idempotent: a known id, or a name that exists (case-insensitive, un-archived), returns it with 200
+PUT    /api/lifting/exercises/:id { name?, muscle?, equipment?, incrementKg?, archived? } -> 200 { ok:true, exercise }
+DELETE /api/lifting/exercises/:id        -> 200 { ok:true, archived:<id> } when it has sets, else { ok:true, deleted:<id> }
+GET    /api/lifting/workouts/:id         -> 200 { ok:true, workout }
+PUT    /api/lifting/workouts/:id { day, name?, notes?, startedAt?, endedAt?, sets:[{ id, exerciseId, weightKg, reps, rpe?, kind? }] }
+                                         -> 201 created / 200 replaced { ok:true, workout }   (max 400 sets)
+DELETE /api/lifting/workouts/:id         -> 200 { ok:true, deleted:<id> }
+```
+
+- **Replace-all upsert.** `PUT /api/lifting/workouts/:id` writes the whole
+  workout and its sets in one transaction, so a retry can never duplicate a set.
+  Every set's `exerciseId` must be one of the user's exercises.
+- **Starter library.** The first `GET /api/lifting` for a user with no
+  exercises seeds 48 common lifts.
+- **Offline first** (`src/lib/lifting.svelte.ts`). Changes apply on the device
+  first and sit in a per-user `localStorage` outbox (new exercises, then workout
+  upserts, then deletes) until the API accepts them. Retries: on `online`, when
+  the tab becomes visible, every 20 s while offline, on the next change. A
+  name clash for an exercise created offline remaps its local id onto the
+  server's. The live session id and the planned exercise order are kept
+  on the device too, and an unfinished session less than 12 h old resumes on any device.
+- **Analysis is client-side** (`src/lib/lifting.ts`, pure). Hard set = not a
+  warm-up. e1RM = Epley, weight × (1 + reps / 30), a single is its weight,
+  over 12 reps none. Bodyweight lifts add the nearest weigh-in (on or before the
+  day, else the first after). Records (best e1RM, heaviest, rep PR) count only
+  after the first session. Status: last 4 weeks of training vs the 4 before
+  (or everything earlier): ≤ −3 % slipping, the last session a best or ≥ +1 %
+  progressing, no best in the last 3 sessions stalled, else steady. Next target
+  (double progression on the last session's top weight): every set matched the
+  first and it was ≥ 5 reps → + one increment (barbell / machine / cable 2.5 kg,
+  dumbbell 2, kettlebell 4, or the exercise's own), same reps up to 6, two fewer
+  above; else same weight, one more rep on the weakest set. Weekly volume =
+  hard sets per primary muscle, against a 10–20 band.
+- **Insights.** `mergeLifting` folds logged workouts into the Garmin
+  activities before `buildInsights` / `buildAdvanced`: a workout on a day with a
+  watch strength activity enriches it (sets, reps, the higher of the two loads);
+  one without becomes a `strength_training` activity. Lift load = 5 per hard set
+  × (RPE − 5) / 3 clamped 0.4–1.7 (1 without RPE) + 1 per warm-up — ~100 for a
+  20-set session, because Garmin's heart-rate load under-counts lifting. Nothing
+  is written back to Garmin rows.
+
 ### Imports
 ```
 POST /api/import/weight-json { json: <the old weight-tracker export as an object> }
@@ -679,9 +740,25 @@ that the frontend can read.
   stay unscoped.
 - **Mobile-first**, and good on desktop: bottom tab bar on narrow screens,
   a sidebar/rail on wide screens. Same as the old app's shell, extended.
-- **Tabs:** Chat (default) · Dashboard · Calories · Insights · Foods · Settings.
-  The desktop side rail also lists History and Activity; the mobile bottom bar
-  holds these six and reaches History from the Dashboard and Calories views.
+- **Tabs:** Chat (default) · Dashboard · Calories · Lifting · Insights · Settings
+  on the mobile bottom bar (six at most). The desktop side rail also lists Foods,
+  History and Activity; on a phone Foods and History are reached from the
+  Calories view (History also from the Dashboard).
+- **Lifting view** (`#/lifting`, sub-pages `#/lifting/log/<workoutId>`,
+  `#/lifting/exercise/<exerciseId>`, `#/lifting/history`), built for one hand in
+  the gym: start or resume a workout, repeat a recent session, this week's days /
+  sets / volume, every lift with its e1RM, sparkline, status and next target,
+  weekly hard sets per muscle. The logger: an exercise card per lift with last
+  time, the suggested target and each set compared with the same set last time;
+  an entry pad with large −/+ steppers (hold to repeat, tap to type), warm-up /
+  drop / failure and RPE chips, and one large "Log set" button prefilled for the
+  next set; a toast on a record; a rest timer above the tab bar (vibrates and
+  beeps, default 1–4 min); the screen kept awake (Wake Lock) during a live
+  session; a save status (saved / saved on phone / not saved). The exercise page:
+  records, status, next target, e1RM per session with the all-time best as a
+  step line, volume per session, best weight for 1/3/5/8/10/12+ reps, sessions.
+  Insights gains a **Strength** block (sessions, hard sets per week, volume,
+  records, main lifts, weekly sets per muscle) after Training.
 - **Insights view** (`#/insights`): Garmin analysis over a 30D / 90D / 6M / 1Y /
   All range — a recovery hero (score ring, its parts, four vitals vs the 30-day
   norm with sparklines), findings, fitness (VO₂ max, race predictions, training

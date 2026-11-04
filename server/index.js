@@ -27,6 +27,7 @@ import { registerChatRoutes } from './routes/chat.js'
 import { registerAnalysisRoutes } from './routes/analyses.js'
 import { registerImportRoutes } from './routes/imports.js'
 import { registerGarminRoutes } from './routes/garmin.js'
+import { registerLiftingRoutes } from './routes/lifting.js'
 import { scheduleBackups } from './lib/backup.js'
 import { scheduleGarminSync } from './lib/garmin.js'
 import { clientIp, requestsByIp } from './lib/ratelimit.js'
@@ -51,6 +52,7 @@ export function buildRouter() {
   registerAnalysisRoutes(router)
   registerImportRoutes(router)
   registerGarminRoutes(router)
+  registerLiftingRoutes(router)
   return router
 }
 

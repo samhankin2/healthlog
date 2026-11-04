@@ -252,6 +252,7 @@
           </ul>
           <button class="button button--secondary edit-link" type="button" onclick={() => navigate('history')}>Edit meals in History <Icon name="chevron-right" size={17} /></button>
         {/if}
+        <button class="button button--secondary edit-link" type="button" onclick={() => navigate('foods')}><Icon name="food" size={17} /> Saved foods <Icon name="chevron-right" size={17} /></button>
       </div>
     </section>
 

@@ -284,7 +284,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced'
+export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced' | 'lifting'
 
 export interface ViewContext {
   state: AppState
@@ -483,4 +483,52 @@ export interface GarminImportResult {
   metrics: number
   activities: number
   records: number
+}
+
+/* -------------------------------------------------------------------------- */
+/* Lifting (SPEC §6 "Lifting")                                                */
+/* -------------------------------------------------------------------------- */
+
+export type Muscle = 'chest' | 'back' | 'shoulders' | 'biceps' | 'triceps' | 'quads' | 'hamstrings' | 'glutes' | 'calves' | 'core' | 'other'
+export type Equipment = 'barbell' | 'dumbbell' | 'machine' | 'cable' | 'bodyweight' | 'kettlebell' | 'other'
+export type SetKind = 'working' | 'warmup' | 'drop' | 'failure'
+
+export interface Exercise {
+  id: string
+  name: string
+  muscle: Muscle
+  equipment: Equipment
+  /** Next-weight step; null = the equipment default. */
+  incrementKg: number | null
+  archived: boolean
+  createdAt?: string | null
+}
+
+export interface LiftSet {
+  id: string
+  exerciseId: string
+  /** Bodyweight lifts: the added load. */
+  weightKg: number
+  reps: number
+  rpe: number | null
+  kind: SetKind
+  doneAt: string | null
+}
+
+export interface Workout {
+  id: string
+  day: DayString
+  name: string | null
+  notes: string | null
+  startedAt: string | null
+  /** null while the session is in progress. */
+  endedAt: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+  sets: LiftSet[]
+}
+
+export interface LiftingPayload {
+  exercises: Exercise[]
+  workouts: Workout[]
 }

@@ -14,7 +14,9 @@
   import Sheet from '../lib/components/Sheet.svelte'
   import { api } from '../lib/api'
   import { today } from '../lib/format'
-  import { navigate } from '../lib/state.svelte'
+  import { app, navigate } from '../lib/state.svelte'
+  import { lift, loadLifting } from '../lib/lifting.svelte'
+  import { MUSCLE_LABEL, STATUS_LABEL, bodyweightLookup, fmtTonnage, mergeLifting, strengthInsight } from '../lib/lifting'
   import { activityTypeLabel } from '../lib/activity'
   import { fmtDayLong, fmtDayShort } from '../lib/viz/scale'
   import {
@@ -26,7 +28,10 @@
   const RANGE_KEY = 'healthlog.insights.range'
   const todayDay = today()
 
-  let data = $state<InsightsPayload | null>(null)
+  let raw = $state<InsightsPayload | null>(null)
+  // Logged lifting sessions join the watch's activities (SPEC §6 "Lifting").
+  const liftingData = $derived(lift.loaded ? { exercises: lift.exercises, workouts: lift.workouts } : null)
+  const data = $derived(raw ? mergeLifting(raw, liftingData) : null)
   let loading = $state(true)
   let loadError = $state('')
   let range = $state<RangeKey>((localStorage.getItem(RANGE_KEY) as RangeKey | null) ?? '90d')
@@ -46,7 +51,8 @@
     loading = !data
     loadError = ''
     try {
-      data = await api.getInsights({ from: '2000-01-01', to: todayDay })
+      const [payload] = await Promise.all([api.getInsights({ from: '2000-01-01', to: todayDay }), loadLifting().catch(() => {})])
+      raw = payload
     } catch (cause) {
       loadError = cause instanceof Error ? cause.message : 'Could not load your insights.'
     } finally {
@@ -217,6 +223,10 @@
     const pos = (v: number): number => 6 + ((v - (lo - pad)) / (hi - lo + 2 * pad)) * 88
     return { a: pos(f.a!.value), b: pos(f.b!.value) }
   }
+  /* ---- strength, from the lifting log ---- */
+  const bwAt = $derived(bodyweightLookup(app.weights.map((w) => ({ day: w.date, weightKg: w.weightKg }))))
+  const strength = $derived(liftingData ? strengthInsight(liftingData, from, todayDay, bwAt) : null)
+  const strengthMax = $derived(Math.max(20, ...(strength?.muscles.map((m) => m.sets) ?? [0])))
   const recentActs = $derived(ins ? [...ins.training.activities].reverse().slice(0, 6) : [])
   const lastImport = $derived(data?.meta.lastImport ?? null)
   const stressDays = $derived(Math.max(1, ins ? ins.stress.series.filter((p) => isNum(p.value)).length : 1))
@@ -507,6 +517,58 @@
               {/each}
             </ul>
           </article>
+        </div>
+      </section>
+    {/if}
+
+    <!-- ============================ STRENGTH ============================ -->
+    {#if strength}
+      <section class="block" aria-labelledby="strength-title">
+        <div class="block-head row">
+          <div>
+            <h2 id="strength-title"><Icon name="dumbbell" size={20} /> Strength</h2>
+            <p>From your lifting log. Sessions also count in Training above, with a load worked out from your sets rather than heart rate.</p>
+          </div>
+          <button class="button button--secondary pick" type="button" onclick={() => navigate('lifting')}>Lifting <Icon name="chevron-right" size={16} /></button>
+        </div>
+        <div class="stats">
+          <div class="stat"><span>Sessions</span><b>{strength.sessions}</b></div>
+          <div class="stat"><span>Hard sets / week</span><b>{strength.setsPerWeek.toFixed(1)}</b><em>{strength.hardSets} in range</em></div>
+          <div class="stat"><span>Volume</span><b>{fmtTonnage(strength.volume)}</b></div>
+          <div class="stat"><span>Personal records</span><b>{strength.prs}</b><em>new best e1RM</em></div>
+        </div>
+        <div class="grid-2">
+          {#if strength.lifts.length}
+            <article class="card pad">
+              <div class="chart-head"><h3>Main lifts</h3><p class="chart-note">Estimated 1RM, first to last session in range.</p></div>
+              <ul class="lift-list">
+                {#each strength.lifts as l (l.exercise.id)}
+                  <li>
+                    <span class="ll-name"><b>{l.exercise.name}</b><em>{MUSCLE_LABEL[l.exercise.muscle]} · {STATUS_LABEL[l.status]}</em></span>
+                    <Sparkline points={l.spark} width={72} height={26} />
+                    <span class="ll-num">
+                      <b>{isNum(l.now) ? (l.metric === 'reps' ? `${l.now} reps` : `${Math.round(l.now)} kg`) : '—'}</b>
+                      {#if isNum(l.change)}<span class={l.change > 0.5 ? 'good' : l.change < -0.5 ? 'bad' : ''}>{fmtSigned(l.change, 1)}%</span>{/if}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            </article>
+          {/if}
+          {#if strength.muscles.length}
+            <article class="card pad">
+              <div class="chart-head"><h3>Weekly sets per muscle</h3><p class="chart-note">Last 4 weeks of the range. Shaded: 10–20.</p></div>
+              <ul class="mus-list">
+                {#each strength.muscles as m (m.muscle)}
+                  <li>
+                    <span>{m.label}</span>
+                    <span class="mus-bar" aria-hidden="true"><i class="band" style:left="{(10 / strengthMax) * 100}%" style:width="{(10 / strengthMax) * 100}%"></i><i class="fill" style:width="{(m.sets / strengthMax) * 100}%"></i></span>
+                    <b>{m.sets.toFixed(1)}</b>
+                  </li>
+                {/each}
+              </ul>
+            </article>
+          {/if}
         </div>
       </section>
     {/if}
@@ -836,4 +898,18 @@
     .race { grid-template-columns: 1fr auto auto; }
     .race :global(svg) { display: none; }
   }
+  .lift-list, .mus-list { display: grid; margin: 0; padding: 0; gap: var(--space-3); list-style: none; }
+  .lift-list li { display: grid; align-items: center; grid-template-columns: 1fr auto auto; gap: var(--space-3); }
+  .ll-name { display: flex; min-width: 0; flex-direction: column; }
+  .ll-name em { color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
+  .ll-num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: var(--text-sm); }
+  .ll-num span { color: var(--color-text-muted); font-size: var(--text-xs); }
+  .ll-num .good { color: var(--color-up); }
+  .ll-num .bad { color: var(--color-down); }
+  .mus-list li { display: grid; align-items: center; grid-template-columns: 6rem 1fr 2.5rem; gap: var(--space-3); font-size: var(--text-sm); }
+  .mus-list b { text-align: right; font-variant-numeric: tabular-nums; }
+  .mus-bar { position: relative; height: 10px; border-radius: var(--radius-pill); background: var(--color-surface-sunken); overflow: hidden; }
+  .mus-bar i { position: absolute; top: 0; bottom: 0; left: 0; }
+  .mus-bar .band { background: color-mix(in oklab, var(--color-accent) 22%, transparent); }
+  .mus-bar .fill { border-radius: inherit; background: var(--color-accent); }
 </style>

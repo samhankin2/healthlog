@@ -71,7 +71,7 @@ store.subscribe((state) => {
 /* Routing                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export const ROUTES = ['chat', 'dashboard', 'calories', 'foods', 'settings', 'history', 'activity', 'insights', 'advanced'] as const
+export const ROUTES = ['chat', 'dashboard', 'calories', 'foods', 'settings', 'history', 'activity', 'insights', 'advanced', 'lifting'] as const
 export type Route = (typeof ROUTES)[number]
 
 // A `$state` primitive cannot be exported and reassigned — only its
@@ -79,28 +79,42 @@ export type Route = (typeof ROUTES)[number]
 // through a function: calling `route()` inside a template or an effect
 // registers the dependency, so it stays reactive.
 let currentRoute = $state<Route>('chat')
+let currentSub = $state('')
 
-function routeFromHash(): Route {
-  const raw = window.location.hash.replace(/^#\/?/, '').split('?')[0]
-  return (ROUTES as readonly string[]).includes(raw) ? (raw as Route) : 'chat'
+function parseHash(): { route: Route; sub: string } {
+  const path = window.location.hash.replace(/^#\/?/, '').split('?')[0]
+  const [head, ...rest] = path.split('/')
+  const known = (ROUTES as readonly string[]).includes(head)
+  return { route: known ? (head as Route) : 'chat', sub: known ? rest.map(decodeURIComponent).join('/') : '' }
 }
 
-currentRoute = routeFromHash()
+function syncFromHash(): void {
+  const parsed = parseHash()
+  currentRoute = parsed.route
+  currentSub = parsed.sub
+}
 
-window.addEventListener('hashchange', () => {
-  currentRoute = routeFromHash()
-})
+syncFromHash()
+
+window.addEventListener('hashchange', syncFromHash)
 
 /** The current tab. Reactive: read it inside a template or an effect. */
 export function route(): Route {
   return currentRoute
 }
 
-/** Switch tab. The hash keeps a refresh on the same tab. */
-export function navigate(next: Route): void {
+/** The path inside a tab, e.g. `exercise/<id>` for `#/lifting/exercise/<id>`. Reactive. */
+export function subpath(): string {
+  return currentSub
+}
+
+/** Switch tab (and optionally a page inside it). The hash keeps a refresh on the same page. */
+export function navigate(next: Route, sub = ''): void {
   currentRoute = next
-  if (window.location.hash !== `#/${next}`) {
-    window.location.hash = `#/${next}`
+  currentSub = sub
+  const hash = `#/${next}${sub ? `/${sub.split('/').map(encodeURIComponent).join('/')}` : ''}`
+  if (window.location.hash !== hash) {
+    window.location.hash = hash
   }
 }
 

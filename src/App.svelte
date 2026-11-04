@@ -21,15 +21,18 @@
   import ActivityView from './views/Activity.svelte'
   import Insights from './views/Insights.svelte'
   import AdvancedInsights from './views/AdvancedInsights.svelte'
+  import Lifting from './views/Lifting.svelte'
 
   // `railOnly` tabs appear in the desktop side rail but not the mobile bottom
-  // bar, which holds six buttons at most.
+  // bar, which holds six buttons at most. Lifting is in the bar because it is
+  // used one-handed in the gym; Foods is reached from Calories on a phone.
   const TABS: { id: Route; label: string; icon: IconName; railOnly?: boolean }[] = [
     { id: 'chat', label: 'Chat', icon: 'chat' },
     { id: 'dashboard', label: 'Dashboard', icon: 'activity' },
     { id: 'calories', label: 'Calories', icon: 'flame' },
+    { id: 'lifting', label: 'Lifting', icon: 'dumbbell' },
     { id: 'insights', label: 'Insights', icon: 'insights' },
-    { id: 'foods', label: 'Foods', icon: 'food' },
+    { id: 'foods', label: 'Foods', icon: 'food', railOnly: true },
     { id: 'history', label: 'History', icon: 'calendar', railOnly: true },
     { id: 'activity', label: 'Activity', icon: 'trending-up', railOnly: true },
     { id: 'settings', label: 'Settings', icon: 'settings' },
@@ -45,6 +48,7 @@
     activity: 'Activity',
     insights: 'Insights',
     advanced: 'Advanced insights',
+    lifting: 'Lifting',
   }
 
   let booting = $state(isAuthenticated())
@@ -205,6 +209,8 @@
           <Insights />
         {:else if current === 'advanced'}
           <AdvancedInsights />
+        {:else if current === 'lifting'}
+          <Lifting />
         {/if}
       </main>
     </div>

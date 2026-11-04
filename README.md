@@ -32,6 +32,19 @@ Cloud VM, SQLite on disk, Caddy for TLS.
 - Save the meal, edit it, or ask again. Day totals and targets on the dashboard,
   a 7-day intake bar chart, saved foods, and CSV import with column mapping.
 
+**Lifting** (`#/lifting`, in the phone's bottom bar)
+- Log sets in the gym one-handed: big −/+ steppers, one "Log set" button already
+  filled in for the next set, warm-up / drop / failure and RPE, a rest timer that
+  vibrates, and the screen kept awake during a session.
+- Each exercise shows last time's sets, a suggested target (double progression)
+  and whether every set beat the same set last time; records get a toast.
+- Works with no signal: sets are kept on the phone and sync when it reconnects.
+- Per lift: estimated 1RM over time, records, best weight for 1–12+ reps,
+  progressing / steady / stalled / slipping. Weekly hard sets per muscle.
+- Feeds **Insights**: logged sessions count as strength training with a load
+  worked out from your sets (the watch's heart-rate load under-counts lifting),
+  plus a Strength block.
+
 **Garmin insights** (`#/insights`)
 - Import a **Garmin Connect data export** (Account → Export your data → the ZIP).
   The ZIP is unpacked and normalised **in the browser**; only daily numbers go to

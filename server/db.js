@@ -306,6 +306,50 @@ CREATE TABLE IF NOT EXISTS garmin_meta (
   PRIMARY KEY (user_id, key)
 );
 
+-- Lifting (SPEC §6 "Lifting"): the user's exercise library, one row per gym
+-- session, one row per set. Ids are client-generated so an offline phone can
+-- create them and retry the save safely.
+CREATE TABLE IF NOT EXISTS exercises (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  muscle       TEXT NOT NULL DEFAULT 'other',    -- chest | back | shoulders | biceps | triceps | quads | hamstrings | glutes | calves | core | other
+  equipment    TEXT NOT NULL DEFAULT 'barbell',  -- barbell | dumbbell | machine | cable | bodyweight | kettlebell | other
+  increment_kg REAL,                             -- next-weight step; null = by equipment
+  archived_at  TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS workouts (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day        TEXT NOT NULL,                      -- YYYY-MM-DD local
+  name       TEXT,
+  notes      TEXT,
+  started_at TEXT,                               -- ISO, client clock
+  ended_at   TEXT,                               -- null = still in progress
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS workout_sets (
+  id          TEXT PRIMARY KEY,
+  workout_id  TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
+  exercise_id TEXT NOT NULL REFERENCES exercises(id),
+  position    INTEGER NOT NULL,                  -- order within the workout
+  weight_kg   REAL NOT NULL DEFAULT 0,           -- bodyweight lifts: added load
+  reps        INTEGER NOT NULL,
+  rpe         REAL,                              -- 5..10, optional
+  kind        TEXT NOT NULL DEFAULT 'working',   -- working | warmup | drop | failure
+  done_at     TEXT                               -- ISO, client clock
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name ON exercises(user_id, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_workouts_user_day         ON workouts(user_id, day);
+CREATE INDEX IF NOT EXISTS idx_workout_sets_workout      ON workout_sets(workout_id, position);
+CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise     ON workout_sets(exercise_id);
+
 CREATE INDEX IF NOT EXISTS idx_weight_entries_user_date ON weight_entries(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_meals_user_day            ON meals(user_id, day);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at);
