@@ -72,11 +72,21 @@
     return out
   })
   const path = $derived(linePath(linePts))
+  /** One closed wash per unbroken run of the line, so gaps never draw a wedge. */
   const areaPath = $derived.by(() => {
-    const pts = linePts.filter((p) => p.y !== null)
-    if (pts.length < 2) return ''
     const base = y.scale.range[0]
-    return `${linePath(linePts)}L${pts[pts.length - 1].x.toFixed(1)},${base}L${pts[0].x.toFixed(1)},${base}Z`
+    let d = ''
+    let run: { x: number; y: number }[] = []
+    const flush = (): void => {
+      if (run.length >= 2) d += `${linePath(run)}L${run[run.length - 1].x.toFixed(1)},${base}L${run[0].x.toFixed(1)},${base}Z`
+      run = []
+    }
+    for (const p of linePts) {
+      if (p.y === null) flush()
+      else run.push({ x: p.x, y: p.y })
+    }
+    flush()
+    return d
   })
   const bandPath = $derived.by(() => {
     const b = band.filter((p) => p.day >= from && p.day <= to)

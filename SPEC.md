@@ -689,7 +689,15 @@ that the frontend can read.
   share of stages; by night of the week; sleep window), resting HR with a norm
   band, Body Battery range, stress, training (weekly hours by sport, calendar,
   HR zones, totals table), energy in vs out when meals are logged, personal
-  records, and the export import. Charts are hand-drawn SVG (`src/lib/viz/`):
+  records, and the export import. Sports group as Run, Ride, Swim, Strength,
+  Tennis, Hike & walk, Pilates & yoga, and Cardio & other (each a fixed colour).
+  Ranges under 45 days chart training per day, longer ones per week; Body
+  Battery is daily up to 120 days, weekly averages beyond; energy balance is
+  daily diverging bars up to 31 days, weekly beyond. The training calendar
+  shades by quantile of your own active days, so a short session never looks
+  like a rest day. Personal records show only the ones picked in a sheet
+  (default 5K, 10K, half marathon; saved in `localStorage`). Findings sit after
+  Training. Charts are hand-drawn SVG (`src/lib/viz/`):
   hover and arrow-key reading (ARIA slider with value text), a legend for every
   multi-series chart, palette validated for colour-vision deficiency.
 - **Login screen** when there is no token: email, password, and an "I have an

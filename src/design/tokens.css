@@ -161,7 +161,12 @@
   --viz-ride: #eb6834;
   --viz-swim: #1baf7a;
   --viz-strength: #eda100;
+  --viz-tennis: #e87ba4;
+  --viz-hike: #008300;
+  --viz-pilates: #6250d6;
   --viz-other: #8a948e;
+  --viz-surplus: #e34948;
+  --viz-deficit: #2a78d6;
   --viz-deep: #6250d6;
   --viz-rem: #e87ba4;
   --viz-light: #2a78d6;
@@ -179,7 +184,12 @@
     --viz-ride: #d95926;
     --viz-swim: #199e70;
     --viz-strength: #c98500;
+    --viz-tennis: #d55181;
+    --viz-hike: #008300;
+    --viz-pilates: #9085e9;
     --viz-other: #7d8882;
+    --viz-surplus: #e66767;
+    --viz-deficit: #3987e5;
     --viz-deep: #9085e9;
     --viz-rem: #d55181;
     --viz-light: #3987e5;

@@ -128,13 +128,17 @@ export function fmtKm(m: number | null | undefined): string {
 /* Sports                                                              */
 /* ------------------------------------------------------------------ */
 
-export type SportGroup = 'run' | 'ride' | 'swim' | 'strength' | 'other'
+/** Order = colour slot order (validated adjacent-pair CVD-safe); 'other' is neutral grey. */
+export type SportGroup = 'run' | 'ride' | 'swim' | 'strength' | 'tennis' | 'hike' | 'pilates' | 'other'
 export const SPORTS: { key: SportGroup; label: string }[] = [
   { key: 'run', label: 'Run' },
   { key: 'ride', label: 'Ride' },
   { key: 'swim', label: 'Swim' },
   { key: 'strength', label: 'Strength' },
-  { key: 'other', label: 'Other' },
+  { key: 'tennis', label: 'Tennis' },
+  { key: 'hike', label: 'Hike & walk' },
+  { key: 'pilates', label: 'Pilates & yoga' },
+  { key: 'other', label: 'Cardio & other' },
 ]
 export function sportGroup(type: string | null): SportGroup {
   const t = type ?? ''
@@ -142,8 +146,12 @@ export function sportGroup(type: string | null): SportGroup {
   if (t.includes('cycling') || t.includes('biking') || t.includes('ride')) return 'ride'
   if (t.includes('swim')) return 'swim'
   if (t.includes('strength')) return 'strength'
+  if (t.includes('tennis') || t.includes('padel') || t.includes('squash') || t.includes('pickleball')) return 'tennis'
+  if (t.includes('hiking') || t.includes('walking')) return 'hike'
+  if (t.includes('pilates') || t.includes('yoga')) return 'pilates'
   return 'other'
 }
+const emptySports = (): Record<SportGroup, number> => ({ run: 0, ride: 0, swim: 0, strength: 0, tennis: 0, hike: 0, pilates: 0, other: 0 })
 const OTHER_LABELS: Record<string, string> = {
   tennis_v2: 'tennis', tennis: 'tennis', indoor_cardio: 'cardio', pilates: 'pilates', hiking: 'hiking', walking: 'walking',
   yoga: 'yoga', breathwork: 'breathwork', hiit: 'HIIT', transition_v2: 'transitions', multi_sport: 'multisport', padel: 'padel',
@@ -188,9 +196,12 @@ export interface Finding {
   confidence: 'strong' | 'moderate' | 'suggestive'
   /** Whether the highlighted side (a) is the better outcome. */
   positive: boolean
+  /** Big number for trend findings (comparisons derive theirs from a - b). */
+  headline?: string
 }
 
 export interface WeekSports { week: string; hours: Record<SportGroup, number>; total: number; sessions: number }
+export interface DaySports { day: string; minutes: Record<SportGroup, number>; total: number; sessions: number }
 
 export interface Insights {
   from: string
@@ -206,6 +217,8 @@ export interface Insights {
     avg: number | null
     breakdown: { rest: number; low: number; medium: number; high: number }
     battery: { day: string; low: number; high: number; wake: number | null }[]
+    /** Weekly averages (day = Monday) for long ranges. */
+    batteryWeekly: { day: string; low: number; high: number; wake: number | null }[]
     avgWake: number | null
     avgCharge: number | null
   }
@@ -247,6 +260,7 @@ export interface Insights {
     distanceM: number
     kcal: number
     weeks: WeekSports[]
+    daily: DaySports[]
     calendar: { day: string; minutes: number; load: number }[]
     zones: number[]
     activeDays: number
@@ -257,6 +271,7 @@ export interface Insights {
   }
   energy: {
     weeks: { week: string; intake: number | null; burn: number | null }[]
+    days: { day: string; intake: number; burn: number }[]
     loggedDays: number
     avgIntake: number | null
     avgBurn: number | null
@@ -544,7 +559,7 @@ function buildFindings(ctx: {
           body: `Weeknight bedtime averages ${fmtClockMin(mean(wk))}; Friday and Saturday nights, ${fmtClockMin(mean(we))}. Shifts over an hour act like mild jet lag on Monday.`,
           a: { label: 'Weeknights', value: mean(wk) as number, n: wk.length },
           b: { label: 'Fri & Sat', value: mean(we) as number, n: we.length },
-          unit: 'clock', format: fmtClockMin, strength: Math.min(1.5, Math.abs(diff) / 60), confidence: Math.abs(diff) >= 60 ? 'strong' : 'moderate', positive: diff < 0,
+          unit: 'clock', format: fmtClockMin, headline: `${Math.round(Math.abs(diff))} min ${diff > 0 ? 'later' : 'earlier'}`, strength: Math.min(1.5, Math.abs(diff) / 60), confidence: Math.abs(diff) >= 60 ? 'strong' : 'moderate', positive: diff < 0,
         })
       }
     }
@@ -557,9 +572,9 @@ function buildFindings(ctx: {
     if (Math.abs(change) >= 1) {
       out.push({
         id: 'vo2-trend', category: 'trend',
-        title: change > 0 ? `VO₂ max up ${change.toFixed(0)} points` : `VO₂ max down ${Math.abs(change).toFixed(0)} points`,
+        title: `VO₂ max ${change > 0 ? 'up' : 'down'} ${Math.abs(change).toFixed(0)} point${Math.abs(change) === 1 ? '' : 's'}`,
         body: `From ${vo2[0].vo2max} to ${vo2[vo2.length - 1].vo2max} over this period. Each point is roughly 2–3 % on a 5K time.`,
-        unit: '', format: (v) => v.toFixed(0), strength: Math.min(2, Math.abs(change) / 2), confidence: Math.abs(change) >= 2 ? 'strong' : 'moderate', positive: change > 0,
+        unit: '', format: (v) => v.toFixed(0), headline: `${fmtSigned(change)} VO₂ max`, strength: Math.min(2, Math.abs(change) / 2), confidence: Math.abs(change) >= 2 ? 'strong' : 'moderate', positive: change > 0,
       })
     }
   }
@@ -571,7 +586,7 @@ function buildFindings(ctx: {
         id: 'rhr-trend', category: 'trend',
         title: perMonth < 0 ? 'Your resting heart rate is falling' : 'Your resting heart rate is creeping up',
         body: `${fmtSigned(perMonth, 1)} bpm a month across this period. ${perMonth < 0 ? 'A falling RHR usually tracks rising aerobic fitness.' : 'Worth watching alongside sleep, stress and training load.'}`,
-        unit: 'bpm', format: bpm, strength: Math.min(2, Math.abs(perMonth)), confidence: Math.abs(perMonth) >= 1 ? 'strong' : 'moderate', positive: perMonth < 0,
+        unit: 'bpm', format: bpm, headline: `${fmtSigned(perMonth, 1)} bpm / month`, strength: Math.min(2, Math.abs(perMonth)), confidence: Math.abs(perMonth) >= 1 ? 'strong' : 'moderate', positive: perMonth < 0,
       })
     }
   }
@@ -632,6 +647,17 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
   // Stress & battery
   const stressSeries = rangeDays.map((day) => ({ day, value: dayMap.get(day)?.stressAvg ?? null }))
   const battery = days.filter((d) => isNum(d.bbLow) && isNum(d.bbHigh)).map((d) => ({ day: d.day, low: d.bbLow as number, high: d.bbHigh as number, wake: d.bbWake }))
+  const bbWeeks = new Map<string, typeof battery>()
+  for (const b of battery) {
+    const w = weekStart(b.day)
+    bbWeeks.set(w, [...(bbWeeks.get(w) ?? []), b])
+  }
+  const batteryWeekly = [...bbWeeks.entries()].map(([w, list]) => ({
+    day: w < from ? from : w,
+    low: mean(list.map((b) => b.low)) as number,
+    high: mean(list.map((b) => b.high)) as number,
+    wake: mean(list.map((b) => b.wake)),
+  }))
 
   // Sleep
   const durations = nights.map(sleepTotal)
@@ -671,7 +697,7 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
   const otherBreakdown = [...otherTypes.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([t]) => t).join(', ')
   const weeksMap = new Map<string, WeekSports>()
   for (let w = weekStart(from); w <= to; w = shiftDay(w, 7)) {
-    weeksMap.set(w, { week: w, hours: { run: 0, ride: 0, swim: 0, strength: 0, other: 0 }, total: 0, sessions: 0 })
+    weeksMap.set(w, { week: w, hours: emptySports(), total: 0, sessions: 0 })
   }
   for (const a of acts) {
     const wk = weeksMap.get(weekStart(a.day))
@@ -691,6 +717,15 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
   const zones = [0, 0, 0, 0, 0, 0]
   for (const a of acts) a.hrZonesS?.forEach((z, i) => { if (i < 6) zones[i] += z })
   const weeks = [...weeksMap.values()]
+  const dayMapSports = new Map<string, DaySports>(rangeDays.map((day) => [day, { day, minutes: emptySports(), total: 0, sessions: 0 }]))
+  for (const a of acts) {
+    const d = dayMapSports.get(a.day)
+    if (!d || !isNum(a.durationS)) continue
+    const m = a.durationS / 60
+    d.minutes[sportGroup(a.type)] += m
+    d.total += m
+    d.sessions++
+  }
   const fullWeeks = weeks.filter((w) => w.week >= from && shiftDay(w.week, 6) <= to)
 
   // Steps
@@ -717,6 +752,7 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
     const spanDays = dayNum(to) - dayNum(from) + 1
     energy = {
       weeks: [...ew.entries()].sort().map(([week, e]) => ({ week, intake: mean(e.i), burn: mean(e.b) })),
+      days: loggedDays.map((d) => ({ day: d.day, intake: intakeMap.get(d.day) as number, burn: d.totalKcal as number })),
       loggedDays: loggedDays.length,
       avgIntake,
       avgBurn,
@@ -743,6 +779,7 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
       avg: mean(days.map((d) => d.stressAvg)),
       breakdown: { rest: sum(days.map((d) => d.stressRestS)), low: sum(days.map((d) => d.stressLowS)), medium: sum(days.map((d) => d.stressMediumS)), high: sum(days.map((d) => d.stressHighS)) },
       battery,
+      batteryWeekly,
       avgWake: mean(days.map((d) => d.bbWake)),
       avgCharge: mean(days.map((d) => d.bbCharged)),
     },
@@ -788,6 +825,7 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
       distanceM: sum(acts.map((a) => a.distanceM)),
       kcal: sum(acts.map((a) => a.kcal)),
       weeks,
+      daily: [...dayMapSports.values()],
       calendar: [...calMap.entries()].map(([day, c]) => ({ day, ...c })),
       zones,
       activeDays: calMap.size,
@@ -812,17 +850,49 @@ export const STATUS_LABELS: Record<string, string> = {
 }
 export const statusLabel = (s: string | null): string => (s ? STATUS_LABELS[s] ?? s.toLowerCase().replace(/_/g, ' ') : '—')
 
-/** Human value for a Garmin personal record (the export mixes units by type). */
-export function fmtRecord(r: PersonalRecord): { label: string; value: string; group: 'run' | 'ride' | 'swim' | 'steps' | 'other' } {
+export interface RecordView {
+  type: string
+  label: string
+  value: string
+  /** Pace or speed for distance records ("4:05 /km"). */
+  pace: string | null
+  group: 'run' | 'ride' | 'swim' | 'steps' | 'other'
+  achievedAt: string | null
+  /** Sort order inside a group (shorter distances first). */
+  order: number
+}
+
+const RECORD_DISTANCES: [RegExp, number, string][] = [
+  [/^best 1km run/i, 1000, '1K'], [/^best 1 ?mile run/i, 1609.34, 'Mile'], [/^best 5km run/i, 5000, '5K'],
+  [/^best 10km run/i, 10000, '10K'], [/^best half marathon/i, 21097.5, 'Half marathon'], [/^best marathon/i, 42195, 'Marathon'],
+  [/^best 40km cycle/i, 40000, '40 km ride'], [/^best 100m pool swim/i, 100, '100 m swim'], [/^best 400m pool swim/i, 400, '400 m swim'],
+  [/^best 750m pool swim/i, 750, '750 m swim'], [/^best 1000m pool swim/i, 1000, '1,000 m swim'], [/^best 1500m pool swim/i, 1500, '1,500 m swim'],
+]
+
+/** Human view of a Garmin personal record (the export mixes units by type). */
+export function fmtRecord(r: PersonalRecord): RecordView {
   const t = r.type
   const lower = t.toLowerCase()
-  const group = lower.includes('swim') ? 'swim' : lower.includes('cycle') || lower.includes('power') || lower.includes('elevation') ? 'ride' : lower.includes('run') || lower.includes('marathon') || lower.includes('mile') ? 'run' : lower.includes('step') || lower.includes('streak') ? 'steps' : 'other'
+  const group: RecordView['group'] = lower.includes('swim') ? 'swim' : lower.includes('cycle') || lower.includes('power') || lower.includes('elevation') ? 'ride' : lower.includes('run') || lower.includes('marathon') || lower.includes('mile') ? 'run' : lower.includes('step') || lower.includes('streak') ? 'steps' : 'other'
+  const dist = RECORD_DISTANCES.findIndex(([re]) => re.test(t))
+  let label = t.replace(/^Most /, '')
   let value: string
-  if (/^best /i.test(t) || lower.includes('half marathon')) value = fmtRace(r.value)
+  let pace: string | null = null
+  if (dist >= 0) {
+    const [, meters, name] = RECORD_DISTANCES[dist]
+    label = name
+    value = fmtRace(r.value)
+    if (group === 'run') pace = `${fmtRace(r.value / (meters / 1000))} /km`
+    else if (group === 'swim') pace = `${fmtRace(r.value / (meters / 100))} /100 m`
+    else if (group === 'ride') pace = `${((meters / 1000) / (r.value / 3600)).toFixed(1)} km/h`
+  } else if (/^best /i.test(t)) value = fmtRace(r.value)
   else if (lower.startsWith('farthest') || lower.startsWith('longest pool') || lower.startsWith('longest swim')) value = r.value >= 5000 ? fmtKm(r.value) : `${Math.round(r.value).toLocaleString()} m`
   else if (lower.includes('elevation')) value = `${Math.round(r.value).toLocaleString()} m`
   else if (lower.includes('power')) value = `${Math.round(r.value)} W`
   else if (lower.includes('streak')) value = `${Math.round(r.value)} days`
   else value = Math.round(r.value).toLocaleString()
-  return { label: t.replace(/^Best /, '').replace(/^Most /, ''), value, group }
+  return { type: t, label, value, pace, group, achievedAt: r.achievedAt, order: dist >= 0 ? dist : 50 }
 }
+
+/** Records shown until the user picks their own. */
+export const DEFAULT_RECORDS = ['Best 5km Run', 'Best 10km Run', 'Best Half Marathon']

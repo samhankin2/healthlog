@@ -21,11 +21,13 @@
     height?: number
     /** Tick in multiples of this (60 = whole hours when values are minutes). */
     unit?: number
+    /** Days one bar covers (7 for weekly averages). */
+    keyDays?: number
   }
 
   let {
     label, ranges, from, to, format = (v: number) => `${Math.round(v)}`, loLabel = 'Low', hiLabel = 'High', markLabel = 'Mark',
-    domain, invert = false, color = 'var(--viz-line)', height = 200, unit = 1,
+    domain, invert = false, color = 'var(--viz-line)', height = 200, unit = 1, keyDays = 1,
   }: Props = $props()
 
   let width = $state(0)
@@ -49,8 +51,8 @@
   })
   const d0 = $derived(dayNum(from))
   const x = $derived(linear([d0, dayNum(to) + 1], [PAD.left, Math.max(PAD.left + 1, width - PAD.right)]))
-  const slot = $derived(Math.max(1, x(d0 + 1) - x(d0)))
-  const barW = $derived(Math.max(1.5, Math.min(10, slot * 0.7)))
+  const slot = $derived(Math.max(1, x(d0 + keyDays) - x(d0)))
+  const barW = $derived(Math.max(1.5, Math.min(keyDays > 1 ? 14 : 10, slot * 0.6)))
   const ticks = $derived(dayTicks(from, to, width < 420 ? 4 : 6))
   const shown = $derived(ranges.filter((r) => r.day >= from && r.day <= to))
 
@@ -103,7 +105,7 @@
     </svg>
     {#if hr}
       <div class="tip" style:left="{Math.min(Math.max(x(dayNum(hr.day)) + slot / 2, 80), width - 80)}px" role="status">
-        <span class="tip-day">{fmtDayLong(hr.day)}</span>
+        <span class="tip-day">{keyDays > 1 ? `Week of ${fmtDayLong(hr.day)} (average)` : fmtDayLong(hr.day)}</span>
         <span>{hiLabel} <b>{format(hr.hi)}</b></span>
         <span>{loLabel} <b>{format(hr.lo)}</b></span>
         {#if isNum(hr.mark)}<span>{markLabel} <b>{format(hr.mark)}</b></span>{/if}

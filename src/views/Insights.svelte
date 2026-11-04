@@ -10,13 +10,15 @@
   import Ring from '../lib/viz/Ring.svelte'
   import Sparkline from '../lib/viz/Sparkline.svelte'
   import SegmentBar from '../lib/viz/SegmentBar.svelte'
+  import BalanceBars from '../lib/viz/BalanceBars.svelte'
+  import Sheet from '../lib/components/Sheet.svelte'
   import { api } from '../lib/api'
   import { today } from '../lib/format'
   import { activityTypeLabel } from '../lib/activity'
   import { fmtDayLong, fmtDayShort } from '../lib/viz/scale'
   import {
-    RANGES, SPORTS, buildInsights, dayNum, fmtClockMin, fmtHM, fmtKm, fmtPaceSec, fmtRace, fmtRecord, fmtSigned, isNum,
-    shiftDay, sportGroup, statusLabel, weekStart, type Finding, type RangeKey, type Vital,
+    DEFAULT_RECORDS, RANGES, SPORTS, buildInsights, dayNum, fmtClockMin, fmtHM, fmtKm, fmtPaceSec, fmtRace, fmtRecord, fmtSigned, isNum,
+    shiftDay, sportGroup, statusLabel, weekStart, type Finding, type RangeKey, type RecordView, type Vital,
   } from '../lib/insights'
   import type { InsightsPayload } from '../lib/types'
 
@@ -54,7 +56,10 @@
 
   /* ---------------- presentation helpers ---------------- */
 
-  const SPORT_COLORS: Record<string, string> = { run: 'var(--viz-run)', ride: 'var(--viz-ride)', swim: 'var(--viz-swim)', strength: 'var(--viz-strength)', other: 'var(--viz-other)' }
+  const SPORT_COLORS: Record<string, string> = {
+    run: 'var(--viz-run)', ride: 'var(--viz-ride)', swim: 'var(--viz-swim)', strength: 'var(--viz-strength)',
+    tennis: 'var(--viz-tennis)', hike: 'var(--viz-hike)', pilates: 'var(--viz-pilates)', other: 'var(--viz-other)',
+  }
   const STAGES = [
     { key: 'deepS', label: 'Deep', color: 'var(--viz-deep)' },
     { key: 'remS', label: 'REM', color: 'var(--viz-rem)' },
@@ -118,7 +123,19 @@
     return out
   })
   const statusesPresent = $derived([...new Set(statusSegments.map((s) => s.status))])
-  const sportBars = $derived(ins ? ins.training.weeks.map((w) => ({ key: w.week, heading: `Week of ${fmtDayShort(w.week)} · ${w.sessions} sessions`, values: SPORTS.map((s) => w.hours[s.key]) })) : [])
+  /** Short ranges show every day; longer ones a bar per week. */
+  const shortRange = $derived(dayNum(todayDay) - dayNum(from) < 45)
+  const sportsPresent = $derived(ins ? SPORTS.filter((s) => ins!.training.totals.find((t) => t.key === s.key && t.sessions > 0)) : [])
+  const sportBars = $derived.by(() => {
+    if (!ins) return []
+    if (shortRange) {
+      return ins.training.daily.filter((d) => d.total > 0).map((d) => ({
+        key: d.day, heading: `${fmtDayLong(d.day)} · ${d.sessions} session${d.sessions === 1 ? '' : 's'}`, values: sportsPresent.map((s) => d.minutes[s.key]),
+      }))
+    }
+    return ins.training.weeks.map((w) => ({ key: w.week, heading: `Week of ${fmtDayShort(w.week)} · ${w.sessions} sessions`, values: sportsPresent.map((s) => w.hours[s.key]) }))
+  })
+  const minFmt = (v: number): string => (v <= 0 ? '0' : v >= 60 ? `${Math.floor(v / 60)}h${Math.round(v % 60) ? ` ${Math.round(v % 60)}m` : ''}` : `${Math.round(v)}m`)
   const zoneParts = $derived.by(() => {
     if (!ins) return []
     const z = ins.training.zones
@@ -132,11 +149,73 @@
       { label: lbl(5, 'Z5 Max'), value: z[5], color: 'color-mix(in oklab, var(--color-accent) 70%, black)' },
     ]
   })
-  const GROUP_ORDER = ['run', 'ride', 'swim', 'steps', 'other']
-  const DIST_ORDER = [/400m|1km/i, /750m|1 ?mile/i, /1000m|5 ?km/i, /1500m|10 ?km|40 ?km/i, /half/i, /^marathon/i, /farthest|longest/i, /power|elevation/i]
-  const rank = (label: string): number => { const i = DIST_ORDER.findIndex((re) => re.test(label)); return i < 0 ? 99 : i }
-  const records = $derived(ins ? ins.records.map((r) => ({ ...r, ...fmtRecord(r) })).sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || rank(a.label) - rank(b.label)) : [])
-  const balanceSeries = $derived(ins?.energy ? ins.energy.weeks.map((w) => ({ day: w.week, value: isNum(w.intake) && isNum(w.burn) ? w.intake - w.burn : null })) : [])
+  /* ---- personal records: the user picks which ones show ---- */
+  const RECORDS_KEY = 'healthlog.insights.records'
+  const GROUP_ORDER: RecordView['group'][] = ['run', 'ride', 'swim', 'steps', 'other']
+  const GROUP_LABEL: Record<RecordView['group'], string> = { run: 'Running', ride: 'Cycling', swim: 'Swimming', steps: 'Steps & streaks', other: 'Other' }
+  const GROUP_COLOR: Record<RecordView['group'], string> = { run: 'var(--viz-run)', ride: 'var(--viz-ride)', swim: 'var(--viz-swim)', steps: 'var(--color-accent)', other: 'var(--viz-other)' }
+  const GROUP_ICON: Record<RecordView['group'], 'activity' | 'zap' | 'flag' | 'trending-up' | 'award'> = { run: 'activity', ride: 'zap', swim: 'flag', steps: 'trending-up', other: 'award' }
+  let chosen = $state<string[]>(JSON.parse(localStorage.getItem(RECORDS_KEY) ?? 'null') ?? DEFAULT_RECORDS)
+  let pickerOpen = $state(false)
+  const allRecords = $derived(ins ? ins.records.map(fmtRecord).sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || a.order - b.order || a.label.localeCompare(b.label)) : [])
+  const records = $derived(allRecords.filter((r) => chosen.includes(r.type)))
+  const recordGroups = $derived(GROUP_ORDER.map((g) => ({ group: g, list: allRecords.filter((r) => r.group === g) })).filter((g) => g.list.length))
+  function toggleRecord(type: string): void {
+    chosen = chosen.includes(type) ? chosen.filter((t) => t !== type) : [...chosen, type]
+    localStorage.setItem(RECORDS_KEY, JSON.stringify(chosen))
+  }
+  function resetRecords(): void {
+    chosen = [...DEFAULT_RECORDS]
+    localStorage.setItem(RECORDS_KEY, JSON.stringify(chosen))
+  }
+  function ago(ts: string | null): string {
+    if (!ts) return ''
+    const days = dayNum(todayDay) - dayNum(ts.slice(0, 10))
+    if (days <= 0) return 'today'
+    if (days < 14) return `${days} day${days === 1 ? '' : 's'} ago`
+    if (days < 60) return `${Math.round(days / 7)} weeks ago`
+    if (days < 365) return `${Math.round(days / 30.4)} months ago`
+    const y = days / 365
+    return `${y < 1.5 ? 'a year' : `${Math.round(y)} years`} ago`
+  }
+
+  /* ---- energy balance: daily for a month or less, weekly beyond ---- */
+  const dailyEnergy = $derived(dayNum(todayDay) - dayNum(from) <= 31)
+  const balanceBars = $derived.by(() => {
+    const e = ins?.energy
+    if (!e) return []
+    if (dailyEnergy) {
+      return e.days.map((d) => ({ key: d.day, heading: fmtDayLong(d.day), value: d.intake - d.burn, detail: `Ate ${Math.round(d.intake).toLocaleString()} · burned ${Math.round(d.burn).toLocaleString()} kcal` }))
+    }
+    return e.weeks.filter((w) => isNum(w.intake) && isNum(w.burn)).map((w) => ({
+      key: w.week, heading: `Week of ${fmtDayShort(w.week)} (daily average)`, value: (w.intake as number) - (w.burn as number),
+      detail: `Ate ${Math.round(w.intake as number).toLocaleString()} · burned ${Math.round(w.burn as number).toLocaleString()} kcal a day`,
+    }))
+  })
+
+  /* ---- findings ---- */
+  function findingDelta(f: Finding): string {
+    if (f.headline) return f.headline
+    if (!f.a || !f.b) return ''
+    const d = f.a.value - f.b.value
+    if (f.unit === 'clock' || f.unit === 'min') return `${fmtSigned(d)} min`
+    if (f.unit === 'bpm') return `${fmtSigned(d, 1)} bpm`
+    if (f.unit === 'score') return `${fmtSigned(d)} pts`
+    return fmtSigned(d)
+  }
+  const FINDING_METRIC: Record<string, string> = {
+    'bedtime-score': 'sleep score', 'training-deep': 'deep sleep', 'training-rhr': 'next-morning resting HR', 'late-training': 'sleep score',
+    'sleep-stress': 'stress that day', 'stress-battery': 'Body Battery at wake', 'steps-sleep': 'sleep score', 'weekend-shift': 'bedtime on Fri & Sat',
+    'vo2-trend': 'over this range', 'rhr-trend': 'resting heart rate',
+  }
+  const CONF_DOTS: Record<Finding['confidence'], number> = { strong: 3, moderate: 2, suggestive: 1 }
+  function dumbbell(f: Finding): { a: number; b: number } {
+    const lo = Math.min(f.a!.value, f.b!.value)
+    const hi = Math.max(f.a!.value, f.b!.value)
+    const pad = (hi - lo) * 0.6 || 1
+    const pos = (v: number): number => 6 + ((v - (lo - pad)) / (hi - lo + 2 * pad)) * 88
+    return { a: pos(f.a!.value), b: pos(f.b!.value) }
+  }
   const recentActs = $derived(ins ? [...ins.training.activities].reverse().slice(0, 6) : [])
   const lastImport = $derived(data?.meta.lastImport ?? null)
   const stressDays = $derived(Math.max(1, ins ? ins.stress.series.filter((p) => isNum(p.value)).length : 1))
@@ -208,42 +287,6 @@
         {/each}
       </div>
     </section>
-
-    <!-- ============================ FINDINGS ============================ -->
-    {#if ins.findings.length}
-      <section class="block" aria-labelledby="findings-title">
-        <div class="block-head">
-          <h2 id="findings-title">What your data says</h2>
-          <p>Patterns tested on your own days in this range — shown only when the difference is bigger than day-to-day noise.</p>
-        </div>
-        <div class="findings" role="list" aria-label="Findings">
-          {#each ins.findings as f (f.id)}
-            <article class="finding card" role="listitem" data-positive={f.positive}>
-              <div class="finding-top">
-                <span class="cat"><Icon name={CATEGORY[f.category].icon} size={14} />{CATEGORY[f.category].label}</span>
-                <span class="conf conf-{f.confidence}" title="Based on effect size and sample">{f.confidence}</span>
-              </div>
-              <h3>{f.title}</h3>
-              <p>{f.body}</p>
-              {#if f.a && f.b}
-                {@const lo = f.unit === 'clock' ? Math.min(f.a.value, f.b.value) - 60 : 0}
-                {@const hi = Math.max(f.a.value, f.b.value) - lo}
-                <div class="compare">
-                  {#each [f.a, f.b] as side, i (i)}
-                    <div class="cmp-row" class:lead={i === 0}>
-                      <span class="cmp-label">{side.label}</span>
-                      <span class="cmp-track"><span class="cmp-fill" style:width="{Math.max(6, ((side.value - lo) / hi) * 100)}%"></span></span>
-                      <span class="cmp-value">{f.format(side.value)}</span>
-                    </div>
-                  {/each}
-                  <span class="cmp-n">{f.a.n} vs {f.b.n} days</span>
-                </div>
-              {/if}
-            </article>
-          {/each}
-        </div>
-      </section>
-    {/if}
 
     <!-- ============================ FITNESS ============================ -->
     {#if ins.fitness.vo2.length || ins.fitness.races.some((r) => r.now)}
@@ -367,8 +410,13 @@
             <h3><Icon name="battery" size={16} /> Body Battery</h3>
             <span class="head-num">{isNum(ins.stress.avgWake) ? Math.round(ins.stress.avgWake) : '—'}<small> avg at wake</small></span>
           </div>
-          <RangeBars label="Daily Body Battery range" ranges={ins.stress.battery.map((b) => ({ day: b.day, lo: b.low, hi: b.high, mark: b.wake }))} {from} to={todayDay} domain={[0, 100]} loLabel="Lowest" hiLabel="Highest" markLabel="At wake" height={190} />
-          <p class="chart-note">Bar: the day’s low to high. Dot: where you woke up.</p>
+          {#if daily}
+            <RangeBars label="Daily Body Battery range" ranges={ins.stress.battery.map((b) => ({ day: b.day, lo: b.low, hi: b.high, mark: b.wake }))} {from} to={todayDay} domain={[0, 100]} loLabel="Lowest" hiLabel="Highest" markLabel="At wake" height={190} />
+            <p class="chart-note">Bar: the day’s low to high. Dot: where you woke up.</p>
+          {:else}
+            <RangeBars label="Weekly average Body Battery range" ranges={ins.stress.batteryWeekly.map((b) => ({ day: b.day, lo: b.low, hi: b.high, mark: b.wake }))} {from} to={todayDay} keyDays={7} domain={[0, 100]} loLabel="Average low" hiLabel="Average high" markLabel="Average at wake" height={190} />
+            <p class="chart-note">Weekly averages. Bar: typical low to high. Dot: typical wake-up level.</p>
+          {/if}
         </article>
         <article class="card pad span-2">
           <div class="chart-head">
@@ -403,10 +451,14 @@
         </div>
         <article class="card pad">
           <div class="chart-head">
-            <h3>Hours per week, by sport</h3>
-            <ul class="legend">{#each SPORTS as s (s.key)}<li><i style:background={SPORT_COLORS[s.key]}></i>{s.key === 'other' && ins.training.otherBreakdown ? `Other (${ins.training.otherBreakdown})` : s.label}</li>{/each}</ul>
+            <h3>{shortRange ? 'Training each day, by sport' : 'Hours per week, by sport'}</h3>
+            <ul class="legend">{#each sportsPresent as s (s.key)}<li><i style:background={SPORT_COLORS[s.key]}></i>{s.key === 'other' && ins.training.otherBreakdown ? `${s.label} (${ins.training.otherBreakdown})` : s.label}</li>{/each}</ul>
           </div>
-          <StackedBars label="Training hours per week by sport" bars={sportBars} series={SPORTS.map((s) => ({ label: s.label, color: SPORT_COLORS[s.key] }))} {from} to={todayDay} keyDays={7} format={hrsFmt} height={200} />
+          {#if shortRange}
+            <StackedBars label="Training minutes per day by sport" bars={sportBars} series={sportsPresent.map((s) => ({ label: s.label, color: SPORT_COLORS[s.key] }))} {from} to={todayDay} keyDays={1} format={minFmt} unit={30} height={210} />
+          {:else}
+            <StackedBars label="Training hours per week by sport" bars={sportBars} series={sportsPresent.map((s) => ({ label: s.label, color: SPORT_COLORS[s.key] }))} {from} to={todayDay} keyDays={7} format={hrsFmt} height={210} />
+          {/if}
           <table class="sport-table">
             <caption class="sr-only">Training totals by sport for this range</caption>
             <thead><tr><th scope="col">Sport</th><th scope="col" class="num">Sessions</th><th scope="col" class="num">Time</th><th scope="col" class="num">Distance</th><th scope="col" class="num wide">kcal</th></tr></thead>
@@ -423,11 +475,11 @@
             </tbody>
           </table>
         </article>
+        <article class="card pad">
+          <div class="chart-head"><h3>Training calendar</h3><p class="chart-note">Shade = how long you trained, relative to your own typical session.</p></div>
+          <Calendar label="Training minutes per day" values={ins.training.calendar.map((c) => ({ day: c.day, value: c.minutes, detail: c.load ? `load ${Math.round(c.load)}` : undefined }))} {from} to={todayDay} format={(v) => `${Math.round(v)} min`} />
+        </article>
         <div class="grid-2">
-          <article class="card pad">
-            <div class="chart-head"><h3>Training calendar</h3></div>
-            <Calendar label="Training minutes per day" values={ins.training.calendar.map((c) => ({ day: c.day, value: c.minutes, detail: c.load ? `load ${Math.round(c.load)}` : undefined }))} {from} to={todayDay} format={(v) => `${Math.round(v)} min`} />
-          </article>
           <article class="card pad">
             <div class="chart-head"><h3>Heart-rate zones</h3></div>
             <SegmentBar label="Training time by heart-rate zone" parts={zoneParts} format={(v) => hrsFmt(v / 3600)} />
@@ -435,7 +487,9 @@
               {@const easy = (ins.training.zones[1] + ins.training.zones[2]) / Math.max(1, ins.training.zones.slice(1).reduce((a, b) => a + b, 0))}
               <p class="chart-note">{Math.round(easy * 100)}% of your zoned time is easy (Z1–Z2). Endurance coaches usually aim for about 80%.</p>
             {/if}
-            <h4 class="recent-title">Latest sessions</h4>
+          </article>
+          <article class="card pad">
+            <div class="chart-head"><h3>Latest sessions</h3></div>
             <ul class="recent">
               {#each recentActs as a (a.id)}
                 <li>
@@ -450,6 +504,49 @@
       </section>
     {/if}
 
+    <!-- ============================ FINDINGS ============================ -->
+    {#if ins.findings.length}
+      <section class="block" aria-labelledby="findings-title">
+        <div class="block-head">
+          <h2 id="findings-title"><Icon name="sparkles" size={20} /> What your data says</h2>
+          <p>Patterns tested on your own days in this range. Each one only shows when the gap is bigger than day-to-day noise.</p>
+        </div>
+        <div class="findings" role="list" aria-label="Findings">
+          {#each ins.findings as f (f.id)}
+            <article class="finding" role="listitem" data-good={f.positive}>
+              <div class="f-top">
+                <span class="f-icon" aria-hidden="true"><Icon name={CATEGORY[f.category].icon} size={16} /></span>
+                <span class="f-cat">{CATEGORY[f.category].label}</span>
+                <span class="f-conf" title="Evidence: {f.confidence}">
+                  <span class="sr-only">Evidence: {f.confidence}</span>
+                  {#each [1, 2, 3] as d (d)}<i class:on={d <= CONF_DOTS[f.confidence]} aria-hidden="true"></i>{/each}
+                </span>
+              </div>
+              <h3>{f.title}</h3>
+              <div class="f-delta">
+                <b>{findingDelta(f)}</b>
+                <span>{FINDING_METRIC[f.id] ?? f.unit}</span>
+              </div>
+              {#if f.a && f.b}
+                {@const pos = dumbbell(f)}
+                <div class="dumbbell" aria-hidden="true">
+                  <span class="db-track"></span>
+                  <span class="db-link" style:left="{Math.min(pos.a, pos.b)}%" style:width="{Math.abs(pos.a - pos.b)}%"></span>
+                  <span class="db-dot b" style:left="{pos.b}%"></span>
+                  <span class="db-dot a" style:left="{pos.a}%"></span>
+                </div>
+                <dl class="db-legend">
+                  <div class="lead"><dt><i></i>{f.a.label}</dt><dd>{f.format(f.a.value)} <small>· {f.a.n} days</small></dd></div>
+                  <div><dt><i></i>{f.b.label}</dt><dd>{f.format(f.b.value)} <small>· {f.b.n} days</small></dd></div>
+                </dl>
+              {/if}
+              <p>{f.body}</p>
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
     <!-- ============================ ENERGY ============================ -->
     {#if ins.energy}
       <section class="block" aria-labelledby="energy-title">
@@ -460,29 +557,66 @@
           <div class="stat"><span>Balance</span><b>{isNum(ins.energy.balance) ? fmtSigned(ins.energy.balance) : '—'}</b><em>kcal / day</em></div>
           <div class="stat"><span>Scale says</span><b>{isNum(ins.energy.weightChange) ? `${fmtSigned(ins.energy.weightChange, 1)} kg` : '—'}</b><em>{isNum(ins.energy.impliedKg) ? `maths says ${fmtSigned(ins.energy.impliedKg, 1)} kg` : ''}</em></div>
         </div>
-        {#if balanceSeries.length >= 2}
+        {#if balanceBars.length >= 2}
           <article class="card pad">
-            <div class="chart-head"><h3>Weekly average balance</h3><p class="chart-note">Above zero: eating more than the watch says you burn.</p></div>
-            <LineChart label="Weekly calorie balance" {from} to={todayDay} line={balanceSeries} raw={balanceSeries} include={[0]} format={(v) => fmtSigned(v)} lineLabel="Balance" rawLabel="Week" height={170} />
+            <div class="chart-head">
+              <h3>{dailyEnergy ? 'Daily balance' : 'Weekly balance (daily average)'}</h3>
+              <ul class="legend"><li><i style:background="var(--viz-surplus)"></i>Ate more than burned</li><li><i style:background="var(--viz-deficit)"></i>Burned more than ate</li></ul>
+            </div>
+            <BalanceBars label="{dailyEnergy ? 'Daily' : 'Weekly'} calories in minus calories out" bars={balanceBars} {from} to={todayDay} keyDays={dailyEnergy ? 1 : 7} format={(v) => Math.round(v).toLocaleString()} height={200} />
+            <p class="chart-note">Only days with meals logged count. Burn is the watch’s total (resting + active).</p>
           </article>
         {/if}
       </section>
     {/if}
 
     <!-- ============================ RECORDS ============================ -->
-    {#if records.length}
+    {#if allRecords.length}
       <section class="block" aria-labelledby="records-title">
-        <div class="block-head"><h2 id="records-title"><Icon name="award" size={20} /> Personal records</h2></div>
-        <div class="records">
-          {#each records as r (r.type)}
-            <article class="record">
-              <span class="rec-label">{r.label}</span>
-              <span class="rec-value">{r.value}</span>
-              {#if r.achievedAt}<span class="rec-date">{fmtDayShort(r.achievedAt.slice(0, 10))} {r.achievedAt.slice(0, 4)}</span>{/if}
-            </article>
+        <div class="block-head row">
+          <h2 id="records-title"><Icon name="award" size={20} /> Personal records</h2>
+          <button class="button button--secondary pick" type="button" onclick={() => (pickerOpen = true)}><Icon name="settings" size={16} /> Choose records</button>
+        </div>
+        {#if records.length}
+          <div class="records">
+            {#each records as r (r.type)}
+              <article class="pr" style:--pr={GROUP_COLOR[r.group]}>
+                <div class="pr-top">
+                  <span class="pr-icon" aria-hidden="true"><Icon name={GROUP_ICON[r.group]} size={16} /></span>
+                  <span class="pr-label">{r.label}</span>
+                </div>
+                <span class="pr-value">{r.value}</span>
+                <div class="pr-meta">
+                  {#if r.pace}<span class="pr-pace">{r.pace}</span>{/if}
+                  {#if r.achievedAt}<span>{fmtDayShort(r.achievedAt.slice(0, 10))} {r.achievedAt.slice(0, 4)} · {ago(r.achievedAt)}</span>{/if}
+                </div>
+              </article>
+            {/each}
+          </div>
+        {:else}
+          <p class="chart-note">No records selected. Use “Choose records” to pick the ones you care about.</p>
+        {/if}
+      </section>
+      <Sheet open={pickerOpen} title="Personal records" subtitle="Pick the records to show. Saved on this device." onclose={() => (pickerOpen = false)}>
+        <div class="picker">
+          {#each recordGroups as g (g.group)}
+            <fieldset>
+              <legend><i style:background={GROUP_COLOR[g.group]}></i>{GROUP_LABEL[g.group]}</legend>
+              {#each g.list as r (r.type)}
+                <label class="pick-row">
+                  <input type="checkbox" checked={chosen.includes(r.type)} onchange={() => toggleRecord(r.type)} />
+                  <span class="pick-name">{r.label}</span>
+                  <span class="pick-val">{r.value}</span>
+                </label>
+              {/each}
+            </fieldset>
           {/each}
         </div>
-      </section>
+        {#snippet actions()}
+          <button class="button button--secondary" type="button" onclick={resetRecords}>Defaults</button>
+          <button class="button button--primary" type="button" onclick={() => (pickerOpen = false)}>Done</button>
+        {/snippet}
+      </Sheet>
     {/if}
 
     <section class="block" aria-label="Import">
@@ -545,23 +679,35 @@
   .legend i, .status-legend i, .sport-table i, .recent i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
 
   /* findings */
-  .findings { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); gap: var(--space-4); }
-  .finding { display: flex; padding: var(--space-5); flex-direction: column; gap: var(--space-2); }
-  .finding h3 { margin: var(--space-1) 0 0; font-size: var(--text-lg); letter-spacing: -0.015em; line-height: 1.3; }
-  .finding p { margin: 0; color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.5; }
-  .finding-top { display: flex; align-items: center; justify-content: space-between; }
-  .cat { display: inline-flex; padding: 2px 9px 2px 7px; align-items: center; gap: 5px; border-radius: var(--radius-pill); background: var(--color-accent-soft); color: var(--color-accent); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
-  .conf { color: var(--color-text-subtle); font-size: var(--text-xs); text-transform: capitalize; }
-  .conf-strong { color: var(--color-text); font-weight: var(--weight-semibold); }
-  .compare { display: grid; margin-top: auto; padding-top: var(--space-3); gap: 6px; }
-  .cmp-row { display: grid; align-items: center; grid-template-columns: minmax(6rem, 8.5rem) 1fr auto; gap: var(--space-2); font-size: var(--text-xs); }
-  .cmp-label { overflow: hidden; color: var(--color-text-muted); text-overflow: ellipsis; white-space: nowrap; }
-  .cmp-track { height: 8px; border-radius: var(--radius-pill); background: var(--color-surface-sunken); }
-  .cmp-fill { display: block; height: 100%; border-radius: inherit; background: var(--color-border-strong); }
-  .lead .cmp-fill { background: var(--color-accent); }
-  .lead .cmp-label { color: var(--color-text); font-weight: var(--weight-medium); }
-  .cmp-value { min-width: 3.25rem; font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; text-align: right; }
-  .cmp-n { color: var(--color-text-subtle); font-size: 0.6875rem; }
+  .findings { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr)); gap: var(--space-4); }
+  .finding { display: flex; padding: var(--space-5); flex-direction: column; gap: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); box-shadow: var(--shadow-card); }
+  .f-top { display: flex; align-items: center; gap: var(--space-2); }
+  .f-icon { display: grid; width: 1.9rem; height: 1.9rem; place-items: center; border-radius: 50%; background: var(--color-accent-soft); color: var(--color-accent); }
+  .f-cat { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .f-conf { display: inline-flex; margin-left: auto; gap: 3px; }
+  .f-conf i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-surface-sunken); box-shadow: inset 0 0 0 1px var(--color-border); }
+  .f-conf i.on { background: var(--color-accent); box-shadow: none; }
+  .finding h3 { margin: 0; font-size: var(--text-lg); letter-spacing: -0.015em; line-height: 1.3; }
+  .f-delta { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+  .f-delta b { font-size: var(--text-2xl); font-weight: var(--weight-bold); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .finding[data-good='true'] .f-delta b { color: var(--color-up); }
+  .finding[data-good='false'] .f-delta b { color: var(--color-text); }
+  .f-delta span { color: var(--color-text-muted); font-size: var(--text-sm); }
+  .dumbbell { position: relative; height: 18px; }
+  .db-track { position: absolute; top: 8px; right: 0; left: 0; height: 2px; border-radius: 2px; background: var(--color-surface-sunken); }
+  .db-link { position: absolute; top: 7px; height: 4px; border-radius: 2px; background: color-mix(in oklab, var(--color-accent) 35%, var(--color-surface)); }
+  .db-dot { position: absolute; top: 2px; width: 14px; height: 14px; margin-left: -7px; border: 2px solid var(--color-surface); border-radius: 50%; box-shadow: 0 0 0 1px var(--color-border); }
+  .db-dot.a { background: var(--color-accent); }
+  .db-dot.b { background: var(--color-border-strong); }
+  .db-legend { display: grid; margin: 0; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  .db-legend div { min-width: 0; }
+  .db-legend dt { display: flex; align-items: center; gap: 6px; overflow: hidden; color: var(--color-text-muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+  .db-legend dt i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--color-border-strong); }
+  .db-legend .lead dt i { background: var(--color-accent); }
+  .db-legend .lead dt { color: var(--color-text); font-weight: var(--weight-medium); }
+  .db-legend dd { margin: 2px 0 0; font-size: var(--text-md); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
+  .db-legend small { color: var(--color-text-subtle); font-size: 0.6875rem; font-weight: var(--weight-regular); }
+  .finding p { margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--color-border); color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.5; }
 
   /* fitness */
   .kpi-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
@@ -624,11 +770,27 @@
   .r-num { font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
 
   /* records */
-  .records { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 10.5rem), 1fr)); gap: var(--space-3); }
-  .record { display: flex; padding: var(--space-4); flex-direction: column; gap: 2px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: linear-gradient(160deg, var(--color-surface) 60%, var(--color-accent-soft)); }
-  .rec-label { color: var(--color-text-muted); font-size: var(--text-xs); }
-  .rec-value { font-size: var(--text-xl); font-weight: var(--weight-bold); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-  .rec-date { color: var(--color-text-subtle); font-size: 0.6875rem; }
+  .block-head.row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+  .pick { min-height: 2.5rem; padding: var(--space-2) var(--space-4); font-size: var(--text-sm); }
+  .records { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: var(--space-4); }
+  .pr { position: relative; display: flex; padding: var(--space-5); flex-direction: column; gap: var(--space-2); overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-card);
+    background: radial-gradient(120% 90% at 100% 0%, color-mix(in oklab, var(--pr) 14%, transparent), transparent 60%), var(--color-surface); box-shadow: var(--shadow-card); }
+  .pr::before { position: absolute; top: 0; left: 0; width: 100%; height: 3px; background: var(--pr); content: ''; }
+  .pr-top { display: flex; align-items: center; gap: var(--space-2); }
+  .pr-icon { display: grid; width: 1.9rem; height: 1.9rem; place-items: center; border-radius: 50%; background: color-mix(in oklab, var(--pr) 16%, var(--color-surface)); color: var(--color-text); }
+  .pr-label { font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+  .pr-value { font-size: clamp(2rem, 6vw, 2.6rem); font-weight: var(--weight-bold); letter-spacing: -0.04em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .pr-meta { display: flex; flex-direction: column; gap: 2px; color: var(--color-text-muted); font-size: var(--text-xs); }
+  .pr-pace { color: var(--color-text); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+  .picker { display: flex; flex-direction: column; gap: var(--space-5); }
+  .picker fieldset { margin: 0; padding: 0; border: 0; }
+  .picker legend { display: flex; margin-bottom: var(--space-2); align-items: center; gap: var(--space-2); color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .picker legend i { width: 10px; height: 10px; border-radius: 3px; }
+  .pick-row { display: flex; min-height: var(--touch-target); padding: 0 var(--space-2); align-items: center; gap: var(--space-3); border-radius: var(--radius-md); cursor: pointer; }
+  .pick-row:hover { background: var(--color-surface-sunken); }
+  .pick-row input { width: 1.2rem; height: 1.2rem; accent-color: var(--color-accent); }
+  .pick-name { flex: 1; font-weight: var(--weight-medium); }
+  .pick-val { color: var(--color-text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 
   .promise { display: grid; margin: 0; padding: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: var(--space-3); list-style: none; }
   .promise li { display: flex; padding: var(--space-4); align-items: flex-start; gap: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); color: var(--color-text-muted); font-size: var(--text-sm); }
