@@ -11,17 +11,20 @@
   import { fmtDayLong } from '../viz/scale'
   import {
     EQUIPMENT, EQUIPMENT_LABEL, MUSCLES, MUSCLE_LABEL, PR_LABEL, STATUS_LABEL, defaultIncrement, fmtSets, fmtTonnage, fmtW,
-    type ExerciseStats,
+    type BodyweightAt, type ExerciseStats,
   } from '../lifting'
+  import { VERDICT_LABEL, liftTrend } from '../liftAnalysis'
   import { PLAN_LABEL, defaultRange, fmtPlan, fmtRange, type RepRange } from '../progression'
   import { editExercise, setArchived } from '../lifting.svelte'
   import type { Equipment, Muscle } from '../types'
 
-  interface Props { stats: ExerciseStats }
-  let { stats }: Props = $props()
+  interface Props { stats: ExerciseStats; bw?: BodyweightAt }
+  let { stats, bw = () => null }: Props = $props()
 
   const ex = $derived(stats.exercise)
   const todayDay = today()
+  const trend = $derived(liftTrend(stats, bw, todayDay))
+  const pct = (v: number): string => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}%`
   const RANGES = [{ value: '90', label: '3M' }, { value: '182', label: '6M' }, { value: '365', label: '1Y' }, { value: '0', label: 'All' }]
   let range = $state(localStorage.getItem('healthlog.lifting.range') ?? '182')
   function setRange(v: string): void {
@@ -136,6 +139,17 @@
         {:else if stats.status === 'steady'}Holding. {stats.sessionsSinceBest} session{stats.sessionsSinceBest === 1 ? '' : 's'} since your best.
         {:else}Log a couple more sessions to see a trend.{/if}
       </p>
+      {#if trend}
+        <div class="st-trend">
+          <p><span>Trend · {VERDICT_LABEL[trend.verdict]}</span><b>{pct(trend.rate)} / month</b>{#if trend.ci}<em>90 % range {pct(trend.ci[0])} to {pct(trend.ci[1])}</em>{/if}</p>
+          <ul>
+            {#if trend.noise !== null}<li>Your sessions swing about ±{trend.noise.toFixed(1)}% around the trend, so smaller changes are just day-to-day noise.</li>{/if}
+            {#if trend.change}<li>Progress {trend.change.after < trend.change.before ? 'slowed' : 'sped up'} from {fmtLong(trend.change.day)}: {pct(trend.change.before)} → {pct(trend.change.after)} a month.</li>{/if}
+            {#if trend.projection}<li>If the trend holds: about {Math.round(trend.projection.value)} {trend.unit} in 8 weeks (likely {Math.round(trend.projection.lo)}–{Math.round(trend.projection.hi)}).</li>{/if}
+            {#if trend.relative !== null}<li>{trend.relative.toFixed(2)}× your bodyweight.</li>{/if}
+          </ul>
+        </div>
+      {/if}
       {#if stats.next}
         <div class="st-next">
           <p class="st-line"><span>Next time · {PLAN_LABEL[stats.next.kind]}</span><b>{fmtPlan(stats.next, ex)}</b><em>{stats.next.note}</em></p>
@@ -243,6 +257,11 @@
   [data-status='stalled'] .st-pill, [data-status='regressing'] .st-pill { background: var(--color-down-soft); color: var(--color-down); }
   .st-change { color: var(--color-text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .st-copy { margin: 0; font-size: var(--text-sm); }
+  .st-trend { display: flex; padding-top: var(--space-2); flex-direction: column; gap: var(--space-1); border-top: 1px solid var(--color-border); font-variant-numeric: tabular-nums; }
+  .st-trend p { display: flex; margin: 0; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); }
+  .st-trend p span { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: var(--tracking-label); }
+  .st-trend p em { flex-basis: 100%; color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
+  .st-trend ul { display: flex; margin: 0; padding-left: 1.1rem; flex-direction: column; gap: 2px; color: var(--color-text-muted); font-size: var(--text-sm); }
   .st-next { display: flex; padding-top: var(--space-2); flex-direction: column; align-items: flex-start; gap: var(--space-2); border-top: 1px solid var(--color-border); }
   .st-line { display: flex; margin: 0; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); font-variant-numeric: tabular-nums; }
   .why { display: flex; margin: 0; padding-left: 1.1rem; flex-direction: column; gap: 4px; color: var(--color-text-muted); font-size: var(--text-sm); }

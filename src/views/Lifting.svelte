@@ -5,6 +5,7 @@
   import WorkoutLogger from '../lib/lift/WorkoutLogger.svelte'
   import ExerciseDetail from '../lib/lift/ExerciseDetail.svelte'
   import RoutineEditor from '../lib/lift/RoutineEditor.svelte'
+  import LiftAnalysis from '../lib/lift/LiftAnalysis.svelte'
   import { app, navigate, subpath } from '../lib/state.svelte'
   import { fmtLong, today } from '../lib/format'
   import {
@@ -62,10 +63,12 @@
 
 {#if page === 'log' && pageId}
   <WorkoutLogger workoutId={pageId} {stats} {exMap} {bw} />
+{:else if page === 'analysis'}
+  <LiftAnalysis {stats} {exMap} {bw} />
 {:else if page === 'routine' && (pageId === 'new' || lift.routines.some((r) => r.id === pageId))}
   {#key pageId}<RoutineEditor routine={lift.routines.find((r) => r.id === pageId) ?? null} {exMap} />{/key}
 {:else if page === 'exercise' && stats.get(pageId)}
-  <ExerciseDetail stats={stats.get(pageId)!} />
+  <ExerciseDetail stats={stats.get(pageId)!} {bw} />
 {:else}
   <div class="view view--lifting">
     <header class="view-header">
@@ -141,6 +144,14 @@
           <div><span>Volume</span><b>{fmtTonnage(thisWeek?.volume ?? 0)}</b></div>
         </div>
       </section>
+
+      {#if done.length}
+        <button class="analysis-link card" type="button" onclick={() => navigate('lifting', 'analysis')}>
+          <span class="al-icon" aria-hidden="true"><Icon name="trending-up" size={22} /></span>
+          <span class="al-text"><b>Analysis</b><em>Trends, what moves your numbers, rest, consistency, balance</em></span>
+          <Icon name="chevron-right" size={20} />
+        </button>
+      {/if}
 
       {#if deload}
         <section class="card pad deload" aria-labelledby="deload-title">
@@ -233,6 +244,10 @@
   .l-name em, .l-next { color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
   .l-next { grid-column: 1 / -1; font-variant-numeric: tabular-nums; }
   .l-num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; }
+  .analysis-link { display: flex; width: 100%; padding: var(--space-3) var(--space-4); align-items: center; gap: var(--space-3); color: var(--color-text); text-align: left; }
+  .al-icon { display: grid; width: 2.5rem; height: 2.5rem; flex: 0 0 auto; place-items: center; border-radius: var(--radius-md); background: var(--color-accent-soft); color: var(--color-accent); }
+  .al-text { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+  .al-text em { color: var(--color-text-muted); font-size: var(--text-sm); font-style: normal; }
   .deload { border-color: color-mix(in oklab, var(--color-warning) 45%, var(--color-border)); }
   .deload p { margin: var(--space-2) 0 0; font-size: var(--text-sm); }
   .status { font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--color-text-muted); }

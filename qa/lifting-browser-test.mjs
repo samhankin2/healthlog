@@ -88,6 +88,24 @@ try {
     })
   }
 
+  // Twelve squat sessions over ~7 weeks (rising, with timestamps) so every analysis section has data.
+  const squat = lib.exercises.find((e) => e.name === 'Back squat')
+  const row = lib.exercises.find((e) => e.name === 'Barbell row')
+  for (let i = 0; i < 12; i++) {
+    const n = 50 - i * 4
+    const t0 = Date.now() - n * 864e5
+    const at = (s) => new Date(t0 + s * 1000).toISOString()
+    const w = 100 + i * 1.25
+    await json('PUT', `/api/lifting/workouts/seed-sq-${i}-workout`, token, {
+      day: day(n), name: 'Legs', startedAt: at(-600), endedAt: at(3000),
+      sets: [
+        { id: `seed-sq-${i}-w`, exerciseId: squat.id, weightKg: 60, reps: 8, kind: 'warmup' },
+        ...[0, 1, 2].map((k) => ({ id: `seed-sq-${i}-${k}`, exerciseId: squat.id, weightKg: w, reps: 6 - (k === 2 && i % 3 === 0 ? 1 : 0), rpe: 8, doneAt: at(k * (i % 2 ? 100 : 180)) })),
+        ...[0, 1].map((k) => ({ id: `seed-rw-${i}-${k}`, exerciseId: row.id, weightKg: 70, reps: 8 + (i > 6 ? 1 : 0), doneAt: at(1200 + k * 120) })),
+      ],
+    })
+  }
+
   let target
   for (let i = 0; i < 60 && !target; i++) {
     try { target = (await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json()).find((t) => t.type === 'page') } catch { /* starting */ }
@@ -173,6 +191,25 @@ try {
   ok('detail: renders e1RM and sessions', await until(`document.body.innerText.includes('Best e1RM') && document.body.innerText.includes('Best weight for reps')`))
   ok('detail: shows the plan with reasoning', await until(`/Next time · /i.test(document.body.innerText) && document.querySelector('.why li')`))
   ok('detail: no horizontal overflow', (await overflow()) <= 0, String(await overflow()))
+
+  await evaluate(`location.hash = '#/lifting'; return true`)
+  ok('analysis: linked from home', await until(`[...document.querySelectorAll('.analysis-link')].length === 1`))
+  await click('.analysis-link')
+  ok('analysis: page renders', await until(`location.hash === '#/lifting/analysis' && document.body.innerText.includes('Progress by lift')`))
+  ok('analysis: squat trend with a rate and range', await until(`[...document.querySelectorAll('.trend')].some((t) => t.textContent.includes('Back squat') && t.textContent.includes('/ month') && /range/.test(t.textContent))`))
+  ok('analysis: strength index chart', await evaluate(`return document.body.innerText.includes('Strength index') && Boolean(document.querySelector('[aria-labelledby="idx-title"] svg'))`))
+  ok('analysis: rest buckets measured', await evaluate(`return /% kept/.test(document.querySelector('[aria-labelledby="rest-title"]')?.innerText ?? '')`))
+  ok('analysis: muscle heatmap is a table', await evaluate(`return Boolean(document.querySelector('.heat table td'))`))
+  ok('analysis: no horizontal overflow', (await overflow()) <= 0, String(await overflow()))
+  if (process.env.SHOT_DIR) {
+    const m = await send('Page.getLayoutMetrics')
+    const h = Math.ceil(m.cssContentSize?.height ?? m.contentSize.height)
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: h, deviceScaleFactor: 1, mobile: true })
+    await sleep(500)
+    const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
+    fs.writeFileSync(path.join(process.env.SHOT_DIR, 'analysis-phone.png'), Buffer.from(shot.data, 'base64'))
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true })
+  }
 
   await evaluate(`location.hash = '#/insights'; return true`)
   ok('insights: Strength block from the lifting log', await until(`document.body.innerText.includes('Strength') && document.body.innerText.includes('Hard sets / week')`, 12000))

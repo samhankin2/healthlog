@@ -48,7 +48,14 @@ Cloud VM, SQLite on disk, Caddy for TLS.
   swapped with one tap. New accounts start with an upper-body routine.
 - Works with no signal: sets are kept on the phone and sync when it reconnects.
 - Per lift: estimated 1RM over time, records, best weight for 1–12+ reps,
-  progressing / steady / stalled / slipping. Weekly hard sets per muscle.
+  progressing / steady / stalled / slipping, and a trend: % per month with a
+  confidence range, how much your sessions swing, when progress changed pace, and
+  an 8-week projection. Weekly hard sets per muscle.
+- **Analysis page**: a strength index across all lifts, per-lift trends, what
+  moves your numbers (sleep, HRV, resting HR, Body Battery, calories, protein,
+  cutting, time of day, rest days, each with an honest range), reps kept vs rest
+  between sets, consistency and routine completion (what you skip), a muscle ×
+  week heatmap, rep ranges, push/pull balance, effort and records.
 - Feeds **Insights**: logged sessions count as strength training with a load
   worked out from your sets (the watch's heart-rate load under-counts lifting),
   plus a Strength block.

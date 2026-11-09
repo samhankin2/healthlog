@@ -602,6 +602,26 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   (`nextSet`), the next set: under the range at RIR ≤ 1 → lighter; 2+ short of the plan →
   match the last set; RIR ≥ 3 and on plan → one increment more. Lifting home suggests a lighter week when ≥ 3 lifts
   (≥ 40 % of those trained in 3 weeks with 4+ sessions) are stalled or slipping.
+- **Analysis** (`src/lib/liftAnalysis.ts`, pure; methods in its header).
+  Per lift (4+ sessions spanning 14+ days): Theil–Sen trend of session-best e1RM
+  over the last 120 days as %/month, a 90 % bootstrap range (400 resamples,
+  seeded), verdict (gaining / losing when the range excludes 0, flat when
+  |rate| < 0.75 and the range is inside ±2, else not clear), noise (1.4826 × MAD
+  of % residuals), one change point (piecewise OLS, kept when BIC improves by > 2
+  and the rate moves ≥ 1 %/month), an 8-week projection (when trained within 3
+  weeks, 6+ sessions) and e1RM ÷ bodyweight. Strength index: geometric mean over
+  lifts of (mean of the last 2 session bests, carried ≤ 8 weeks) ÷ (median of the
+  first 3) × 100, weekly. Session form: session best vs a leave-one-out tricube
+  local linear fit (±56 days), clipped ±25 %, averaged over the workout's lifts
+  (5+ sessions each). Factors (sleep, HRV and resting HR vs the 28-day median
+  before, Body Battery at wake, 3-day calories and protein, 3-week weight slope ≤
+  −0.2 kg/wk, start before/after 12:00, 1 vs 2+ days since the last session):
+  difference in mean form, split at a fixed threshold or the most even split, a
+  90 % bootstrap range, needing 5+ sessions per side. Rest: gaps of 20 s–15 min between
+  consecutive working sets of one lift; share of reps kept at the same weight per
+  rest bucket. Also: sessions per week, week streak, training calendar, routine
+  completion (workouts named as the routine; stand-ins count), rep zones, push /
+  pull and upper / lower sets, effort logged, muscle × week heatmap, records.
 - **Insights.** `mergeLifting` folds logged workouts into the Garmin
   activities before `buildInsights` / `buildAdvanced`: a workout on a day with a
   watch strength activity enriches it (sets, reps, the higher of the two loads);
@@ -785,7 +805,7 @@ that the frontend can read.
   History and Activity; on a phone Foods and History are reached from the
   Calories view (History also from the Dashboard).
 - **Lifting view** (`#/lifting`, sub-pages `#/lifting/log/<workoutId>`,
-  `#/lifting/exercise/<exerciseId>`, `#/lifting/history`, `#/lifting/routine/<id|new>`),
+  `#/lifting/exercise/<exerciseId>`, `#/lifting/history`, `#/lifting/routine/<id|new>`, `#/lifting/analysis`),
   built for one hand in the gym: start a routine (its exercises planned in order) or
   an empty workout, resume one, edit routines (order, stand-ins), repeat a recent session, this week's days /
   sets / volume, a lighter-week suggestion when several lifts stall at once,
@@ -799,9 +819,14 @@ that the frontend can read.
   next set; a toast on a record; a rest timer above the tab bar (vibrates and
   beeps, default 1–4 min); the screen kept awake (Wake Lock) during a live
   session; a save status (saved / saved on phone / not saved). The exercise page:
-  records, status, next plan with its reasoning (and a one-tap rep-range switch
+  records, status, trend (rate with range, noise, change point, projection,
+  × bodyweight), next plan with its reasoning (and a one-tap rep-range switch
   when suggested), e1RM per session with the all-time best as a
   step line, volume per session, best weight for 1/3/5/8/10/12+ reps, sessions.
+  The analysis page (linked from Lifting home) shows the Analysis numbers as
+  tiles, a strength-index line, a trend row per lift, a forest plot of factors,
+  rest-bucket bars, sessions per week, a training calendar, routine completion, a
+  muscle × week heatmap (a table), rep-zone and balance bars and records.
   Insights gains a **Strength** block (sessions, hard sets per week, volume,
   records, main lifts, weekly sets per muscle) after Training.
 - **Insights view** (`#/insights`): Garmin analysis over a 30D / 90D / 6M / 1Y /
