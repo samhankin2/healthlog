@@ -128,7 +128,7 @@
       {#if swaps.length && onswap}
         <div class="swaps">
           {#each swaps as alt (alt.id)}
-            <button class="swap" type="button" onclick={() => onswap(alt.id)}><Icon name="repeat" size={16} /> Kit taken? Do {alt.name} instead</button>
+            <button class="swap" type="button" onclick={() => onswap(alt.id)}><Icon name="repeat" size={16} /> Or do {alt.name} instead</button>
           {/each}
         </div>
       {/if}

@@ -76,8 +76,7 @@ const DEFAULT_ROUTINE = {
     ['Inverted row', 'back', 'bodyweight'],
     ['Dumbbell shoulder press', 'shoulders', 'dumbbell'],
     ['Incline dumbbell curl', 'biceps', 'dumbbell'],
-    ['Skull crusher', 'triceps', 'barbell'],
-    ['Overhead triceps extension', 'triceps', 'cable'],
+    ['Skull crusher', 'triceps', 'barbell', [['Overhead triceps extension', 'triceps', 'cable']]],
     ['Hanging leg raise', 'core', 'bodyweight'],
     ['Lateral raise', 'shoulders', 'dumbbell'],
   ],
@@ -95,9 +94,29 @@ function exerciseIdByName(db, userId, [name, muscle, equipment]) {
   return id
 }
 
+/**
+ * The first default routine had Skull crusher and Overhead triceps extension as
+ * two items; it is one slot (either / or). Rewrite routines still exactly as
+ * that first version seeded them; anything the user has edited is left alone.
+ */
+const DEFAULT_V1 = ['Incline dumbbell press', 'Pull-up', 'Inverted row', 'Dumbbell shoulder press', 'Incline dumbbell curl', 'Skull crusher', 'Overhead triceps extension', 'Hanging leg raise', 'Lateral raise']
+function upgradeDefaultRoutine(db, userId) {
+  const names = new Map(db.prepare('SELECT id, name FROM exercises WHERE user_id = ?').all(userId).map((r) => [r.id, r.name]))
+  for (const row of db.prepare("SELECT id, items FROM routines WHERE user_id = ? AND deleted_at IS NULL AND name = 'Upper body'").all(userId)) {
+    let items
+    try { items = JSON.parse(row.items) } catch { continue }
+    const unchanged = items.length === DEFAULT_V1.length
+      && items.every((it, i) => names.get(it.exerciseId) === DEFAULT_V1[i] && (it.alternatives ?? []).length === (i === 0 ? 1 : 0))
+      && names.get(items[0].alternatives[0]) === 'Bench press'
+    if (!unchanged) continue
+    const next = [...items.slice(0, 5), { exerciseId: items[5].exerciseId, alternatives: [items[6].exerciseId] }, ...items.slice(7)]
+    db.prepare('UPDATE routines SET items = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(next), new Date().toISOString().replace('T', ' ').slice(0, 19), row.id)
+  }
+}
+
 /** Seed the default routine for a user who has never had a routine (deleted ones count). */
 export function ensureDefaultRoutine(db, userId) {
-  if (db.prepare('SELECT 1 FROM routines WHERE user_id = ? LIMIT 1').get(userId)) return
+  if (db.prepare('SELECT 1 FROM routines WHERE user_id = ? LIMIT 1').get(userId)) { upgradeDefaultRoutine(db, userId); return }
   const items = DEFAULT_ROUTINE.items.map(([name, muscle, equipment, alts = []]) => ({
     exerciseId: exerciseIdByName(db, userId, [name, muscle, equipment]),
     alternatives: alts.map((a) => exerciseIdByName(db, userId, a)),

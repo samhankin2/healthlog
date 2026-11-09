@@ -553,8 +553,10 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
 - **Default routine.** The first `GET /api/lifting` for a user who has never had
   a routine (deleted ones count) seeds "Upper body": Incline dumbbell press (stand-in:
   Bench press), Pull-up, Inverted row, Dumbbell shoulder press, Incline dumbbell
-  curl, Skull crusher, Overhead triceps extension, Hanging leg raise, Lateral
-  raise. Missing exercises are created and hidden ones un-hidden. Every item
+  curl, Skull crusher (stand-in: Overhead triceps extension), Hanging leg raise,
+  Lateral raise. Missing exercises are created and hidden ones un-hidden. A routine
+  still exactly as the first version seeded it (skull crusher and extension as two
+  items) is merged into that one slot; edited routines are left alone. Every item
   `exerciseId` / alternative must be one of the user's exercises. Routines are
   edited online only, and cached on the device with the exercise list so they start offline.
 - **Offline first** (`src/lib/lifting.svelte.ts`). Changes apply on the device

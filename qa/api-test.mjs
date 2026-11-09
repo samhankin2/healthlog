@@ -926,8 +926,9 @@ async function run() {
   // Routines: the default one is seeded once, with a swap for the incline press.
   const routineList = r.json?.routines ?? []
   const exByName = new Map((r.json?.exercises ?? []).map((e) => [e.name, e.id]))
-  eq('routines: default routine seeded', routineList.map((x) => [x.name, x.items.length]), [['Upper body', 9]])
+  eq('routines: default routine seeded', routineList.map((x) => [x.name, x.items.length]), [['Upper body', 8]])
   eq('routines: starts with the incline press, swappable for bench', [routineList[0]?.items[0]?.exerciseId, routineList[0]?.items[0]?.alternatives], [exByName.get('Incline dumbbell press'), [exByName.get('Bench press')]])
+  eq('routines: skull crusher or triceps extension is one slot', [routineList[0]?.items[5]?.exerciseId, routineList[0]?.items[5]?.alternatives], [exByName.get('Skull crusher'), [exByName.get('Overhead triceps extension')]])
   ok('routines: missing exercises were created', exByName.has('Inverted row') && exByName.has('Incline dumbbell curl'))
   ok('routines: bench press un-hidden for the swap', !(r.json?.exercises ?? []).find((e) => e.name === 'Bench press')?.archived)
   r = await api('PUT', '/api/lifting/routines/rt-local-0001', { token: authToken, body: { name: 'Legs', items: [{ exerciseId: exByName.get('Back squat'), alternatives: [exByName.get('Leg press')] }] } })

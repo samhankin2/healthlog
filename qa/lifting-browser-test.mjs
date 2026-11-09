@@ -151,10 +151,10 @@ try {
 
   // Routine: start it, swap the incline press for the barbell bench, then discard.
   await click('button', 'Start Upper body')
-  ok('routine: logger opens with its 9 exercises', await until(`document.querySelectorAll('.ex-card').length === 9 && document.querySelector('.ex-title')?.textContent === 'Incline dumbbell press'`))
+  ok('routine: logger opens with its 8 exercises', await until(`document.querySelectorAll('.ex-card').length === 8 && document.querySelector('.ex-title')?.textContent === 'Incline dumbbell press'`))
   ok('routine: swap offered for the incline press', await until(`[...document.querySelectorAll('.swap')].some((b) => b.textContent.includes('Bench press'))`))
   await click('.swap', 'Bench press')
-  ok('routine: swapped in place', await until(`document.querySelector('.ex-title')?.textContent === 'Bench press' && document.querySelectorAll('.ex-card').length === 9`))
+  ok('routine: swapped in place', await until(`document.querySelector('.ex-title')?.textContent === 'Bench press' && document.querySelectorAll('.ex-card').length === 8`))
   const swapText = await evaluate(`return document.querySelector('.ex-card.open')?.innerText ?? ''`)
   ok('routine: swapped lift keeps its own history and plan', /last time\s*82\.5 × 6, 6/i.test(swapText) && /try\s*82\.5 kg × /i.test(swapText), swapText.slice(0, 300).replace(/\n/g, ' / '))
   ok('routine: no horizontal overflow', (await overflow()) <= 0, String(await overflow()))
