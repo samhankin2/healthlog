@@ -13,6 +13,7 @@
     EQUIPMENT, EQUIPMENT_LABEL, MUSCLES, MUSCLE_LABEL, PR_LABEL, STATUS_LABEL, defaultIncrement, fmtSets, fmtTonnage, fmtW,
     type ExerciseStats,
   } from '../lifting'
+  import { PLAN_LABEL, defaultRange, fmtPlan, fmtRange, type RepRange } from '../progression'
   import { editExercise, setArchived } from '../lifting.svelte'
   import type { Equipment, Muscle } from '../types'
 
@@ -54,20 +55,36 @@
   let muscle = $state<Muscle>('other')
   let equipment = $state<Equipment>('barbell')
   let increment = $state('')
+  let repMin = $state('')
+  let repMax = $state('')
   let saving = $state(false)
   function openEdit(): void {
     name = ex.name
     muscle = ex.muscle
     equipment = ex.equipment
     increment = ex.incrementKg === null ? '' : String(ex.incrementKg)
+    repMin = ex.repMin ? String(ex.repMin) : ''
+    repMax = ex.repMax ? String(ex.repMax) : ''
     editOpen = true
+  }
+  async function useRange(r: RepRange): Promise<void> {
+    try {
+      await editExercise(ex.id, { repMin: r.lo, repMax: r.hi })
+      showToast(`${ex.name}: rep range set to ${fmtRange(r)}.`, 'success')
+    } catch {
+      showToast('Could not save. Are you online?', 'error')
+    }
   }
   async function save(): Promise<void> {
     saving = true
     try {
       const inc = increment.trim() === '' ? null : Number(increment.replace(',', '.'))
       if (inc !== null && !(inc >= 0.25 && inc <= 50)) throw new Error('Weight step must be between 0.25 and 50 kg.')
-      await editExercise(ex.id, { name: name.trim(), muscle, equipment, incrementKg: inc })
+      const lo = repMin.trim() === '' ? null : Number(repMin)
+      const hi = repMax.trim() === '' ? null : Number(repMax)
+      if ((lo === null) !== (hi === null)) throw new Error('Fill in both ends of the rep range, or leave both empty for automatic.')
+      if (lo !== null && hi !== null && !(Number.isInteger(lo) && Number.isInteger(hi) && lo >= 1 && hi <= 50 && hi >= lo)) throw new Error('Rep range must be whole numbers from 1 to 50, low to high.')
+      await editExercise(ex.id, { name: name.trim(), muscle, equipment, incrementKg: inc, repMin: lo, repMax: hi })
       editOpen = false
       showToast('Exercise updated.', 'success')
     } catch (cause) {
@@ -113,14 +130,21 @@
         {#if stats.change !== null}<span class="st-change">{stats.change >= 0 ? '+' : ''}{stats.change.toFixed(1)}% vs the 4 weeks before</span>{/if}
       </div>
       <p class="st-copy">
-        {#if stats.status === 'stalled'}No new best in your last {stats.sessionsSinceBest} sessions. Try a different rep range for a few weeks, check sleep and food, or take a lighter week.
-        {:else if stats.status === 'regressing'}Your best this month is below last month. Usually fatigue, a cut, or time off — it comes back.
-        {:else if stats.status === 'progressing'}Still climbing. Keep doing what you are doing.
+        {#if stats.status === 'stalled'}No new best in your last {stats.sessionsSinceBest} sessions. The plan below handles it.
+        {:else if stats.status === 'regressing'}Your best this month is below last month's. Usually fatigue, a cut or time off, and it comes back.
+        {:else if stats.status === 'progressing'}Still climbing. Keep doing what you're doing.
         {:else if stats.status === 'steady'}Holding. {stats.sessionsSinceBest} session{stats.sessionsSinceBest === 1 ? '' : 's'} since your best.
         {:else}Log a couple more sessions to see a trend.{/if}
       </p>
       {#if stats.next}
-        <p class="st-next"><span>Next time</span><b>{ex.equipment === 'bodyweight' ? (stats.next.weightKg ? `BW+${fmtW(stats.next.weightKg)}` : 'BW') : `${fmtW(stats.next.weightKg)} kg`} × {stats.next.reps.join(', ')}</b><em>{stats.next.note}</em></p>
+        <div class="st-next">
+          <p class="st-line"><span>Next time · {PLAN_LABEL[stats.next.kind]}</span><b>{fmtPlan(stats.next, ex)}</b><em>{stats.next.note}</em></p>
+          <ul class="why">{#each stats.next.why as line, i (i)}<li>{line}</li>{/each}</ul>
+          {#if stats.next.suggestRange}
+            {@const r = stats.next.suggestRange}
+            <button class="button button--secondary" type="button" onclick={() => useRange(r)}>Use {fmtRange(r)} reps</button>
+          {/if}
+        </div>
       {/if}
     </section>
 
@@ -181,6 +205,15 @@
     <label class="f"><span>Muscle</span><select bind:value={muscle}>{#each MUSCLES as m (m.key)}<option value={m.key}>{m.label}</option>{/each}</select></label>
     <label class="f"><span>Equipment</span><select bind:value={equipment}>{#each EQUIPMENT as e (e.key)}<option value={e.key}>{e.label}</option>{/each}</select></label>
     <label class="f"><span>Weight step (kg)</span><input type="text" inputmode="decimal" placeholder="Default {fmtW(defaultIncrement({ equipment, incrementKg: null }))}" bind:value={increment} /><em>Used by the −/+ buttons and the next-time target.</em></label>
+    <fieldset class="f rr">
+      <legend>Rep range</legend>
+      <div class="rr-row">
+        <label><span class="sr-only">Lowest reps</span><input type="text" inputmode="numeric" placeholder={String(defaultRange({ name, muscle, equipment }).lo)} bind:value={repMin} /></label>
+        <span aria-hidden="true">to</span>
+        <label><span class="sr-only">Highest reps</span><input type="text" inputmode="numeric" placeholder={String(defaultRange({ name, muscle, equipment }).hi)} bind:value={repMax} /></label>
+      </div>
+      <em>Add reps until every set reaches the top, then add weight. Leave both empty to pick automatically.</em>
+    </fieldset>
     <button class="button button--secondary" type="button" onclick={toggleArchive}>{ex.archived ? 'Show in the exercise list again' : 'Hide from the exercise list'}</button>
   </div>
   {#snippet actions()}
@@ -210,7 +243,14 @@
   [data-status='stalled'] .st-pill, [data-status='regressing'] .st-pill { background: var(--color-down-soft); color: var(--color-down); }
   .st-change { color: var(--color-text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .st-copy { margin: 0; font-size: var(--text-sm); }
-  .st-next { display: flex; margin: 0; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); font-variant-numeric: tabular-nums; }
+  .st-next { display: flex; padding-top: var(--space-2); flex-direction: column; align-items: flex-start; gap: var(--space-2); border-top: 1px solid var(--color-border); }
+  .st-line { display: flex; margin: 0; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); font-variant-numeric: tabular-nums; }
+  .why { display: flex; margin: 0; padding-left: 1.1rem; flex-direction: column; gap: 4px; color: var(--color-text-muted); font-size: var(--text-sm); }
+  .rr { margin: 0; padding: 0; border: 0; }
+  .rr legend { margin-bottom: var(--space-1); padding: 0; }
+  .rr-row { display: flex; align-items: center; gap: var(--space-2); }
+  .rr-row label { flex: 1; }
+  .rr-row input { width: 100%; }
   .st-next span { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: var(--tracking-label); }
   .st-next b { color: var(--color-accent); }
   .st-next em { flex-basis: 100%; color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }

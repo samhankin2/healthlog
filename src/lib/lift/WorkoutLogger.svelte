@@ -11,7 +11,7 @@
   import { fmtLong } from '../format'
   import { PR_LABEL, fmtTonnage, fmtW, workoutSummary, type BodyweightAt, type ExerciseStats } from '../lifting'
   import {
-    addPlanned, deleteWorkout, finishWorkout, lift, moveExercise, removeExercise, retryFailed, updateWorkout, workoutById, workoutExercises,
+    alternativesFor, swapExercise, addPlanned, deleteWorkout, finishWorkout, lift, moveExercise, removeExercise, retryFailed, updateWorkout, workoutById, workoutExercises,
   } from '../lifting.svelte'
   import type { Exercise, LiftSet } from '../types'
 
@@ -67,6 +67,12 @@
   /* ---------- sheets ---------- */
   let pickerOpen = $state(false)
   let menuFor = $state<string | null>(null)
+  function swap(from: string, to: string): void {
+    if (!workout || !swapExercise(workout.id, from, to)) { showToast('Sets are already logged for this one. Remove them first.', 'error'); return }
+    if (openId === from) openId = to
+    menuFor = null
+  }
+  const swapsFor = (id: string): Exercise[] => alternativesFor(id).map((a) => exMap.get(a)).filter((e): e is Exercise => Boolean(e && !e.archived))
   let editing = $state<LiftSet | null>(null)
   let finishOpen = $state(false)
   let detailsOpen = $state(false)
@@ -176,6 +182,8 @@
           onexpand={() => (openId = openId === id ? null : id)}
           onmenu={() => (menuFor = id)}
           onedit={(s) => (editing = s)}
+          swaps={workout.sets.some((s) => s.exerciseId === id) ? [] : swapsFor(id)}
+          onswap={(to) => swap(id, to)}
         />
       {/if}
     {/each}
@@ -201,6 +209,11 @@
       <div class="menu">
         <button class="menu-row" type="button" disabled={order.indexOf(id) <= 0} onclick={() => moveExercise(workout.id, id, -1)}><Icon name="arrow-up" size={18} /> Move up</button>
         <button class="menu-row" type="button" disabled={order.indexOf(id) >= order.length - 1} onclick={() => moveExercise(workout.id, id, 1)}><Icon name="arrow-down" size={18} /> Move down</button>
+        {#if !workout.sets.some((s) => s.exerciseId === id)}
+          {#each swapsFor(id) as alt (alt.id)}
+            <button class="menu-row" type="button" onclick={() => swap(id, alt.id)}><Icon name="repeat" size={18} /> Swap for {alt.name}</button>
+          {/each}
+        {/if}
         <button class="menu-row" type="button" onclick={() => { menuFor = null; navigate('lifting', `exercise/${id}`) }}><Icon name="trending-up" size={18} /> Progress and history</button>
         <button class="menu-row danger" type="button" onclick={() => { removeExercise(workout.id, id); menuFor = null }}><Icon name="trash" size={18} /> Remove from this workout{workout.sets.some((s) => s.exerciseId === id) ? ' (deletes its sets)' : ''}</button>
       </div>

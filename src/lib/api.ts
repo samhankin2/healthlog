@@ -23,6 +23,7 @@ import type {
   PhaseInput,
   PhasePatch,
   LiftingPayload,
+  Routine,
   Profile,
   ProfilePatch,
   User,
@@ -304,11 +305,11 @@ export const api = {
   },
 
   /** Idempotent: a known id or an existing name returns the stored exercise. */
-  createExercise(input: Pick<Exercise, 'name' | 'muscle' | 'equipment'> & { id?: string; incrementKg?: number | null }, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
+  createExercise(input: Pick<Exercise, 'name' | 'muscle' | 'equipment'> & { id?: string; incrementKg?: number | null; repMin?: number | null; repMax?: number | null }, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
     return request('/lifting/exercises', { method: 'POST', body: input }, options)
   },
 
-  updateExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'archived'>>, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
+  updateExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'repMin' | 'repMax' | 'archived'>>, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
     return request(`/lifting/exercises/${encodeURIComponent(id)}`, { method: 'PUT', body: patch }, options)
   },
 
@@ -325,5 +326,14 @@ export const api = {
 
   deleteWorkout(id: string, options?: ApiRequestOptions): Promise<SuccessResponse & { deleted: string }> {
     return request(`/lifting/workouts/${encodeURIComponent(id)}`, { method: 'DELETE' }, options)
+  },
+
+  /** Replace-all upsert of a routine by client id. */
+  saveRoutine(routine: Pick<Routine, 'id' | 'name' | 'items' | 'position'>, options?: ApiRequestOptions): Promise<SuccessResponse & { routine: Routine }> {
+    return request(`/lifting/routines/${encodeURIComponent(routine.id)}`, { method: 'PUT', body: { name: routine.name, items: routine.items, position: routine.position } }, options)
+  },
+
+  deleteRoutine(id: string, options?: ApiRequestOptions): Promise<SuccessResponse & { deleted: string }> {
+    return request(`/lifting/routines/${encodeURIComponent(id)}`, { method: 'DELETE' }, options)
   },
 }

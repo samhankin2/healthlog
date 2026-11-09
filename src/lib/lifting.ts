@@ -10,6 +10,7 @@
  * - Progression: the best e1RM in the last 4 weeks of training for a lift vs the
  *   4 weeks before. +1 % or more is progressing, -3 % or worse is regressing.
  *   A lift with no new best in its last 3 sessions is stalled.
+ * - Next-session targets: see progression.ts.
  * - Lift load (for Insights): 5 per hard set at RPE 8 (or no RPE), scaled by
  *   effort — (RPE - 5) / 3, clamped 0.4–1.7 — plus 1 per warm-up. A 20-set
  *   session lands near 100, the load Garmin gives a moderate 50-minute run;
@@ -17,6 +18,7 @@
  */
 import type { Equipment, Exercise, InsightActivity, InsightsPayload, LiftSet, LiftingPayload, Muscle, SetKind, Workout } from './types'
 import { dayNum, isNum, shiftDay, weekStart } from './insights'
+import { planNext, type Target } from './progression'
 
 export const MUSCLES: { key: Muscle; label: string }[] = [
   { key: 'chest', label: 'Chest' },
@@ -120,12 +122,6 @@ export interface SessionLine {
 export type LiftStatus = 'new' | 'progressing' | 'steady' | 'stalled' | 'regressing'
 export const STATUS_LABEL: Record<LiftStatus, string> = { new: 'New', progressing: 'Progressing', steady: 'Steady', stalled: 'Stalled', regressing: 'Slipping' }
 
-export interface Target {
-  weightKg: number
-  reps: number[]
-  note: string
-}
-
 export interface ExerciseStats {
   exercise: Exercise
   sessions: SessionLine[]
@@ -175,7 +171,7 @@ export function sortWorkouts(workouts: Workout[]): Workout[] {
   return [...workouts].sort((a, b) => (a.day === b.day ? (a.startedAt ?? '').localeCompare(b.startedAt ?? '') : a.day < b.day ? -1 : 1))
 }
 
-export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightAt): ExerciseStats {
+export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightAt, today?: string): ExerciseStats {
   const ordered = sortWorkouts(workouts)
   const raw = ordered.map((w) => ({ w, sets: w.sets.filter((s) => s.exerciseId === ex.id) })).filter((x) => x.sets.length)
   const anyLoad = raw.some((x) => x.sets.some((s) => setLoad(s, ex, bw(x.w.day)) > 0))
@@ -253,38 +249,12 @@ export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightA
   const last = sessions[sessions.length - 1]
   return {
     exercise: ex, sessions, metric, best, heaviest, bestVolume, repMaxes, status, change, sessionsSinceBest,
-    next: last ? suggestNext(ex, last.sets, metric) : null, lastDay,
+    next: last ? planNext(ex, sessions, metric, bw, today) : null, lastDay,
   }
 }
 
-export function allExerciseStats(exercises: Exercise[], workouts: Workout[], bw: BodyweightAt): Map<string, ExerciseStats> {
-  return new Map(exercises.map((ex) => [ex.id, exerciseStats(ex, workouts, bw)]))
-}
-
-/**
- * Double progression from the last session's working sets at their top weight:
- * every set matched the first → add one increment (same reps for sets of 6 or
- * fewer, two fewer above that); otherwise keep the weight and add a rep to the
- * weakest set.
- */
-export function suggestNext(ex: Exercise, sets: LiftSet[], metric: 'e1rm' | 'reps'): Target | null {
-  const working = sets.filter((s) => s.kind === 'working' || s.kind === 'failure')
-  if (!working.length) return null
-  const top = Math.max(...working.map((s) => s.weightKg))
-  const atTop = working.filter((s) => Math.abs(s.weightKg - top) < 1e-9).map((s) => s.reps)
-  const first = atTop[0]
-  const minIdx = atTop.indexOf(Math.min(...atTop))
-  const sameWeight = (): Target => ({
-    weightKg: top,
-    reps: atTop.map((r, i) => (i === minIdx ? r + 1 : r)),
-    note: atTop.length > 1 ? 'Same weight — add a rep to your weakest set' : 'Same weight — one more rep',
-  })
-  if (metric === 'reps') return sameWeight()
-  if (first >= 5 && atTop.every((r) => r >= first)) {
-    const reps = first <= 6 ? first : Math.max(5, first - 2)
-    return { weightKg: roundKg(top + defaultIncrement(ex)), reps: atTop.map(() => reps), note: `Every set hit ${first} — add ${fmtW(defaultIncrement(ex))} kg` }
-  }
-  return sameWeight()
+export function allExerciseStats(exercises: Exercise[], workouts: Workout[], bw: BodyweightAt, today?: string): Map<string, ExerciseStats> {
+  return new Map(exercises.map((ex) => [ex.id, exerciseStats(ex, workouts, bw, today)]))
 }
 
 /** Live PR check for a set about to be logged, against everything before it. */

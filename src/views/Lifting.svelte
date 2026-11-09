@@ -4,14 +4,17 @@
   import Sparkline from '../lib/viz/Sparkline.svelte'
   import WorkoutLogger from '../lib/lift/WorkoutLogger.svelte'
   import ExerciseDetail from '../lib/lift/ExerciseDetail.svelte'
+  import RoutineEditor from '../lib/lift/RoutineEditor.svelte'
   import { app, navigate, subpath } from '../lib/state.svelte'
   import { fmtLong, today } from '../lib/format'
   import {
-    MUSCLE_LABEL, STATUS_LABEL, VOLUME_BAND, allExerciseStats, bodyweightLookup, exerciseOrder, fmtSets, fmtTonnage, fmtW,
+    MUSCLE_LABEL, STATUS_LABEL, VOLUME_BAND, allExerciseStats, bodyweightLookup, exerciseOrder, fmtSets, fmtTonnage,
     muscleAverages, muscleWeeks, sortWorkouts, workoutSummary,
   } from '../lib/lifting'
   import { shiftDay, weekStart } from '../lib/insights'
-  import { activeWorkout, lift, loadLifting, startWorkout } from '../lib/lifting.svelte'
+  import { deloadAdvice, fmtPlan } from '../lib/progression'
+  import { activeWorkout, lift, loadLifting, startRoutine, startWorkout } from '../lib/lifting.svelte'
+  import type { Routine } from '../lib/types'
 
   onMount(() => void loadLifting(true))
 
@@ -22,7 +25,8 @@
 
   const bw = $derived(bodyweightLookup(app.weights.map((w) => ({ day: w.date, weightKg: w.weightKg }))))
   const exMap = $derived(new Map(lift.exercises.map((e) => [e.id, e])))
-  const stats = $derived(allExerciseStats(lift.exercises, lift.workouts, bw))
+  const stats = $derived(allExerciseStats(lift.exercises, lift.workouts, bw, todayDay))
+  const deload = $derived(deloadAdvice([...stats.values()], todayDay))
   const done = $derived(sortWorkouts(lift.workouts.filter((w) => w.sets.length)).reverse())
   const active = $derived(activeWorkout())
   const used = $derived([...stats.values()].filter((s) => s.sessions.length).sort((a, b) => (b.lastDay ?? '').localeCompare(a.lastDay ?? '')))
@@ -45,6 +49,10 @@
     const w = startWorkout({ plan, name })
     navigate('lifting', `log/${w.id}`)
   }
+  function go(r: Routine): void {
+    const w = startRoutine(r)
+    navigate('lifting', `log/${w.id}`)
+  }
   function logPast(): void {
     const w = startWorkout({ live: false, day: shiftDay(todayDay, -1) })
     navigate('lifting', `log/${w.id}`)
@@ -54,6 +62,8 @@
 
 {#if page === 'log' && pageId}
   <WorkoutLogger workoutId={pageId} {stats} {exMap} {bw} />
+{:else if page === 'routine' && (pageId === 'new' || lift.routines.some((r) => r.id === pageId))}
+  {#key pageId}<RoutineEditor routine={lift.routines.find((r) => r.id === pageId) ?? null} {exMap} />{/key}
 {:else if page === 'exercise' && stats.get(pageId)}
   <ExerciseDetail stats={stats.get(pageId)!} />
 {:else}
@@ -90,7 +100,20 @@
           <button class="button button--primary big" type="button" onclick={() => navigate('lifting', `log/${active.id}`)}>Resume</button>
         </section>
       {:else}
-        <button class="button button--primary big" type="button" onclick={() => start()}><Icon name="plus" size={22} /> Start workout</button>
+        {#each lift.routines as r (r.id)}
+          <section class="routine card" aria-label="Routine: {r.name}">
+            <div class="r-head">
+              <b>{r.name}</b>
+              <button class="button button--secondary small" type="button" onclick={() => navigate('lifting', `routine/${r.id}`)} aria-label="Edit routine {r.name}">Edit</button>
+            </div>
+            <p class="r-list">{r.items.map((i) => exMap.get(i.exerciseId)?.name).filter(Boolean).join(' · ')}</p>
+            <button class="button button--primary big" type="button" onclick={() => go(r)}><Icon name="dumbbell" size={22} /> Start {r.name}</button>
+          </section>
+        {/each}
+        <div class="start-row">
+          <button class="button {lift.routines.length ? 'button--secondary' : 'button--primary big'}" type="button" onclick={() => start()}><Icon name="plus" size={20} /> {lift.routines.length ? 'Empty workout' : 'Start workout'}</button>
+          <button class="button button--secondary" type="button" onclick={() => navigate('lifting', 'routine/new')}><Icon name="repeat" size={20} /> New routine</button>
+        </div>
         {#if templates.length}
           <section aria-labelledby="repeat-title">
             <h2 class="sec" id="repeat-title"><Icon name="repeat" size={16} /> Repeat a session</h2>
@@ -119,6 +142,14 @@
         </div>
       </section>
 
+      {#if deload}
+        <section class="card pad deload" aria-labelledby="deload-title">
+          <h2 class="sec" id="deload-title"><Icon name="alert" size={16} /> Time for a lighter week?</h2>
+          <p>{deload.stuck.length} of your {deload.of} current lifts have stalled or slipped ({deload.stuck.join(', ')}). When several stall at once it's usually built-up fatigue, not lost strength.</p>
+          <p>Try one week with about half your usual sets, at the same weights or about 10 % lighter, stopping well short of failure. Then go back to the plan.</p>
+        </section>
+      {/if}
+
       {#if used.length}
         <section aria-labelledby="lifts-title">
           <h2 class="sec" id="lifts-title"><Icon name="trending-up" size={16} /> Your lifts</h2>
@@ -132,7 +163,7 @@
                   <b>{st.best ? (st.metric === 'reps' ? `${st.best.value} reps` : `${Math.round(st.best.value)} kg`) : '—'}</b>
                   <span class="status {st.status}">{STATUS_LABEL[st.status]}{st.change !== null ? ` ${st.change >= 0 ? '+' : ''}${st.change.toFixed(1)}%` : ''}</span>
                 </span>
-                {#if st.next}<span class="l-next">Next: {st.exercise.equipment === 'bodyweight' ? (st.next.weightKg ? `BW+${fmtW(st.next.weightKg)}` : 'BW') : `${fmtW(st.next.weightKg)} kg`} × {st.next.reps.join(', ')} · last {fmtSets(st.sessions[st.sessions.length - 1].hard, st.exercise)}</span>{/if}
+                {#if st.next}<span class="l-next">Next: {fmtPlan(st.next, st.exercise)} · last {fmtSets(st.sessions[st.sessions.length - 1].hard, st.exercise)}</span>{/if}
                </button>
               </li>
             {/each}
@@ -167,6 +198,13 @@
   .card { border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); box-shadow: var(--shadow-card); }
   .pad { padding: var(--space-4); }
   .skeleton { display: flex; min-height: 10rem; align-items: center; justify-content: center; gap: var(--space-3); color: var(--color-text-muted); }
+  .routine { display: flex; padding: var(--space-4); flex-direction: column; gap: var(--space-2); background: linear-gradient(120deg, var(--color-accent-soft), var(--color-surface) 70%); }
+  .r-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+  .r-head b { font-size: var(--text-lg); }
+  .r-list { margin: 0; color: var(--color-text-muted); font-size: var(--text-sm); }
+  .small { min-height: 2.75rem; padding: 0 var(--space-3); }
+  .start-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+  .start-row .big { grid-column: 1 / -1; }
   .big { width: 100%; min-height: var(--touch-target-primary); font-size: var(--text-lg); }
   .sec { display: flex; margin: 0 0 var(--space-3); align-items: center; gap: var(--space-2); font-size: var(--text-md); }
   .sec small { color: var(--color-text-muted); font-weight: var(--weight-regular); }
@@ -195,6 +233,8 @@
   .l-name em, .l-next { color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
   .l-next { grid-column: 1 / -1; font-variant-numeric: tabular-nums; }
   .l-num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; }
+  .deload { border-color: color-mix(in oklab, var(--color-warning) 45%, var(--color-border)); }
+  .deload p { margin: var(--space-2) 0 0; font-size: var(--text-sm); }
   .status { font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--color-text-muted); }
   .status.progressing { color: var(--color-up); }
   .status.regressing, .status.stalled { color: var(--color-down); }

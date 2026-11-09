@@ -6,7 +6,7 @@ import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
 import { alias, asObject, optionalNumber, optionalString, requireNumber, requireString } from '../lib/validate.js'
 import { isISODate } from '../lib/metrics.js'
 import {
-  EQUIPMENT, MUSCLES, SET_KINDS, ensureStarterLibrary, exercisePayload, loadWorkouts,
+  EQUIPMENT, MUSCLES, SET_KINDS, ensureDefaultRoutine, ensureStarterLibrary, exercisePayload, loadWorkouts, routinePayload,
 } from '../lib/lifting.js'
 
 const MAX_SETS = 400
@@ -37,6 +37,18 @@ function findExercise(db, userId, id) {
   return db.prepare('SELECT * FROM exercises WHERE id = ? AND user_id = ?').get(id, userId) ?? null
 }
 
+/** Rep range from a body: both set (1–50, max ≥ min) or both null. undefined = not sent. */
+function readRepRange(body, existing = null) {
+  const min = optionalNumber(alias(body, 'repMin', 'rep_min'), 'repMin', { min: 1, max: 50, nullable: true, integer: true })
+  const max = optionalNumber(alias(body, 'repMax', 'rep_max'), 'repMax', { min: 1, max: 50, nullable: true, integer: true })
+  if (min === undefined && max === undefined) return undefined
+  const lo = min === undefined ? existing?.rep_min ?? null : min
+  const hi = max === undefined ? existing?.rep_max ?? null : max
+  if ((lo === null) !== (hi === null)) throw new HttpError(400, 'Set both repMin and repMax, or neither')
+  if (lo !== null && hi < lo) throw new HttpError(400, 'repMax must be at least repMin')
+  return { lo, hi }
+}
+
 export function registerLiftingRoutes(router) {
   // Everything the Lifting tab needs in one payload: a few thousand sets a year
   // is small, and the analysis runs on the device.
@@ -46,9 +58,13 @@ export function registerLiftingRoutes(router) {
     const to = query.get('to')
     if ((from && !isISODate(from)) || (to && !isISODate(to))) throw new HttpError(400, 'from and to must be calendar dates (YYYY-MM-DD)')
     const db = getDb()
-    ensureStarterLibrary(db, user.id)
+    withTx(db, () => {
+      ensureStarterLibrary(db, user.id)
+      ensureDefaultRoutine(db, user.id)
+    })
     const exercises = db.prepare('SELECT * FROM exercises WHERE user_id = ? ORDER BY name COLLATE NOCASE').all(user.id)
-    sendJson(res, 200, { ok: true, exercises: exercises.map(exercisePayload), workouts: loadWorkouts(db, user.id, { from, to }) })
+    const routines = db.prepare('SELECT * FROM routines WHERE user_id = ? AND deleted_at IS NULL ORDER BY position, created_at').all(user.id)
+    sendJson(res, 200, { ok: true, exercises: exercises.map(exercisePayload), workouts: loadWorkouts(db, user.id, { from, to }), routines: routines.map(routinePayload) })
   })
 
   /* ---------------- exercises ---------------- */
@@ -64,6 +80,7 @@ export function registerLiftingRoutes(router) {
     const muscle = readEnum(alias(body, 'muscle'), 'muscle', MUSCLES, 'other')
     const equipment = readEnum(alias(body, 'equipment'), 'equipment', EQUIPMENT, 'barbell')
     const incrementKg = optionalNumber(alias(body, 'incrementKg', 'increment_kg'), 'incrementKg', { min: 0.25, max: 50, nullable: true }) ?? null
+    const repRange = readRepRange(body) ?? { lo: null, hi: null }
 
     const db = getDb()
     const byId = db.prepare('SELECT * FROM exercises WHERE id = ?').get(id)
@@ -78,7 +95,7 @@ export function registerLiftingRoutes(router) {
       sendJson(res, 200, { ok: true, exercise: exercisePayload(findExercise(db, user.id, byName.id)) })
       return
     }
-    db.prepare('INSERT INTO exercises (id, user_id, name, muscle, equipment, increment_kg) VALUES (?, ?, ?, ?, ?, ?)').run(id, user.id, name, muscle, equipment, incrementKg)
+    db.prepare('INSERT INTO exercises (id, user_id, name, muscle, equipment, increment_kg, rep_min, rep_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, user.id, name, muscle, equipment, incrementKg, repRange.lo, repRange.hi)
     sendJson(res, 201, { ok: true, exercise: exercisePayload(findExercise(db, user.id, id)) })
   })
 
@@ -100,6 +117,8 @@ export function registerLiftingRoutes(router) {
     if (body.equipment !== undefined) { sets.push('equipment = ?'); values.push(readEnum(body.equipment, 'equipment', EQUIPMENT)) }
     const inc = optionalNumber(alias(body, 'incrementKg', 'increment_kg'), 'incrementKg', { min: 0.25, max: 50, nullable: true })
     if (inc !== undefined) { sets.push('increment_kg = ?'); values.push(inc) }
+    const repRange = readRepRange(body, existing)
+    if (repRange !== undefined) { sets.push('rep_min = ?', 'rep_max = ?'); values.push(repRange.lo, repRange.hi) }
     if (body.archived !== undefined) { sets.push('archived_at = ?'); values.push(body.archived ? nowSql() : null) }
     if (sets.length === 0) throw new HttpError(400, 'Nothing to update')
     sets.push('updated_at = ?'); values.push(nowSql())
@@ -197,6 +216,45 @@ export function registerLiftingRoutes(router) {
     const existing = db.prepare('SELECT id FROM workouts WHERE id = ? AND user_id = ?').get(params.id, user.id)
     if (!existing) throw new HttpError(404, 'Workout not found')
     db.prepare('DELETE FROM workouts WHERE id = ?').run(existing.id)
+    sendJson(res, 200, { ok: true, deleted: existing.id })
+  })
+
+  /* ---------------- routines ---------------- */
+
+  // Replace-all upsert with a client id, like workouts.
+  router.put('/api/lifting/routines/:id', async ({ req, res, params }) => {
+    const user = requireUser(req)
+    const id = readId(params.id, 'id')
+    const body = asObject(await readJsonBody(req))
+    const name = requireString(alias(body, 'name'), 'name', { max: 60 })
+    const position = optionalNumber(alias(body, 'position'), 'position', { min: 0, max: 1000, integer: true }) ?? 0
+    if (!Array.isArray(body.items)) throw new HttpError(400, 'items must be a list')
+    if (body.items.length > 40) throw new HttpError(400, 'A routine can have at most 40 exercises')
+    const db = getDb()
+    const owned = new Set(db.prepare('SELECT id FROM exercises WHERE user_id = ?').all(user.id).map((r) => r.id))
+    const mine = (v, field) => {
+      if (typeof v !== 'string' || !owned.has(v)) throw new HttpError(400, `${field} is not one of your exercises`)
+      return v
+    }
+    const items = body.items.map((raw, i) => {
+      const item = asObject(raw)
+      const alts = item.alternatives === undefined ? [] : item.alternatives
+      if (!Array.isArray(alts) || alts.length > 5) throw new HttpError(400, `items[${i}].alternatives must be a list of up to 5`)
+      return { exerciseId: mine(item.exerciseId, `items[${i}].exerciseId`), alternatives: [...new Set(alts.map((a, j) => mine(a, `items[${i}].alternatives[${j}]`)))] }
+    })
+    const existing = db.prepare('SELECT user_id FROM routines WHERE id = ?').get(id)
+    if (existing && existing.user_id !== user.id) throw new HttpError(404, 'Routine not found')
+    if (existing) db.prepare('UPDATE routines SET name = ?, items = ?, position = ?, deleted_at = NULL, updated_at = ? WHERE id = ?').run(name, JSON.stringify(items), position, nowSql(), id)
+    else db.prepare('INSERT INTO routines (id, user_id, name, items, position) VALUES (?, ?, ?, ?, ?)').run(id, user.id, name, JSON.stringify(items), position)
+    sendJson(res, existing ? 200 : 201, { ok: true, routine: routinePayload(db.prepare('SELECT * FROM routines WHERE id = ?').get(id)) })
+  })
+
+  router.delete('/api/lifting/routines/:id', async ({ req, res, params }) => {
+    const user = requireUser(req)
+    const db = getDb()
+    const existing = db.prepare('SELECT id FROM routines WHERE id = ? AND user_id = ? AND deleted_at IS NULL').get(params.id, user.id)
+    if (!existing) throw new HttpError(404, 'Routine not found')
+    db.prepare('UPDATE routines SET deleted_at = ?, updated_at = ? WHERE id = ?').run(nowSql(), nowSql(), existing.id)
     sendJson(res, 200, { ok: true, deleted: existing.id })
   })
 }

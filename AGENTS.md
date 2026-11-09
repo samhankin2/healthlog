@@ -41,9 +41,10 @@ src/
     panels/ charts/   view-specific components
     viz/              hand-drawn SVG charts for Insights (no chart library)
     zip.ts garminExport.ts insights.ts   Garmin export reader/normaliser + analysis (pure)
-    lifting.ts        lift analysis: e1RM, records, progression, targets, load, Insights merge (pure)
+    lifting.ts        lift analysis: e1RM, records, status, load, Insights merge (pure)
+    progression.ts    the progression engine: rep ranges, next-session plan, mid-session next set, deload hint (pure)
     lifting.svelte.ts lifting state + offline outbox + rest timer
-    lift/             the gym logger, exercise picker/page, steppers, rest timer
+    lift/             the gym logger, exercise picker/page, routine editor, steppers, rest timer
   design/             tokens.css + ui.css — the design system, global CSS
 index.html            Vite entry
 public/               files Vite copies verbatim into dist/
@@ -67,6 +68,7 @@ deploy/
 qa/                   smoke / API / browser checks
                       garmin-export-test.mjs <zip>: runs the browser importer on a real export
                       lifting-browser-test.mjs: headless-Edge run of the gym logger (after npm run build)
+                      progression-test.mjs: progression engine on realistic training histories
 ```
 
 ## Commands

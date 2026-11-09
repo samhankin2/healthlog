@@ -872,6 +872,23 @@ async function run() {
   eq('lifting: same name returns the existing exercise', [r.status, r.json?.exercise?.id], [200, 'ex-local-0001'])
   r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { name: 'Thing', muscle: 'wings' } })
   eq('lifting: unknown muscle is 400', r.status, 400)
+  r = await api('GET', '/api/lifting', { token: authToken })
+  const pendlay = r.json?.exercises?.find((e) => e.id === 'ex-local-0001')
+  eq('lifting: rep range defaults to automatic', [pendlay?.repMin, pendlay?.repMax], [null, null])
+  r = await api('PUT', '/api/lifting/exercises/ex-local-0001', { token: authToken, body: { repMin: 6, repMax: 10 } })
+  eq('lifting: set rep range', [r.status, r.json?.exercise?.repMin, r.json?.exercise?.repMax], [200, 6, 10])
+  r = await api('PUT', '/api/lifting/exercises/ex-local-0001', { token: authToken, body: { repMax: 12 } })
+  eq('lifting: change one end of the range', [r.status, r.json?.exercise?.repMin, r.json?.exercise?.repMax], [200, 6, 12])
+  r = await api('PUT', '/api/lifting/exercises/ex-local-0001', { token: authToken, body: { repMin: 14 } })
+  eq('lifting: min above max is 400', r.status, 400)
+  r = await api('PUT', '/api/lifting/exercises/ex-local-0001', { token: authToken, body: { repMin: null } })
+  eq('lifting: clearing one end only is 400', r.status, 400)
+  r = await api('PUT', '/api/lifting/exercises/ex-local-0001', { token: authToken, body: { repMin: 0, repMax: 5 } })
+  eq('lifting: zero reps is 400', r.status, 400)
+  r = await api('PUT', '/api/lifting/exercises/ex-local-0001', { token: authToken, body: { repMin: null, repMax: null } })
+  eq('lifting: clear range back to automatic', [r.status, r.json?.exercise?.repMin, r.json?.exercise?.repMax], [200, null, null])
+  r = await api('POST', '/api/lifting/exercises', { token: authToken, body: { name: 'Cable kickback', muscle: 'triceps', equipment: 'cable', repMin: 12, repMax: 20 } })
+  eq('lifting: create with a rep range', [r.status, r.json?.exercise?.repMin, r.json?.exercise?.repMax], [201, 12, 20])
 
   const workoutBody = {
     day: TODAY, name: 'Push', startedAt: new Date(Date.now() - 3600e3).toISOString(),
@@ -906,6 +923,26 @@ async function run() {
   r = await api('GET', '/api/lifting', { token: authToken })
   eq('lifting: list shows the workout', r.json?.workouts?.map((w) => w.id), ['wk-local-0001'])
 
+  // Routines: the default one is seeded once, with a swap for the incline press.
+  const routineList = r.json?.routines ?? []
+  const exByName = new Map((r.json?.exercises ?? []).map((e) => [e.name, e.id]))
+  eq('routines: default routine seeded', routineList.map((x) => [x.name, x.items.length]), [['Upper body', 9]])
+  eq('routines: starts with the incline press, swappable for bench', [routineList[0]?.items[0]?.exerciseId, routineList[0]?.items[0]?.alternatives], [exByName.get('Incline dumbbell press'), [exByName.get('Bench press')]])
+  ok('routines: missing exercises were created', exByName.has('Inverted row') && exByName.has('Incline dumbbell curl'))
+  ok('routines: bench press un-hidden for the swap', !(r.json?.exercises ?? []).find((e) => e.name === 'Bench press')?.archived)
+  r = await api('PUT', '/api/lifting/routines/rt-local-0001', { token: authToken, body: { name: 'Legs', items: [{ exerciseId: exByName.get('Back squat'), alternatives: [exByName.get('Leg press')] }] } })
+  eq('routines: create 201', [r.status, r.json?.routine?.name, r.json?.routine?.items?.length], [201, 'Legs', 1])
+  r = await api('PUT', '/api/lifting/routines/rt-local-0001', { token: authToken, body: { name: 'Legs A', items: [], position: 1 } })
+  eq('routines: replace 200', [r.status, r.json?.routine?.name, r.json?.routine?.items?.length], [200, 'Legs A', 0])
+  r = await api('PUT', '/api/lifting/routines/rt-local-0002', { token: authToken, body: { name: 'Bad', items: [{ exerciseId: 'not-mine-000' }] } })
+  eq('routines: unknown exercise is 400', r.status, 400)
+  r = await api('PUT', '/api/lifting/routines/rt-local-0002', { token: authToken, body: { name: '', items: [] } })
+  eq('routines: empty name is 400', r.status, 400)
+  r = await api('DELETE', `/api/lifting/routines/${routineList[0]?.id}`, { token: authToken })
+  eq('routines: delete 200', r.status, 200)
+  r = await api('GET', '/api/lifting', { token: authToken })
+  eq('routines: deleted default is not seeded again', r.json?.routines?.map((x) => x.name), ['Legs A'])
+
   /* ---------- auth scoping + logout ---------- */
   r = await api('POST', '/api/auth/register', { body: { email: 'owner@example.com', password: 'whatever1' } })
   eq('register: duplicate email without an invite is 409', r.status, 409)
@@ -929,6 +966,11 @@ async function run() {
   eq('scoping: another user cannot overwrite a workout', r.status, 404)
   r = await api('GET', '/api/lifting', { token: ownerToken })
   eq('scoping: another user sees none of the workouts', r.json?.workouts?.length, 0)
+  eq('scoping: another user gets their own default routine only', r.json?.routines?.map((x) => x.name), ['Upper body'])
+  r = await api('PUT', '/api/lifting/routines/rt-local-0001', { token: ownerToken, body: { name: 'Mine now', items: [] } })
+  eq('scoping: another user cannot overwrite a routine', r.status, 404)
+  r = await api('DELETE', '/api/lifting/routines/rt-local-0001', { token: ownerToken })
+  eq('scoping: another user cannot delete a routine', r.status, 404)
 
   r = await api('POST', '/api/auth/logout', { token: authToken })
   eq('logout: 200', r.status, 200)

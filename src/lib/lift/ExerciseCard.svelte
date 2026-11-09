@@ -5,8 +5,9 @@
   import { showToast } from '../toast.svelte'
   import {
     EQUIPMENT_LABEL, KIND_LABEL, KIND_SHORT, MUSCLE_LABEL, PR_LABEL, defaultIncrement, e1rm, exerciseStats, fmtSets, fmtW,
-    isHard, setLoad, suggestNext, type BodyweightAt, type ExerciseStats,
+    isHard, setLoad, type BodyweightAt, type ExerciseStats,
   } from '../lifting'
+  import { PLAN_LABEL, fmtPlan, nextSet, planNext, repRange } from '../progression'
   import { addSet, lift, startRest } from '../lifting.svelte'
   import type { Exercise, LiftSet, SetKind, Workout } from '../types'
 
@@ -20,8 +21,11 @@
     onexpand: () => void
     onmenu: () => void
     onedit: (set: LiftSet) => void
+    /** Stand-ins from a routine (e.g. barbell bench for incline dumbbell); empty once sets are logged. */
+    swaps?: Exercise[]
+    onswap?: (exerciseId: string) => void
   }
-  let { workout, exercise, stats, bw, expanded, live, onexpand, onmenu, onedit }: Props = $props()
+  let { workout, exercise, stats, bw, expanded, live, onexpand, onmenu, onedit, swaps = [], onswap }: Props = $props()
 
   const bodyweight = $derived(exercise.equipment === 'bodyweight')
   const mySets = $derived(workout.sets.filter((s) => s.exerciseId === exercise.id))
@@ -33,7 +37,11 @@
     const before = stats.sessions.filter((s) => s.day <= workout.day)
     return before[before.length - 1] ?? null
   })
-  const target = $derived(last ? suggestNext(exercise, last.sets, stats.metric) : null)
+  /** Sessions before this workout: the plan is built from these. */
+  const prior = $derived(idx >= 0 ? stats.sessions.slice(0, idx) : stats.sessions.filter((s) => s.day <= workout.day))
+  const target = $derived(prior.length ? planNext(exercise, prior, stats.metric, bw, workout.day) : null)
+  const range = $derived(repRange(exercise, prior).range)
+  const liveNext = $derived(nextSet(exercise, target, mySets, range))
   const prBySet = $derived(new Map((current?.prs ?? []).map((p) => [p.setId, p.kinds])))
   const step = $derived(defaultIncrement(exercise))
   const panelId = `ex-panel-${Math.random().toString(36).slice(2, 9)}`
@@ -48,19 +56,20 @@
 
   function prefill(): void {
     const lastMine = mySets[mySets.length - 1]
-    if (lastMine) {
+    if (lastMine?.kind === 'warmup') {
+      // Still warming up: keep the warm-up weight until a working set is logged.
       weight = lastMine.weightKg
-      kind = lastMine.kind === 'warmup' ? 'warmup' : 'working'
-      const workingDone = mySets.filter((s) => s.kind === 'working' || s.kind === 'failure').length
-      reps = target && Math.abs(target.weightKg - lastMine.weightKg) < 1e-9 ? target.reps[workingDone] ?? lastMine.reps : lastMine.reps
+      reps = lastMine.reps
+      kind = 'warmup'
       return
     }
     kind = 'working'
-    if (target) { weight = target.weightKg; reps = target.reps[0]; return }
+    const next = nextSet(exercise, target, mySets, range)
+    if (next) { weight = next.weightKg; reps = next.reps; return }
     const firstHard = last?.hard[0]
     if (firstHard) { weight = firstHard.weightKg; reps = firstHard.reps; return }
     weight = START[exercise.equipment]
-    reps = 8
+    reps = range.lo
   }
   $effect(() => {
     void mySets.length
@@ -116,10 +125,23 @@
 
   {#if expanded}
     <div class="ex-body" id={panelId}>
+      {#if swaps.length && onswap}
+        <div class="swaps">
+          {#each swaps as alt (alt.id)}
+            <button class="swap" type="button" onclick={() => onswap(alt.id)}><Icon name="repeat" size={16} /> Kit taken? Do {alt.name} instead</button>
+          {/each}
+        </div>
+      {/if}
       {#if last || target}
         <div class="hints">
           {#if last}<p class="hint"><span>Last time</span><b>{fmtSets(last.hard.length ? last.hard : last.sets, exercise)}</b></p>{/if}
-          {#if target}<p class="hint target"><span>Try</span><b>{bodyweight ? (target.weightKg ? `BW+${fmtW(target.weightKg)}` : 'BW') : `${fmtW(target.weightKg)} kg`} × {target.reps.join(', ')}</b><em>{target.note}</em></p>{/if}
+          {#if target}
+            <p class="hint target"><span>Try</span><b>{fmtPlan(target, exercise)}</b><em>{target.note}</em></p>
+            <details class="why">
+              <summary>Why? · {PLAN_LABEL[target.kind]} · {range.lo}–{range.hi} reps</summary>
+              <ul>{#each target.why as line, i (i)}<li>{line}</li>{/each}</ul>
+            </details>
+          {/if}
         </div>
       {/if}
 
@@ -160,6 +182,7 @@
             {/each}
           </div>
         {/if}
+        {#if liveNext?.note && kind !== 'warmup'}<p class="adjust" role="status">{liveNext.note}</p>{/if}
         <button class="log-btn" type="button" disabled={reps < 1} onclick={log}>
           <Icon name="check" size={22} />
           Log {kind === 'warmup' ? 'warm-up' : `set ${mySets.filter(isHard).length + 1}`}
@@ -183,6 +206,12 @@
   .hint span { min-width: 4.5rem; color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
   .hint.target b { color: var(--color-accent); }
   .hint em { flex-basis: 100%; padding-left: calc(4.5rem + var(--space-2)); color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
+  .swaps { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .swap { display: inline-flex; min-height: 2.75rem; padding: 0 var(--space-3); align-items: center; gap: var(--space-2); border: 1px dashed var(--color-border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--color-text); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+  .why { font-size: var(--text-xs); color: var(--color-text-muted); }
+  .why summary { display: inline-flex; min-height: 2.75rem; align-items: center; cursor: pointer; font-weight: var(--weight-semibold); }
+  .why ul { display: flex; margin: 0 0 var(--space-1); padding-left: 1.1rem; flex-direction: column; gap: 4px; font-size: var(--text-sm); }
+  .adjust { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--color-warning-soft); color: var(--color-text); font-size: var(--text-sm); }
   .sets { display: flex; margin: 0; padding: 0; flex-direction: column; gap: var(--space-1); list-style: none; }
   .set-row { display: grid; width: 100%; min-height: 3rem; padding: var(--space-2) var(--space-3); align-items: center; grid-template-columns: 1.75rem auto 1fr; gap: var(--space-3); border: 0; border-radius: var(--radius-sm); background: var(--color-surface-sunken); color: var(--color-text); font-variant-numeric: tabular-nums; text-align: left; }
   .set-row.warm { opacity: 0.75; }

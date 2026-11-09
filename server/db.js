@@ -321,6 +321,21 @@ CREATE TABLE IF NOT EXISTS exercises (
   updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Routines: a named, ordered list of exercises to start a workout from. Each
+-- item can name alternatives (swapped in when the kit is taken). Soft-deleted
+-- so the default routine is only ever seeded once per user.
+CREATE TABLE IF NOT EXISTS routines (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  items      TEXT NOT NULL DEFAULT '[]',         -- JSON [{ exerciseId, alternatives: [exerciseId] }]
+  position   INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_routines_user ON routines(user_id, position);
+
 CREATE TABLE IF NOT EXISTS workouts (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -368,6 +383,7 @@ export function migrate(db) {
   db.exec(SCHEMA)
   migrateMacroPctToGrams(db)
   addColumns(db, 'activities', ACTIVITY_EXTRA_COLUMNS)
+  addColumns(db, 'exercises', { rep_min: 'INTEGER', rep_max: 'INTEGER' }) // rep range; null = automatic
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

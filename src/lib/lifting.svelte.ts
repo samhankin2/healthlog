@@ -12,7 +12,7 @@ import { api, ApiError } from './api'
 import { app } from './state.svelte'
 import { today } from './format'
 import { exerciseOrder } from './lifting'
-import type { Equipment, Exercise, LiftSet, Muscle, Workout } from './types'
+import type { Equipment, Exercise, LiftSet, Muscle, Routine, Workout } from './types'
 
 type SyncState = 'idle' | 'saving' | 'offline' | 'error'
 
@@ -25,6 +25,7 @@ interface Outbox {
 export const lift = $state({
   exercises: [] as Exercise[],
   workouts: [] as Workout[],
+  routines: [] as Routine[],
   loaded: false,
   loading: false,
   error: '',
@@ -85,7 +86,8 @@ export async function loadLifting(force = false): Promise<void> {
     lift.activeId = localStorage.getItem(key('active'))
     lift.rest = { ...lift.rest, ...readJson('healthlog.lifting.rest', lift.rest) }
     lift.loaded = false
-    applyServer({ exercises: [], workouts: [] })
+    // The last library seen, so routines and names work with no signal in the gym.
+    applyServer({ workouts: [], ...readJson<{ exercises: Exercise[]; routines: Routine[] }>(key('library'), { exercises: [], routines: [] }) })
   } else if (lift.loaded && !force) {
     void flush()
     return
@@ -96,6 +98,7 @@ export async function loadLifting(force = false): Promise<void> {
     const data = await api.getLifting()
     applyServer(data)
     lift.loaded = true
+    cacheLibrary()
   } catch (cause) {
     // Offline with a local copy is still usable: show what the outbox holds.
     lift.error = cause instanceof Error ? cause.message : 'Could not load your lifting log.'
@@ -107,7 +110,12 @@ export async function loadLifting(force = false): Promise<void> {
   void flush()
 }
 
-function applyServer(data: { exercises: Exercise[]; workouts: Workout[] }): void {
+function cacheLibrary(): void {
+  try { localStorage.setItem(key('library'), JSON.stringify({ exercises: $state.snapshot(lift.exercises), routines: $state.snapshot(lift.routines) })) } catch { /* storage full */ }
+}
+
+function applyServer(data: { exercises: Exercise[]; workouts: Workout[]; routines?: Routine[] }): void {
+  if (data.routines) lift.routines = [...data.routines].sort((a, b) => a.position - b.position)
   const exercises = new Map(data.exercises.map((e) => [e.id, e]))
   for (const e of outbox.exercises) if (![...exercises.values()].some((x) => x.name.toLowerCase() === e.name.toLowerCase())) exercises.set(e.id, e)
   lift.exercises = [...exercises.values()].sort((a, b) => a.name.localeCompare(b.name))
@@ -170,7 +178,7 @@ async function flushOnce(): Promise<void> {
   lift.sync = 'saving'
   try {
     for (const ex of [...outbox.exercises]) {
-      const { exercise } = await api.createExercise({ id: ex.id, name: ex.name, muscle: ex.muscle, equipment: ex.equipment, incrementKg: ex.incrementKg })
+      const { exercise } = await api.createExercise({ id: ex.id, name: ex.name, muscle: ex.muscle, equipment: ex.equipment, incrementKg: ex.incrementKg, repMin: ex.repMin ?? null, repMax: ex.repMax ?? null })
       outbox.exercises = outbox.exercises.filter((e) => e.id !== ex.id)
       lift.exercises = lift.exercises.map((e) => (e.id === ex.id ? exercise : e))
       remapExercise(ex.id, exercise.id)
@@ -367,7 +375,7 @@ export function createExercise(input: { name: string; muscle: Muscle; equipment:
   return ex
 }
 
-export async function editExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg'>>): Promise<void> {
+export async function editExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'repMin' | 'repMax'>>): Promise<void> {
   const pendingLocal = outbox.exercises.find((e) => e.id === id)
   if (pendingLocal) {
     Object.assign(pendingLocal, patch)
@@ -409,4 +417,49 @@ export function stopRest(): void {
 export function setRestPreset(seconds: number): void {
   lift.rest.preset = seconds
   persist()
+}
+
+/* ---------------- routines ---------------- */
+
+/** Start a live workout with the routine's exercises planned in order. */
+export function startRoutine(r: Routine): Workout {
+  return startWorkout({ name: r.name, plan: r.items.map((i) => i.exerciseId) })
+}
+
+/** Saved straight to the server (routines are edited rarely, and online). */
+export async function saveRoutine(r: Pick<Routine, 'name' | 'items'> & { id?: string; position?: number }): Promise<Routine> {
+  const body = { id: r.id ?? uid(), name: r.name.trim() || 'Routine', items: r.items, position: r.position ?? lift.routines.length }
+  const { routine } = await api.saveRoutine(body)
+  const rest = lift.routines.filter((x) => x.id !== routine.id)
+  lift.routines = [...rest, routine].sort((a, b) => a.position - b.position)
+  cacheLibrary()
+  return routine
+}
+
+export async function deleteRoutine(id: string): Promise<void> {
+  await api.deleteRoutine(id)
+  lift.routines = lift.routines.filter((r) => r.id !== id)
+  cacheLibrary()
+}
+
+/** Other exercises that can stand in for this one, from any routine that pairs them. */
+export function alternativesFor(exerciseId: string): string[] {
+  for (const r of lift.routines) {
+    for (const item of r.items) {
+      const group = [item.exerciseId, ...item.alternatives]
+      if (group.includes(exerciseId)) return group.filter((id) => id !== exerciseId)
+    }
+  }
+  return []
+}
+
+/** Put another exercise in a planned slot (only before any set is logged for it). */
+export function swapExercise(workoutId: string, from: string, to: string): boolean {
+  const w = workoutById(workoutId)
+  if (!w || w.sets.some((s) => s.exerciseId === from)) return false
+  const order = workoutExercises(w)
+  if (order.includes(to)) lift.plans[workoutId] = order.filter((id) => id !== from)
+  else lift.plans[workoutId] = order.map((id) => (id === from ? to : id))
+  persist()
+  return true
 }

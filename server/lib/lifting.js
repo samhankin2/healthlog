@@ -60,7 +60,56 @@ const STARTER = [
   ['Hanging leg raise', 'core', 'bodyweight'],
   ['Cable crunch', 'core', 'cable'],
   ['Ab wheel rollout', 'core', 'bodyweight'],
+  ['Inverted row', 'back', 'bodyweight'],
+  ['Incline dumbbell curl', 'biceps', 'dumbbell'],
 ]
+
+/**
+ * The routine every user starts with (seeded once; edit or delete it in the
+ * app). Each entry: [name, muscle, equipment, alternatives as [name, muscle, equipment]].
+ */
+const DEFAULT_ROUTINE = {
+  name: 'Upper body',
+  items: [
+    ['Incline dumbbell press', 'chest', 'dumbbell', [['Bench press', 'chest', 'barbell']]],
+    ['Pull-up', 'back', 'bodyweight'],
+    ['Inverted row', 'back', 'bodyweight'],
+    ['Dumbbell shoulder press', 'shoulders', 'dumbbell'],
+    ['Incline dumbbell curl', 'biceps', 'dumbbell'],
+    ['Skull crusher', 'triceps', 'barbell'],
+    ['Overhead triceps extension', 'triceps', 'cable'],
+    ['Hanging leg raise', 'core', 'bodyweight'],
+    ['Lateral raise', 'shoulders', 'dumbbell'],
+  ],
+}
+
+/** The id of the user's exercise with this name, creating (or un-hiding) it. */
+function exerciseIdByName(db, userId, [name, muscle, equipment]) {
+  const row = db.prepare('SELECT id, archived_at FROM exercises WHERE user_id = ? AND name = ? COLLATE NOCASE').get(userId, name)
+  if (row) {
+    if (row.archived_at) db.prepare('UPDATE exercises SET archived_at = NULL WHERE id = ?').run(row.id)
+    return row.id
+  }
+  const id = randomUUID()
+  db.prepare('INSERT INTO exercises (id, user_id, name, muscle, equipment) VALUES (?, ?, ?, ?, ?)').run(id, userId, name, muscle, equipment)
+  return id
+}
+
+/** Seed the default routine for a user who has never had a routine (deleted ones count). */
+export function ensureDefaultRoutine(db, userId) {
+  if (db.prepare('SELECT 1 FROM routines WHERE user_id = ? LIMIT 1').get(userId)) return
+  const items = DEFAULT_ROUTINE.items.map(([name, muscle, equipment, alts = []]) => ({
+    exerciseId: exerciseIdByName(db, userId, [name, muscle, equipment]),
+    alternatives: alts.map((a) => exerciseIdByName(db, userId, a)),
+  }))
+  db.prepare('INSERT INTO routines (id, user_id, name, items, position) VALUES (?, ?, ?, ?, 0)').run(randomUUID(), userId, DEFAULT_ROUTINE.name, JSON.stringify(items))
+}
+
+export function routinePayload(row) {
+  let items = []
+  try { items = JSON.parse(row.items) } catch { /* corrupt row: empty */ }
+  return { id: row.id, name: row.name, items, position: Number(row.position), updatedAt: iso(row.updated_at) }
+}
 
 /** Seed the starter library for a user who has never had one. */
 export function ensureStarterLibrary(db, userId) {
@@ -80,6 +129,8 @@ export function exercisePayload(row) {
     muscle: row.muscle,
     equipment: row.equipment,
     incrementKg: num(row.increment_kg),
+    repMin: num(row.rep_min),
+    repMax: num(row.rep_max),
     archived: Boolean(row.archived_at),
     createdAt: iso(row.created_at),
   }

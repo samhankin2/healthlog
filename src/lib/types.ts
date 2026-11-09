@@ -500,6 +500,9 @@ export interface Exercise {
   equipment: Equipment
   /** Next-weight step; null = the equipment default. */
   incrementKg: number | null
+  /** Rep range for progression; both null = picked automatically. */
+  repMin?: number | null
+  repMax?: number | null
   archived: boolean
   createdAt?: string | null
 }
@@ -528,7 +531,22 @@ export interface Workout {
   sets: LiftSet[]
 }
 
+export interface RoutineItem {
+  exerciseId: string
+  /** Swapped in when the kit for the main exercise is taken. */
+  alternatives: string[]
+}
+
+export interface Routine {
+  id: string
+  name: string
+  items: RoutineItem[]
+  position: number
+  updatedAt?: string | null
+}
+
 export interface LiftingPayload {
   exercises: Exercise[]
   workouts: Workout[]
+  routines?: Routine[]
 }

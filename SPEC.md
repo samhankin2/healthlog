@@ -273,11 +273,14 @@ overwrites a stored value.
 `exercises` (per user: name — unique case-insensitively — `muscle`
 chest|back|shoulders|biceps|triceps|quads|hamstrings|glutes|calves|core|other,
 `equipment` barbell|dumbbell|machine|cable|bodyweight|kettlebell|other,
-`increment_kg` (null = equipment default), `archived_at`), `workouts` (per user:
+`increment_kg` (null = equipment default), `rep_min` / `rep_max` (rep range for
+progression, both null = automatic), `archived_at`), `workouts` (per user:
 `day`, `name`, `notes`, `started_at` / `ended_at` ISO from the client clock,
 `ended_at` null while in progress) and `workout_sets` (`workout_id` cascade,
 `exercise_id`, `position`, `weight_kg` — added load for bodyweight lifts —
-`reps`, `rpe` 1–10 optional, `kind` working|warmup|drop|failure, `done_at`).
+`reps`, `rpe` 1–10 optional, `kind` working|warmup|drop|failure, `done_at`),
+`routines` (per user: `name`, `items` JSON `[{exerciseId, alternatives:[exerciseId]}]`,
+`position`, `deleted_at` — soft delete, so the default routine is seeded once).
 Ids are client-generated (8–64 of `[A-Za-z0-9_-]`) so an offline phone can create
 them. Exact DDL lives in `server/db.js`.
 
@@ -525,24 +528,35 @@ GET  /api/insights?from&to   (default: the last 365 days)
 ### Lifting
 
 ```
-GET    /api/lifting?from&to              -> 200 { ok:true, exercises:[{id,name,muscle,equipment,incrementKg,archived,createdAt}],
+GET    /api/lifting?from&to              -> 200 { ok:true, exercises:[{id,name,muscle,equipment,incrementKg,repMin,repMax,archived,createdAt}],
                                                   workouts:[{id,day,name,notes,startedAt,endedAt,createdAt,updatedAt,
-                                                  sets:[{id,exerciseId,weightKg,reps,rpe,kind,doneAt}]}] }
-POST   /api/lifting/exercises { id?, name, muscle?, equipment?, incrementKg? } -> 201 { ok:true, exercise }
+                                                  sets:[{id,exerciseId,weightKg,reps,rpe,kind,doneAt}]}],
+                                                  routines:[{id,name,items:[{exerciseId,alternatives}],position,updatedAt}] }
+POST   /api/lifting/exercises { id?, name, muscle?, equipment?, incrementKg?, repMin?, repMax? } -> 201 { ok:true, exercise }
        # idempotent: a known id, or a name that exists (case-insensitive, un-archived), returns it with 200
-PUT    /api/lifting/exercises/:id { name?, muscle?, equipment?, incrementKg?, archived? } -> 200 { ok:true, exercise }
+PUT    /api/lifting/exercises/:id { name?, muscle?, equipment?, incrementKg?, repMin?, repMax?, archived? } -> 200 { ok:true, exercise }
 DELETE /api/lifting/exercises/:id        -> 200 { ok:true, archived:<id> } when it has sets, else { ok:true, deleted:<id> }
 GET    /api/lifting/workouts/:id         -> 200 { ok:true, workout }
 PUT    /api/lifting/workouts/:id { day, name?, notes?, startedAt?, endedAt?, sets:[{ id, exerciseId, weightKg, reps, rpe?, kind? }] }
                                          -> 201 created / 200 replaced { ok:true, workout }   (max 400 sets)
 DELETE /api/lifting/workouts/:id         -> 200 { ok:true, deleted:<id> }
+PUT    /api/lifting/routines/:id { name, items:[{ exerciseId, alternatives? }], position? }
+                                         -> 201 created / 200 replaced { ok:true, routine }   (max 40 items, 5 alternatives each)
+DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (soft delete)
 ```
 
 - **Replace-all upsert.** `PUT /api/lifting/workouts/:id` writes the whole
   workout and its sets in one transaction, so a retry can never duplicate a set.
   Every set's `exerciseId` must be one of the user's exercises.
 - **Starter library.** The first `GET /api/lifting` for a user with no
-  exercises seeds 48 common lifts.
+  exercises seeds 50 common lifts.
+- **Default routine.** The first `GET /api/lifting` for a user who has never had
+  a routine (deleted ones count) seeds "Upper body": Incline dumbbell press (stand-in:
+  Bench press), Pull-up, Inverted row, Dumbbell shoulder press, Incline dumbbell
+  curl, Skull crusher, Overhead triceps extension, Hanging leg raise, Lateral
+  raise. Missing exercises are created and hidden ones un-hidden. Every item
+  `exerciseId` / alternative must be one of the user's exercises. Routines are
+  edited online only, and cached on the device with the exercise list so they start offline.
 - **Offline first** (`src/lib/lifting.svelte.ts`). Changes apply on the device
   first and sit in a per-user `localStorage` outbox (new exercises, then workout
   upserts, then deletes) until the API accepts them. Retries: on `online`, when
@@ -556,12 +570,36 @@ DELETE /api/lifting/workouts/:id         -> 200 { ok:true, deleted:<id> }
   day, else the first after). Records (best e1RM, heaviest, rep PR) count only
   after the first session. Status: last 4 weeks of training vs the 4 before
   (or everything earlier): ≤ −3 % slipping, the last session a best or ≥ +1 %
-  progressing, no best in the last 3 sessions stalled, else steady. Next target
-  (double progression on the last session's top weight): every set matched the
-  first and it was ≥ 5 reps → + one increment (barbell / machine / cable 2.5 kg,
-  dumbbell 2, kettlebell 4, or the exercise's own), same reps up to 6, two fewer
-  above; else same weight, one more rep on the weakest set. Weekly volume =
+  progressing, no best in the last 3 sessions stalled, else steady. Weekly volume =
   hard sets per primary muscle, against a 10–20 band.
+- **Progression** (`src/lib/progression.ts`, pure; the header comment has the
+  sources). Rep range (`repMin`/`repMax` are both null or both 1–50, max ≥ min) is
+  set on the exercise, else a default: core 10–20; calves, biceps and isolation
+  by name (curl, raise, fly, extension, pushdown …) 10–15; barbell 5–8;
+  bodyweight 6–12; else 8–12. If the median first working set of the last 4
+  sessions is more than 1 below or 2 above the default, the preset that starts
+  there is used instead. RIR = 10 − RPE, capped at 4; failure = 0; unknown = same
+  effort as last time. Prescriptions aim for RPE 8 (RIR 2), never easier than
+  last time. The plan for the next session, checked in this order:
+  1. 21+ days off → 90 % (85 % from 42 days, 80 % from 90). 10–20 days → repeat.
+  2. First top set ≥ 2 below the range bottom, or under it at RIR ≤ 0.5 → lighter
+     weight that predicts bottom + 1 reps.
+  3. Plateau: ≥ 4 sessions since the latest ≥ 8 % top-weight drop (looking back
+     12 sessions), and no new best (+0.2 %) in the last 3. First time → reset to about
+     90 %. Already reset, and back within one step of the weight it was reset from → switch rep range
+     (≤ 8 → 8–12, ≥ 10 → 6–10, else barbell 5–8 / other 10–15).
+  4. Last session ≥ 5 % below the best of the 3 before → repeat.
+  5. Every top set at the range top, or all at RIR ≥ 3 → add weight. Reps at
+     the new weight come from each set's Epley estimate. Without RPE the step is
+     one increment; when easy (or 2+ over the top), up to 3 increments within
+     +10 %, while the first set still makes the bottom and none is more than one below it.
+     A step that predicts 2+ below the bottom keeps adding reps instead (it jumps
+     anyway at 4+ over the top).
+  6. Else add reps: one on the weakest set; at RIR ≥ 2 on every set, 2 or more.
+  Back-off sets keep their weight ratio to the top set. Mid-session
+  (`nextSet`), the next set: under the range at RIR ≤ 1 → lighter; 2+ short of the plan →
+  match the last set; RIR ≥ 3 and on plan → one increment more. Lifting home suggests a lighter week when ≥ 3 lifts
+  (≥ 40 % of those trained in 3 weeks with 4+ sessions) are stalled or slipping.
 - **Insights.** `mergeLifting` folds logged workouts into the Garmin
   activities before `buildInsights` / `buildAdvanced`: a workout on a day with a
   watch strength activity enriches it (sets, reps, the higher of the two loads);
@@ -745,17 +783,22 @@ that the frontend can read.
   History and Activity; on a phone Foods and History are reached from the
   Calories view (History also from the Dashboard).
 - **Lifting view** (`#/lifting`, sub-pages `#/lifting/log/<workoutId>`,
-  `#/lifting/exercise/<exerciseId>`, `#/lifting/history`), built for one hand in
-  the gym: start or resume a workout, repeat a recent session, this week's days /
-  sets / volume, every lift with its e1RM, sparkline, status and next target,
+  `#/lifting/exercise/<exerciseId>`, `#/lifting/history`, `#/lifting/routine/<id|new>`),
+  built for one hand in the gym: start a routine (its exercises planned in order) or
+  an empty workout, resume one, edit routines (order, stand-ins), repeat a recent session, this week's days /
+  sets / volume, a lighter-week suggestion when several lifts stall at once,
+  every lift with its e1RM, sparkline, status and next target,
   weekly hard sets per muscle. The logger: an exercise card per lift with last
-  time, the suggested target and each set compared with the same set last time;
+  time, a one-tap swap to a routine stand-in before any set is logged
+  (also in the card menu), the suggested plan with a "Why?" disclosure, a mid-session adjustment
+  note, and each set compared with the same set last time;
   an entry pad with large −/+ steppers (hold to repeat, tap to type), warm-up /
   drop / failure and RPE chips, and one large "Log set" button prefilled for the
   next set; a toast on a record; a rest timer above the tab bar (vibrates and
   beeps, default 1–4 min); the screen kept awake (Wake Lock) during a live
   session; a save status (saved / saved on phone / not saved). The exercise page:
-  records, status, next target, e1RM per session with the all-time best as a
+  records, status, next plan with its reasoning (and a one-tap rep-range switch
+  when suggested), e1RM per session with the all-time best as a
   step line, volume per session, best weight for 1/3/5/8/10/12+ reps, sessions.
   Insights gains a **Strength** block (sessions, hard sets per week, volume,
   records, main lifts, weekly sets per muscle) after Training.

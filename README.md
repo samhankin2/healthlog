@@ -36,8 +36,16 @@ Cloud VM, SQLite on disk, Caddy for TLS.
 - Log sets in the gym one-handed: big −/+ steppers, one "Log set" button already
   filled in for the next set, warm-up / drop / failure and RPE, a rest timer that
   vibrates, and the screen kept awake during a session.
-- Each exercise shows last time's sets, a suggested target (double progression)
-  and whether every set beat the same set last time; records get a toast.
+- Each exercise shows last time's sets and a plan for today with a "Why?". The
+  plan comes from a progression engine: rep ranges per lift, weight jumps sized
+  from your own estimated max, and RPE used when you log it. It tells an off day
+  from a plateau (reset ~10 %, then change rep range), eases you back in after
+  time off, and adjusts mid-session when a set goes much better or worse than
+  planned. Several lifts stalling at once suggests a lighter week. It also shows
+  whether each set beat the same set last time, and records get a toast.
+- Routines: start one and its lifts are lined up in order. Each lift can have a
+  stand-in for when the kit is taken (incline dumbbell press → barbell bench),
+  swapped with one tap. New accounts start with an upper-body routine.
 - Works with no signal: sets are kept on the phone and sync when it reconnects.
 - Per lift: estimated 1RM over time, records, best weight for 1–12+ reps,
   progressing / steady / stalled / slipping. Weekly hard sets per muscle.
