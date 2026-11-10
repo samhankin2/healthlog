@@ -31,7 +31,7 @@
   let insightsState = $state<'loading' | 'ready' | 'none'>('loading')
   onMount(async () => {
     try {
-      const first = lift.workouts.map((w) => w.day).sort()[0] ?? todayDay
+      const first = lift.workouts.filter((w) => w.sets.length).map((w) => w.day).sort()[0] ?? todayDay
       insights = await api.getInsights({ from: shiftDay(first, -45), to: todayDay })
       insightsState = 'ready'
     } catch {

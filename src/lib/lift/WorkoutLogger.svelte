@@ -62,6 +62,9 @@
     window.clearInterval(clock)
     document.removeEventListener('visibilitychange', onVisible)
     void wake?.release().catch(() => {})
+    // A past session left with nothing logged was never a session: drop it.
+    const w = workoutById(workoutId)
+    if (w && w.endedAt && !w.sets.length) deleteWorkout(w.id)
   })
 
   /* ---------- sheets ---------- */

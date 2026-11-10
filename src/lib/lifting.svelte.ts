@@ -11,7 +11,7 @@
 import { api, ApiError } from './api'
 import { app } from './state.svelte'
 import { today } from './format'
-import { exerciseOrder } from './lifting'
+import { exerciseOrder, isHard } from './lifting'
 import type { Equipment, Exercise, LiftSet, Muscle, Routine, Workout } from './types'
 
 type SyncState = 'idle' | 'saving' | 'offline' | 'error'
@@ -122,6 +122,15 @@ function applyServer(data: { exercises: Exercise[]; workouts: Workout[]; routine
   const workouts = new Map(data.workouts.map((w) => [w.id, w]))
   for (const { w } of Object.values(outbox.workouts)) workouts.set(w.id, w)
   for (const id of outbox.deletes) workouts.delete(id)
+  // A session with nothing logged that is finished, or was left open for over
+  // 12 h, is debris from an older build that never told the server to drop it.
+  const stale = (w: Workout): boolean => !w.sets.length && (Boolean(w.endedAt) || !w.startedAt || Date.now() - Date.parse(w.startedAt) >= 12 * 3600e3)
+  const debris = [...workouts.values()].filter((w) => stale(w) && !outbox.workouts[w.id] && w.id !== lift.activeId)
+  for (const w of debris) {
+    workouts.delete(w.id)
+    if (!outbox.deletes.includes(w.id)) outbox.deletes.push(w.id)
+  }
+  if (debris.length) { persist(); void flush() }
   lift.workouts = [...workouts.values()]
   // Resume a session started on another device (or before a cleared cache).
   if (lift.activeId && !workouts.has(lift.activeId) && lift.loaded) lift.activeId = null
@@ -326,13 +335,13 @@ export function moveExercise(workoutId: string, exerciseId: string, by: -1 | 1):
   else persist()
 }
 
-/** End the live session. An empty one is discarded instead. */
+/** End the live session. One with no working sets (nothing, or warm-ups only) is discarded instead. */
 export function finishWorkout(id: string, notes?: string | null): 'saved' | 'discarded' {
   const w = workoutById(id)
   if (lift.activeId === id) lift.activeId = null
   stopRest()
   if (!w) return 'discarded'
-  if (!w.sets.length) {
+  if (!w.sets.some(isHard)) {
     deleteWorkout(id)
     return 'discarded'
   }
@@ -341,7 +350,9 @@ export function finishWorkout(id: string, notes?: string | null): 'saved' | 'dis
 }
 
 export function deleteWorkout(id: string): void {
-  const known = Boolean(outbox.workouts[id]) || lift.workouts.some((w) => w.id === id && w.sets.length)
+  // Always tell the server: a live session is uploaded the moment it starts,
+  // so even an empty one may exist there. A 404 (never uploaded) is fine.
+  const known = Boolean(outbox.workouts[id]) || lift.workouts.some((w) => w.id === id)
   lift.workouts = lift.workouts.filter((w) => w.id !== id)
   delete outbox.workouts[id]
   delete lift.plans[id]

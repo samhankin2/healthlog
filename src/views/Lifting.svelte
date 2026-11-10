@@ -9,7 +9,7 @@
   import { app, navigate, subpath } from '../lib/state.svelte'
   import { fmtLong, today } from '../lib/format'
   import {
-    MUSCLE_LABEL, STATUS_LABEL, VOLUME_BAND, allExerciseStats, bodyweightLookup, exerciseOrder, fmtSets, fmtTonnage,
+    MUSCLE_LABEL, STATUS_LABEL, VOLUME_BAND, allExerciseStats, bodyweightLookup, exerciseOrder, fmtSets, fmtTonnage, isHard,
     muscleAverages, muscleWeeks, sortWorkouts, workoutSummary,
   } from '../lib/lifting'
   import { shiftDay, weekStart } from '../lib/insights'
@@ -28,8 +28,9 @@
   const exMap = $derived(new Map(lift.exercises.map((e) => [e.id, e])))
   const stats = $derived(allExerciseStats(lift.exercises, lift.workouts, bw, todayDay))
   const deload = $derived(deloadAdvice([...stats.values()], todayDay))
-  const done = $derived(sortWorkouts(lift.workouts.filter((w) => w.sets.length)).reverse())
   const active = $derived(activeWorkout())
+  // Finished sessions only: the one in progress is not a session yet.
+  const done = $derived(sortWorkouts(lift.workouts.filter((w) => w.id !== active?.id && w.sets.some(isHard))).reverse())
   const used = $derived([...stats.values()].filter((s) => s.sessions.length).sort((a, b) => (b.lastDay ?? '').localeCompare(a.lastDay ?? '')))
   const weeks = $derived(muscleWeeks(lift.workouts, exMap, shiftDay(todayDay, -83), todayDay, bw))
   const thisWeek = $derived(weeks[weeks.length - 1])

@@ -176,10 +176,22 @@ try {
   const swapText = await evaluate(`return document.querySelector('.ex-card.open')?.innerText ?? ''`)
   ok('routine: swapped lift keeps its own history and plan', /last time\s*82\.5 × 6, 6/i.test(swapText) && /try\s*82\.5 kg × /i.test(swapText), swapText.slice(0, 300).replace(/\n/g, ' / '))
   ok('routine: no horizontal overflow', (await overflow()) <= 0, String(await overflow()))
+  const routineId = await evaluate(`return location.hash.split('/').pop()`)
+  let uploaded = false
+  for (let i = 0; i < 40 && !uploaded; i++) { uploaded = Boolean((await json('GET', `/api/lifting/workouts/${routineId}`, token)).workout); if (!uploaded) await sleep(150) }
+  ok('routine: live session uploaded when started', uploaded)
   await click('button.finish')
   await until(`document.body.innerText.includes('Discard')`)
   await click('button', 'Discard')
   ok('routine: empty session discarded', await until(`location.hash === '#/lifting' && document.body.innerText.includes('Start Upper body')`))
+  let gone = false
+  for (let i = 0; i < 40 && !gone; i++) { gone = !(await json('GET', `/api/lifting/workouts/${routineId}`, token)).workout; if (!gone) await sleep(150) }
+  ok('routine: discarded session deleted on the server too', gone)
+  const sessionsBefore = (await json('GET', '/api/lifting', token)).workouts.length
+  await evaluate(`location.reload(); return true`)
+  await until(`document.body.innerText.includes('Start Upper body')`)
+  ok('routine: no session in progress after a reload', await evaluate(`return !document.body.innerText.includes('in progress')`))
+  ok('routine: no ghost session after a reload', (await json('GET', '/api/lifting', token)).workouts.length === sessionsBefore)
 
   await click('button', 'Edit')
   ok('routine editor: opens', await until(`location.hash.startsWith('#/lifting/routine/') && document.body.innerText.includes('Exercises, in order')`))
