@@ -10,7 +10,7 @@
   import { fmtLong, today } from '../lib/format'
   import {
     MUSCLE_LABEL, STATUS_LABEL, VOLUME_BAND, allExerciseStats, bodyweightLookup, exerciseOrder, fmtSets, fmtTonnage, isHard,
-    muscleAverages, muscleWeeks, sortWorkouts, workoutSummary,
+    firstLiftDay, muscleAverages, muscleWeeks, sortWorkouts, workoutSummary,
   } from '../lib/lifting'
   import { shiftDay, weekStart } from '../lib/insights'
   import { deloadAdvice, fmtPlan } from '../lib/progression'
@@ -34,7 +34,9 @@
   const used = $derived([...stats.values()].filter((s) => s.sessions.length).sort((a, b) => (b.lastDay ?? '').localeCompare(a.lastDay ?? '')))
   const weeks = $derived(muscleWeeks(lift.workouts, exMap, shiftDay(todayDay, -83), todayDay, bw))
   const thisWeek = $derived(weeks[weeks.length - 1])
-  const muscles = $derived(muscleAverages(weeks, 4).filter((m) => m.sets > 0))
+  const firstDay = $derived(firstLiftDay(lift.workouts))
+  const avgWeeks = $derived(firstDay === null ? 4 : Math.max(1, Math.min(4, weeks.filter((w) => shiftDay(w.week, 6) >= firstDay).length)))
+  const muscles = $derived(muscleAverages(weeks, 4, firstDay).filter((m) => m.sets > 0))
   const templates = $derived.by(() => {
     const seen = new Set<string>()
     return done.filter((w) => {
@@ -186,7 +188,7 @@
 
       {#if muscles.length}
         <section class="card pad" aria-labelledby="muscle-title">
-          <h2 class="sec" id="muscle-title">Weekly hard sets per muscle <small>(4-week average)</small></h2>
+          <h2 class="sec" id="muscle-title">Weekly hard sets per muscle <small>({avgWeeks === 1 ? 'this week' : `${avgWeeks}-week average`})</small></h2>
           <ul class="mus">
             {#each muscles as m (m.muscle)}
               <li>

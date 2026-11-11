@@ -13,7 +13,7 @@
   import { fmtLong, today } from '../format'
   import { shiftDay, weekStart } from '../insights'
   import { fmtDayLong } from '../viz/scale'
-  import { PR_LABEL, fmtW, type BodyweightAt, type ExerciseStats } from '../lifting'
+  import { PR_LABEL, firstLiftDay, fmtW, type BodyweightAt, type ExerciseStats } from '../lifting'
   import {
     VERDICT_LABEL, composition, consistency, factorReport, liftTrend, muscleHeat, recordEvents, restReport, routineUse, sessionForms, strengthIndex,
   } from '../liftAnalysis'
@@ -51,7 +51,13 @@
   const heat = $derived(muscleHeat(lift.workouts, exMap, todayDay))
   const records = $derived(recordEvents(all))
   const prs30 = $derived(records.filter((r) => r.day > shiftDay(todayDay, -30)).length)
-  const setsPerWeek = $derived(Math.round(heat.rows.reduce((a, r) => a + r.cells.slice(-4).reduce((b, c) => b + c.sets, 0), 0) / 4))
+  // Average over the last 4 weeks, or over fewer if the log is younger than that.
+  const setsWeeks = $derived.by(() => {
+    const first = firstLiftDay(lift.workouts)
+    if (first === null) return 4
+    return Math.max(1, Math.min(4, heat.weeks.slice(-4).filter((wk) => shiftDay(wk, 6) >= first).length))
+  })
+  const setsPerWeek = $derived(Math.round(heat.rows.reduce((a, r) => a + r.cells.slice(-4).reduce((b, c) => b + c.sets, 0), 0) / setsWeeks))
   const prWeeks = $derived.by(() => {
     const start = shiftDay(weekStart(todayDay), -7 * 25)
     return Array.from({ length: 26 }, (_, i) => {
@@ -81,7 +87,7 @@
     <div class="tiles">
       <div class="tile"><span>Strength index, {index?.sinceStart ? 'since you started' : '12 weeks'}</span><b>{index?.change12w !== null && index?.change12w !== undefined ? pct(index.change12w) : '—'}</b><em>{index ? `${index.lifts} lifts combined` : 'Needs 3+ sessions of a lift'}</em></div>
       <div class="tile"><span>Sessions / week</span><b>{cons.perWeek8.toFixed(1)}</b><em>last 8 weeks · {cons.weekStreak}-week streak</em></div>
-      <div class="tile"><span>Hard sets / week</span><b>{setsPerWeek}</b><em>last 4 weeks</em></div>
+      <div class="tile"><span>Hard sets / week</span><b>{setsPerWeek}</b><em>last {setsWeeks === 1 ? 'week' : `${setsWeeks} weeks`}</em></div>
       <div class="tile"><span>Records</span><b>{prs30}</b><em>last 30 days · {records.length} all time</em></div>
     </div>
 

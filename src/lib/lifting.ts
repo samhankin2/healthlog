@@ -366,9 +366,20 @@ export function muscleWeeks(workouts: Workout[], exMap: Map<string, Exercise>, f
   return [...out.values()]
 }
 
-/** Average weekly hard sets per muscle over the last `weeks` full-or-current weeks. */
-export function muscleAverages(weeks: MuscleWeek[], count = 4): { muscle: Muscle; label: string; sets: number }[] {
-  const recent = weeks.slice(-count)
+/** Day of the first logged workout with a hard set, or null if there is none. */
+export function firstLiftDay(workouts: Workout[]): string | null {
+  let first: string | null = null
+  for (const w of workouts) if (w.sets.some(isHard) && (first === null || w.day < first)) first = w.day
+  return first
+}
+
+/**
+ * Average weekly hard sets per muscle over the last `count` weeks. Weeks that
+ * end before `firstDay` (the first logged workout) are not counted, so a log
+ * younger than `count` weeks averages over the weeks it actually has.
+ */
+export function muscleAverages(weeks: MuscleWeek[], count = 4, firstDay: string | null = null): { muscle: Muscle; label: string; sets: number }[] {
+  const recent = weeks.filter((w) => firstDay === null || shiftDay(w.week, 6) >= firstDay).slice(-count)
   const n = Math.max(1, recent.length)
   return MUSCLES.map((m) => ({ muscle: m.key, label: m.label, sets: recent.reduce((a, w) => a + w.sets[m.key], 0) / n }))
     .filter((m) => m.sets > 0 || m.muscle !== 'other')
@@ -476,9 +487,11 @@ export function strengthInsight(lifting: LiftingPayload, from: string, to: strin
     })
   }
   lifts.sort((a, b) => stats.get(b.exercise.id)!.sessions.length - stats.get(a.exercise.id)!.sessions.length)
-  const span = Math.max(1, (dayNum(to) - dayNum(from) + 1) / 7)
+  const first = firstLiftDay(lifting.workouts)
+  const spanFrom = first !== null && first > from ? first : from
+  const span = Math.max(1, (dayNum(to) - dayNum(spanFrom) + 1) / 7)
   return {
     sessions: inRange.length, hardSets, setsPerWeek: hardSets / span, volume, prs,
-    lifts: lifts.slice(0, 6), muscles: muscleAverages(weeks, Math.min(weeks.length, 4)),
+    lifts: lifts.slice(0, 6), muscles: muscleAverages(weeks, 4, first),
   }
 }
