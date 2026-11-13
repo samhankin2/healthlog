@@ -6,7 +6,7 @@ import { alias, asObject, clampInt, optionalNumber, optionalString, requireStrin
 import { isISODate, today } from '../lib/metrics.js'
 import { findMeal, insertMeal, listMeals, replaceItems, totalsFromItems, normaliseItems } from '../lib/meals.js'
 
-const SOURCES = ['ai', 'manual', 'import', 'saved_food']
+const SOURCES = ['ai', 'manual', 'import', 'saved_food', 'cronometer']
 
 /** Derive the local calendar day for a meal. */
 export function resolveDay(body, fallback = today()) {

@@ -146,6 +146,7 @@
     if (source === 'ai') return 'AI estimate'
     if (source === 'import') return 'Imported'
     if (source === 'saved_food') return 'Saved food'
+    if (source === 'cronometer') return 'Cronometer'
     return 'Manual'
   }
 </script>

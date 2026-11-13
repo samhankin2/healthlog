@@ -105,6 +105,7 @@
     if (meal.source === 'ai') return 'AI estimate'
     if (meal.source === 'import') return 'Imported'
     if (meal.source === 'saved_food') return 'Saved food'
+    if (meal.source === 'cronometer') return 'Cronometer'
     return 'Manual'
   }
 </script>

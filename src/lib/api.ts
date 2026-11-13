@@ -4,6 +4,8 @@ import type {
   Analysis,
   DailyActivity,
   GarminStatus,
+  CronometerStatus,
+  CronometerSyncResult,
   GarminSyncResult,
   GarminImportResult,
   InsightsPayload,
@@ -292,6 +294,23 @@ export const api = {
   /** Everything the Insights tab charts, for one date range. */
   getInsights(range: { from?: DayString; to?: DayString } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & InsightsPayload> {
     return request(`/insights${queryString(range)}`, {}, { timeoutMs: 30_000, ...options })
+  },
+
+  getCronometer(options?: ApiRequestOptions): Promise<SuccessResponse & { cronometer: CronometerStatus }> {
+    return request('/cronometer', {}, options)
+  },
+
+  /** The password is used once on the server to log in; only the session is kept. */
+  connectCronometer(email: string, password: string, options?: ApiRequestOptions): Promise<SuccessResponse & { result: CronometerSyncResult; cronometer: CronometerStatus }> {
+    return request('/cronometer/connect', { method: 'POST', body: { email, password } }, { timeoutMs: 120_000, ...options })
+  },
+
+  syncCronometer(options?: ApiRequestOptions): Promise<SuccessResponse & { result: CronometerSyncResult; cronometer: CronometerStatus }> {
+    return request('/cronometer/sync', { method: 'POST', body: {} }, { timeoutMs: 120_000, ...options })
+  },
+
+  disconnectCronometer(deleteMeals: boolean, options?: ApiRequestOptions): Promise<SuccessResponse & { deletedMeals: number; cronometer: CronometerStatus }> {
+    return request('/cronometer/disconnect', { method: 'POST', body: { deleteMeals } }, options)
   },
 
   /** A Garmin Connect data export, already unpacked + normalised in the browser. */

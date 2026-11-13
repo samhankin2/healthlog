@@ -60,7 +60,7 @@ export interface MealItem extends Nutrition {
   quantity: string | null
 }
 
-export type MealSource = 'ai' | 'manual' | 'import' | 'saved_food'
+export type MealSource = 'ai' | 'manual' | 'import' | 'saved_food' | 'cronometer'
 
 export interface Meal extends Nutrition {
   id: string
@@ -215,6 +215,35 @@ export interface GarminStatus {
   syncHour: number
   /** Hours between scheduled syncs (from syncHour until midnight). */
   syncIntervalHours: number
+}
+
+export type CronometerState = 'never' | 'connected' | 'needs_login' | 'rate_limited' | 'error'
+
+export interface CronometerStatus {
+  available: boolean
+  connected: boolean
+  /** The Cronometer account email, kept with the session (never the password). */
+  email: string | null
+  status: CronometerState
+  syncing: boolean
+  lastAttemptAt: string | null
+  lastSuccessAt: string | null
+  lastError: string | null
+  backoffUntil: string | null
+  syncHour: number
+  syncIntervalHours: number
+  exportsToday: number
+  exportsPerDay: number
+}
+
+export interface CronometerSyncResult {
+  ok: boolean
+  from?: DayString
+  to?: DayString
+  meals?: number
+  servings?: number
+  error?: string
+  message?: string
 }
 
 export interface Activity {

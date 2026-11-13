@@ -205,7 +205,7 @@ CREATE TABLE IF NOT EXISTS activities (
 
 CREATE TABLE IF NOT EXISTS integrations (
   user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  provider        TEXT NOT NULL,            -- 'garmin'
+  provider        TEXT NOT NULL,            -- 'garmin' | 'cronometer'
   status          TEXT NOT NULL,            -- never | connected | needs_login | rate_limited | error
   last_attempt_at TEXT,                     -- ISO timestamps
   last_success_at TEXT,
@@ -384,6 +384,7 @@ export function migrate(db) {
   migrateMacroPctToGrams(db)
   addColumns(db, 'activities', ACTIVITY_EXTRA_COLUMNS)
   addColumns(db, 'exercises', { rep_min: 'INTEGER', rep_max: 'INTEGER' }) // rep range; null = automatic
+  addColumns(db, 'integrations', { export_day: 'TEXT', export_count: 'INTEGER' }) // Cronometer's daily export budget
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

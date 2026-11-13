@@ -28,8 +28,10 @@ import { registerAnalysisRoutes } from './routes/analyses.js'
 import { registerImportRoutes } from './routes/imports.js'
 import { registerGarminRoutes } from './routes/garmin.js'
 import { registerLiftingRoutes } from './routes/lifting.js'
+import { registerCronometerRoutes } from './routes/cronometer.js'
 import { scheduleBackups } from './lib/backup.js'
 import { scheduleGarminSync } from './lib/garmin.js'
+import { scheduleCronometerSync } from './lib/cronometer.js'
 import { clientIp, requestsByIp } from './lib/ratelimit.js'
 
 const SERVICE = 'healthlog'
@@ -53,6 +55,7 @@ export function buildRouter() {
   registerImportRoutes(router)
   registerGarminRoutes(router)
   registerLiftingRoutes(router)
+  registerCronometerRoutes(router)
   return router
 }
 
@@ -299,6 +302,7 @@ export function start() {
   const db = getDb()
   const stopBackups = scheduleBackups(db)
   const stopGarmin = scheduleGarminSync(db)
+  const stopCronometer = scheduleCronometerSync(db)
 
   const server = createServer()
   server.listen(port, host, () => {
@@ -309,6 +313,7 @@ export function start() {
     console.log(`[healthlog] ${signal} received, shutting down`)
     stopBackups()
     stopGarmin()
+    stopCronometer()
     server.close(() => {
       closeDb()
       process.exit(0)

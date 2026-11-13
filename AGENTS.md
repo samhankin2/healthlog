@@ -55,6 +55,7 @@ server/               API — node:http + node:sqlite, zero runtime dependencies
   index.js            server, router, static fallback
   db.js auth.js ai.js lib/ routes/ cli.js   (cli.js: admin - stats, sql, backups, invites)
   lib/garminStore.js  the only writer of Garmin rows (live sync + export import)
+  lib/cronometer.js   Cronometer food-diary sync (unofficial web API; keeps the session, never the password)
 sync/
   garmin_sync.py      Garmin fetcher (python-garminconnect); spawned by server/lib/garmin.js
   requirements.txt    the pinned version — the only Python dependency
@@ -68,6 +69,8 @@ deploy/
 .github/workflows/    pages.yml (frontend), deploy.yml (API)
 qa/                   smoke / API / browser checks
                       garmin-export-test.mjs <zip>: runs the browser importer on a real export
+                      cronometer-test.mjs: Cronometer sync against a fake cronometer.com
+                      cronometer-browser-test.mjs: the Settings card in headless Edge (after npm run build)
                       lifting-browser-test.mjs: headless-Edge run of the gym logger (after npm run build)
                       progression-test.mjs: progression engine on realistic training histories
                       lift-analysis-test.mjs: analytics on synthetic logs with known answers
@@ -134,6 +137,10 @@ No `npm install` on the server: the API imports only Node built-ins
   resume saved tokens; the only full login is the interactive
   `cli.js garmin login`. Keep the scheduled-sync interval (minimum 1 h, nothing overnight), the
   fetch-only-unfinished-days range, and the 429 backoff (SPEC §6).
+- **Respect Cronometer's export limit.** It allows about 10 exports per
+  account per day. Keep the per-user daily cap, the scheduled interval
+  (minimum 2 h, nothing overnight) and the 429 backoff, and never store the
+  Cronometer password — only the session (SPEC §6 "Cronometer").
 - **Do not restart Caddy in a loop.** Let's Encrypt rate-limits `sslip.io`;
   `bootstrap.sh` only restarts it when the Caddyfile actually changed.
 - **The deploy script self-refreshes** from `deploy/healthlog-deploy.sh` after a

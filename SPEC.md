@@ -174,7 +174,7 @@ CREATE TABLE meals (                      -- one logged eating occasion
   carbs_g    REAL NOT NULL DEFAULT 0,
   fat_g      REAL NOT NULL DEFAULT 0,
   fiber_g    REAL,
-  source     TEXT NOT NULL DEFAULT 'ai',   -- 'ai' | 'manual' | 'import' | 'saved_food'
+  source     TEXT NOT NULL DEFAULT 'ai',   -- 'ai' | 'manual' | 'import' | 'saved_food' | 'cronometer'
   confidence REAL,                         -- 0..1
   analysis_id TEXT,                        -- -> analyses.id
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -252,8 +252,10 @@ Indexes: `weight_entries(user_id, date)`, `meals(user_id, day)`, `chat_messages(
 `daily_activity` (one row per user per day: steps, active/total/BMR kcal,
 resting HR, sleep seconds, intensity minutes), `activities` (one row per
 recorded workout, unique on `(user_id, source, external_id)` so re-syncs
-upsert), and `integrations` (per user + provider: status, last attempt /
-success, last error, `backoff_until`). Exact DDL lives in `server/db.js`.
+upsert), and `integrations` (per user + provider `garmin` | `cronometer`:
+status, last attempt / success, last error, `backoff_until`; `export_day` /
+`export_count` hold Cronometer's daily export budget). Exact DDL lives in
+`server/db.js`.
 
 Insights (§6 "Garmin insights"): `daily_wellness` (per user + day: distance,
 floors, intensity minutes, min/max HR, stress average/max and time per level,
@@ -308,6 +310,8 @@ them. Exact DDL lives in `server/db.js`.
     window. Both checks run before scrypt.
   - register: 10 attempts / hour per IP.
   - `POST /api/chat`: 60 AI calls / hour per user (idempotent replays are free).
+  - `POST /api/cronometer/connect`: 5 attempts / 15 min per user (each one is a
+    login relayed to Cronometer).
   - every `/api/*` request except health: 600 / 5 min per IP. Direct loopback
     calls without `X-Forwarded-For` are not counted.
   - `RATE_LIMIT=off` disables them (local experiments only).
@@ -524,6 +528,70 @@ GET  /api/insights?from&to   (default: the last 365 days)
   present); needs at least 2 parts. Findings need at least 8 days per side, a
   practical minimum difference and |Cohen's d| ≥ 0.3; strong ≥ 0.8,
   moderate ≥ 0.5.
+
+### Cronometer
+
+```
+GET  /api/cronometer -> 200 { ok:true, cronometer:{ available, connected, email, status, syncing,
+       lastAttemptAt, lastSuccessAt, lastError, backoffUntil, syncHour, syncIntervalHours,
+       exportsToday, exportsPerDay } }
+POST /api/cronometer/connect { email, password }
+     -> 200 { ok:true, result:<sync result>, cronometer }
+        400 Cronometer rejected the login (its message is relayed) / missing fields
+        429 too many connect attempts
+POST /api/cronometer/sync { days? }   days 1..365 forces the last N days
+     -> 200 { ok:true, result:{ ok, from, to, meals?, servings?, error?, message? }, cronometer }
+        409 not connected / needs a fresh login / already running
+        429 inside backoff, or today's export budget is used
+POST /api/cronometer/disconnect { deleteMeals?:boolean }
+     -> 200 { ok:true, deletedMeals, cronometer }
+```
+
+Cronometer has no public API for individuals. `server/lib/cronometer.js`
+drives the endpoints its web app uses (the flow `gocronometer` documents): GET
+`/login/` for the `anticsrf` token, POST `/login` (form), GWT RPC
+`authenticate` on `/cronometer/app` for the Cronometer user id, GWT
+`generateAuthorizationToken` for a short-lived export token, then GET
+`/export?generate=servings&start&end&nonce`. The GWT permutation and RPC policy
+hash change with Cronometer releases, so they are read from
+`/cronometer/cronometer.nocache.js` and `/cronometer/<permutation>.cache.js`
+(cached 6 h, re-read once on a stale-policy error, last known values as a
+fallback). Node built-ins only (`fetch`); `CRONOMETER_BASE` points it at a fake
+server in tests (`qa/fixtures/fake-cronometer.mjs`).
+
+**Credentials.** The user enters their Cronometer email and password in
+Settings. The password is used for that one login and dropped: it is never
+stored, logged or echoed. Only the session cookies (plus the Cronometer user
+id and email) are kept, in `$DATA_DIR/cronometer/<userId>/session.json`
+(0600, outside the database so DB backups never carry them). When Cronometer
+ends the session the status becomes `needs_login`, the session file is
+deleted, and nothing syncs until the user connects again. Accounts with
+two-factor sign-in are not supported.
+
+**Load on Cronometer** (it allows about 10 exports per account per day):
+- One export per sync. Scheduled syncs at most every
+  `CRONOMETER_SYNC_INTERVAL_HOURS` (default 4, minimum 2), from
+  `CRONOMETER_SYNC_HOUR` (default 6, server local time) until midnight.
+- A hard cap of `CRONOMETER_DAILY_EXPORTS` (default 8, max 10) exports per user
+  per local day, connect and manual syncs included; past it every sync is
+  refused until tomorrow without contacting Cronometer.
+- HTTP 429 from Cronometer sets `backoff_until` (`CRONOMETER_BACKOFF_HOURS`,
+  default 6); every sync is refused until then.
+- `CRONOMETER=off` disables the feature.
+
+**What syncs: the food diary only.** The first sync covers the last 90 days,
+later ones the last 7 (a manual `days` forces up to 365). Servings are grouped
+into one meal per (day, Cronometer group): name = the group ("Breakfast"),
+`source = 'cronometer'`, description "From Cronometer", each serving an item
+(name, amount as `quantity`, kcal and macros), meal totals = the sum, fibre
+summed into `fiber_g`. `eaten_at` is the earliest serving time in the group
+(server local time), or a default per group (breakfast 08:00, lunch 12:30,
+snacks 15:30, dinner 19:00, otherwise 12:00). Each sync deletes and re-inserts
+the user's `cronometer` meals for every day in its range, in one transaction, so
+edits and deletions in Cronometer carry over; days outside the range and meals
+from any other source are never touched. A synced meal edited in HealthLog
+keeps `source = 'cronometer'` and is replaced by the next sync that covers its
+day.
 
 ### Lifting
 

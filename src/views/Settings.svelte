@@ -4,6 +4,7 @@
   import WeightJsonPanel from '../lib/panels/WeightJsonPanel.svelte'
   import ConfirmPanel from '../lib/panels/ConfirmPanel.svelte'
   import GarminSyncControl from '../lib/components/GarminSyncControl.svelte'
+  import CronometerCard from '../lib/components/CronometerCard.svelte'
   import { actions, app, navigate } from '../lib/state.svelte'
   import { api } from '../lib/api'
   import { logout } from '../lib/auth'
@@ -191,6 +192,16 @@
     <div class="metric-card-content">
       <p class="card-note">Steps, calories burned, resting heart rate, sleep and workouts from your watch. It syncs every {garmin?.syncIntervalHours ?? 3} hours from {garmin?.syncHour ?? 6}:00 to midnight, or whenever you press Sync now. Finished days are kept and only today (and yesterday, until noon) is fetched again.</p>
       <GarminSyncControl status={garmin} showHelp email={app.user?.email} onsynced={() => actions.loadDashboard()} />
+    </div>
+  </section>
+
+  <section class="metric-card settings-card" aria-labelledby="cronometer-title">
+    <div class="metric-card-header">
+      <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="food" size={20} /></span><h2 class="metric-card-title" id="cronometer-title">Cronometer</h2></div>
+    </div>
+    <div class="metric-card-content">
+      <p class="card-note">Your Cronometer food diary as meals, one per meal group. Syncs every few hours during the day and re-reads the last 7 days, so changes in Cronometer carry over (the first sync brings in 90 days). Edit synced meals in Cronometer: changes made here are replaced on the next sync.</p>
+      <CronometerCard onchanged={() => actions.loadDashboard()} />
     </div>
   </section>
 
