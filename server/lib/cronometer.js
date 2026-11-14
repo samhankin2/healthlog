@@ -299,7 +299,7 @@ async function exportServings(session, from, to) {
   session.cookies = jar.cookies
   session.cronometerUserId = userId
   if (res.status !== 200) throw new CronometerError('error', `Cronometer refused the export (HTTP ${res.status}). It allows about 10 exports a day.`)
-  if (!/Food Name/i.test(res.text.slice(0, 2000))) throw new CronometerError('error', 'Cronometer\'s export did not look like a food diary.')
+  if (!/\bfood\b/i.test(res.text.slice(0, 2000))) throw new CronometerError('error', 'Cronometer\'s export did not look like a food diary.')
   return res.text
 }
 
@@ -343,26 +343,43 @@ function num(v) {
  */
 export function servingsToMeals(csvText) {
   const { headers, rows } = parseCsv(csvText)
-  const col = (name) => headers.findIndex((h) => h.toLowerCase() === name.toLowerCase())
-  const idx = {
-    day: col('Day'),
-    time: col('Time'),
-    group: col('Group'),
-    name: col('Food Name'),
-    amount: col('Amount'),
-    kcal: col('Energy (kcal)'),
-    protein: col('Protein (g)'),
-    carbs: col('Carbs (g)'),
-    fat: col('Fat (g)'),
-    fiber: col('Fiber (g)'),
+  // Header names vary a little (case, spacing, kJ vs kcal, Date vs Day): compare a normalised form.
+  const norm = (h) => String(h ?? '').replace(/\u00a0/g, ' ').trim().replace(/^["']+|["']+$/g, '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/\s*\(\s*/g, ' (').replace(/\s*\)/g, ')')
+  const normHeaders = headers.map(norm)
+  const col = (...names) => {
+    for (const name of names) {
+      const i = normHeaders.indexOf(norm(name))
+      if (i >= 0) return i
+    }
+    return -1
   }
-  if (idx.day < 0 || idx.name < 0 || idx.kcal < 0) throw new CronometerError('error', 'Cronometer\'s export is missing the Day, Food Name or Energy column.')
+  const kcalCol = col('Energy (kcal)', 'Calories (kcal)', 'Calories', 'Energy')
+  const kjCol = kcalCol < 0 ? col('Energy (kJ)') : -1
+  const idx = {
+    day: col('Day', 'Date'),
+    time: col('Time'),
+    group: col('Group', 'Meal'),
+    name: col('Food Name', 'Food', 'Name'),
+    amount: col('Amount', 'Serving'),
+    kcal: kcalCol >= 0 ? kcalCol : kjCol,
+    protein: col('Protein (g)', 'Protein'),
+    carbs: col('Carbs (g)', 'Net Carbs (g)', 'Carbohydrates (g)', 'Carbs'),
+    fat: col('Fat (g)', 'Fat'),
+    fiber: col('Fiber (g)', 'Fibre (g)', 'Fiber', 'Fibre'),
+  }
+  // An account set to kilojoules exports "Energy (kJ)".
+  const energyScale = kcalCol < 0 && kjCol >= 0 ? 1 / 4.184 : 1
+  const missing = [idx.day < 0 && 'Day', idx.name < 0 && 'Food Name', idx.kcal < 0 && 'Energy'].filter(Boolean)
+  if (missing.length) {
+    const seen = headers.slice(0, 15).map((h) => String(h).trim()).join(', ')
+    throw new CronometerError('error', `Cronometer's export is missing the ${missing.join(', ')} column (it sent: ${seen.slice(0, 300)}).`)
+  }
 
   /** @type {Map<string, {day:string, group:string, clocks:number[][], items:object[], fiberG:number}>} */
   const byMeal = new Map()
   let count = 0
   for (const row of rows) {
-    const day = String(row[idx.day] ?? '').trim()
+    const day = String(row[idx.day] ?? '').trim().slice(0, 10)
     const name = String(row[idx.name] ?? '').trim()
     if (!isISODate(day) || !name) continue
     const group = (idx.group >= 0 ? String(row[idx.group] ?? '').trim() : '') || 'Uncategorized'
@@ -374,7 +391,7 @@ export function servingsToMeals(csvText) {
     meal.items.push({
       name,
       quantity: idx.amount >= 0 ? String(row[idx.amount] ?? '').trim() || null : null,
-      kcal: num(row[idx.kcal]),
+      kcal: Math.round(num(row[idx.kcal]) * energyScale * 10) / 10,
       proteinG: idx.protein >= 0 ? num(row[idx.protein]) : 0,
       carbsG: idx.carbs >= 0 ? num(row[idx.carbs]) : 0,
       fatG: idx.fat >= 0 ? num(row[idx.fat]) : 0,

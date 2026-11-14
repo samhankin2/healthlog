@@ -14,6 +14,7 @@ import { CRONO_EMAIL, CRONO_PASSWORD, startFakeCronometer } from './fixtures/fak
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { servingsToMeals } from '../server/lib/cronometer.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..')
@@ -54,6 +55,19 @@ const DIARY = [
   [YESTERDAY, '', 'Dinner', 'Salmon, baked', '1.00 fillet', '367.0', '39.0', '0.0', '22.0', ''],
   [LONG_AGO, '7:30 PM', 'Dinner', 'Pasta', '100.00 g', '371.0', '13.0', '75.0', '1.5', '3.2'],
 ]
+
+/* ---------- header variations (pure) ---------- */
+{
+  const kj = servingsToMeals('Day,Time,Group,Food Name,Amount,Energy (kJ),Protein (g),Carbs (g),Fat (g)\n2026-11-14,8:00 AM,Breakfast,Oats,60 g,954,7.9,40.6,4.1\n')
+  eq('headers: an account in kilojoules converts to kcal', kj.meals[0]?.items[0]?.kcal, 228)
+  const loose = servingsToMeals('\ufeff "day" , GROUP,food  name,energy ( kcal ),Fibre (g)\n2026-11-14,Lunch,Soup,150,3\n')
+  eq('headers: case, spacing, quotes, BOM and Fibre spelling', [loose.rows, loose.meals[0]?.items[0]?.kcal, loose.meals[0]?.fiberG], [1, 150, 3])
+  const dated = servingsToMeals('Date,Food Name,Energy (kcal)\n2026-11-14,Apple,52\n')
+  eq('headers: Date instead of Day', dated.rows, 1)
+  let message = ''
+  try { servingsToMeals('Day,Food Name,Protein (g)\n2026-11-14,Apple,0.3\n') } catch (e) { message = e.message }
+  ok('headers: a missing column is named, with what Cronometer sent', /missing the Energy column/.test(message) && /it sent: Day, Food Name, Protein \(g\)/.test(message), message)
+}
 
 let fake // the fake server's state, set in run()
 let fakeCronometer
