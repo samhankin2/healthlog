@@ -11,6 +11,9 @@
  *   node server/cli.js garmin login --email <healthlog email>   one-time interactive Garmin login
  *   node server/cli.js garmin sync --email <email> [--days N]  sync now (saved tokens only)
  *   node server/cli.js garmin status
+ *   node server/cli.js coros status                   COROS connection + last sync per user
+ *   node server/cli.js coros sync --email <email> [--days N]   sync COROS now
+ *   node server/cli.js coros dump --email <email> [--days N]   raw COROS MCP replies (for tuning the parsers)
  *   node server/cli.js invite create --note "sam"
  *   node server/cli.js invite list
  *   node server/cli.js user create --email me@example.com --password "hunter22"
@@ -36,6 +39,7 @@ import {
 import { backupNow, listBackups } from './lib/backup.js'
 import { spawnSync } from 'node:child_process'
 import { garminAvailable, garminStatus, markLoggedIn, pythonBin, scriptPath, syncUser, tokensDir } from './lib/garmin.js'
+import { corosStatus, dumpRaw as corosDump, syncUser as corosSync } from './lib/coros.js'
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -71,6 +75,9 @@ function usage() {
     '  node server/cli.js garmin login --email <email>   one-time interactive Garmin login (MFA ok)',
     '  node server/cli.js garmin sync --email <email> [--days N]   sync now with saved tokens',
     '  node server/cli.js garmin status                  connection + last sync per user',
+    '  node server/cli.js coros status                   COROS connection + last sync per user',
+    '  node server/cli.js coros sync --email <email> [--days N]   sync COROS now',
+    '  node server/cli.js coros dump --email <email> [--days N]   raw COROS MCP replies, for tuning the parsers',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
     '  node server/cli.js invite list                    list invite codes',
     '  node server/cli.js invite revoke --code <code>',
@@ -448,6 +455,33 @@ async function cmdGarmin(action, args) {
   fail('usage: node server/cli.js garmin login|sync|status [--email <email>] [--days N] [--force]')
 }
 
+async function cmdCoros(action, args) {
+  const db = getDb()
+  if (action === 'status') {
+    for (const u of db.prepare('SELECT id, email FROM users ORDER BY created_at').all()) {
+      const s = corosStatus(db, u.id)
+      console.log(`${u.email}  ${s.status}${s.lastSuccessAt ? `  last ok ${s.lastSuccessAt}` : ''}${s.backoffUntil ? `  paused until ${s.backoffUntil}` : ''}${s.lastError ? `  (${s.lastError.slice(0, 160)})` : ''}`)
+    }
+    return
+  }
+  if (action === 'sync') {
+    const user = userByEmailArg(db, args)
+    const days = args.days !== undefined ? Number(args.days) : undefined
+    const result = await corosSync(db, user.id, { days, trigger: 'cli' })
+    if (result.ok) console.log(`synced ${result.days} days, ${result.sleep} nights, ${result.activities} activities (${result.from}..${result.to})${result.warnings?.length ? `\nskipped: ${result.warnings.join('; ')}` : ''}`)
+    else fail(`${result.error}: ${result.message}`)
+    return
+  }
+  if (action === 'dump') {
+    // Read-only. Prints the user's own health data, nothing else: no tokens.
+    const user = userByEmailArg(db, args)
+    const days = args.days !== undefined ? Math.max(1, Math.min(7, Number(args.days) || 3)) : 3
+    for (const [title, text] of await corosDump(db, user.id, { days })) console.log(`===== ${title}\n${text}\n`)
+    return
+  }
+  fail('usage: node server/cli.js coros status|sync|dump [--email <email>] [--days N]')
+}
+
 async function main() {
   const [group, action] = process.argv.slice(2)
   const args = parseArgs(process.argv.slice(3))
@@ -462,6 +496,7 @@ async function main() {
   if (group === 'sql') return cmdSql(args)
   if (group === 'backup') return cmdBackup(action)
   if (group === 'garmin') return cmdGarmin(action, args)
+  if (group === 'coros') return cmdCoros(action, args)
 
   const db = getDb()
 

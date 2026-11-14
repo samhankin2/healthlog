@@ -312,8 +312,8 @@ them. Exact DDL lives in `server/db.js`.
   - `POST /api/chat`: 60 AI calls / hour per user (idempotent replays are free).
   - `POST /api/cronometer/connect`: 5 attempts / 15 min per user (each one is a
     login relayed to Cronometer).
-  - `POST /api/coros/connect`: 5 attempts / 15 min per user (each one is a
-    login relayed to COROS).
+  - `POST /api/coros/connect`: 10 attempts / 15 min per user (each one opens
+    a sign-in at COROS).
   - every `/api/*` request except health: 600 / 5 min per IP. Direct loopback
     calls without `X-Forwarded-For` are not counted.
   - `RATE_LIMIT=off` disables them (local experiments only).
@@ -598,74 +598,97 @@ day.
 ### COROS
 
 ```
-GET  /api/coros -> 200 { ok:true, coros:{ available, connected, email, status, syncing,
+GET  /api/coros -> 200 { ok:true, coros:{ available, connected, connectedAt, status, syncing,
        lastAttemptAt, lastSuccessAt, lastError, backoffUntil, syncHour, syncIntervalHours } }
-POST /api/coros/connect { email, password }
-     -> 200 { ok:true, result:<sync result>, coros }
-        400 COROS rejected the login (its message is relayed) / missing fields
-        429 too many connect attempts, or inside backoff
+POST /api/coros/connect { returnTo }          returnTo: a HealthLog page (allowed origin)
+     -> 200 { ok:true, authorizeUrl }          the browser opens it
+        400 returnTo not a HealthLog page; 429 too many attempts, or inside backoff
+GET  /api/coros/oauth/callback?code&state     COROS redirects the browser here (no bearer token)
+     -> 302 to returnTo (also when the user declined; the reason is in lastError)
+        400 unknown or expired state (a plain page)
 POST /api/coros/sync { days? }   days 1..180 forces the last N days
-     -> 200 { ok:true, result:{ ok, from, to, days?, activities?, sleep?, error?, message? }, coros }
-        409 not connected / needs a fresh login / already running
+     -> 200 { ok:true, result:{ ok, from, to, days?, sleep?, activities?, warnings?, error?, message? }, coros }
+        409 not connected / needs a fresh connect / already running
         429 inside backoff
 POST /api/coros/disconnect { deleteData?:boolean }
-     -> 200 { ok:true, deleted:{ days, activities }, coros }
+     -> 200 { ok:true, deleted:{ days, sleep, activities }, coros }
 ```
 
-COROS's API is for approved partners only. `server/lib/coros.js` drives the
-**web** endpoints COROS Training Hub uses (as the community clients
-`Pinta365/coros` and `cygnusb/coros-mcp` document): POST `/account/login`
-`{ account, accountType:2, pwd:<md5 hex of the password> }` → `data.accessToken`,
-sent afterwards as the `accesstoken` header; `GET /analyse/query?startDay&endDay`
-(YYYYMMDD) for the days; `GET /activity/query?startDay&endDay&size=100&pageNumber`
-for activities. `result` is `"0000"` on success and `"1019"` for a rejected
-token. A token works only on the region host that issued it
-(`teamapi` / `teameuapi` / `teamcnapi.coros.com`), so connect logs in on each
-in turn and keeps the first whose token passes one cheap call. Private and
-unsupported: COROS can change it without notice. Node built-ins only;
-`COROS_BASE` replaces the region hosts with a fake server in tests
-(`qa/fixtures/fake-coros.mjs`).
+**Route: COROS's official self-service access for apps** ("Build on COROS
+MCP": OAuth 2.0 + the COROS MCP server at `https://mcp.coros.com/mcp`, no
+application or approval, single-user). COROS's REST Partner API needs a
+company and a review, so it is not used.
+- `server/lib/corosMcp.js`: OAuth as the MCP authorization spec describes it.
+  Discovery from the MCP host's protected-resource metadata (today the
+  authorization server is `https://mcpus.coros.com`); dynamic client
+  registration (RFC 7591), once per redirect URI, as a public client, cached in
+  `$DATA_DIR/coros-client.json`; authorization code + PKCE S256 with
+  `resource` (RFC 8707) and scope `openid mcp.tools offline_access`. COROS
+  does not offer the device-code grant to registered clients.
+- The redirect URI is this API's own public address
+  (`https://<host>/api/coros/oauth/callback`, from `X-Forwarded-Proto` / `Host`;
+  `COROS_REDIRECT_URI` overrides). The callback is unauthenticated: the
+  one-time `state` (15 min, in memory, one pending attempt per user) identifies
+  the user. The browser is then sent back to `returnTo`, which must be on an
+  allowed origin.
+- MCP: JSON-RPC over streamable HTTP (`initialize`,
+  `notifications/initialized`, `tools/call`; JSON or SSE replies;
+  `Mcp-Session-Id`). Node built-ins only. `COROS_MCP_URL` points it at a fake
+  server in tests (`qa/fixtures/fake-coros.mjs`).
 
-**Credentials.** As for Cronometer: the email and password are entered in
-Settings, used for that one login (the password's MD5 is what goes over the
-wire) and dropped; neither is stored, logged or echoed. Only the access token,
-region host, COROS user id and email are kept, in
-`$DATA_DIR/coros/<userId>/session.json` (0600, outside the database). There is
-no refresh token and the server never logs in by itself: when COROS rejects the
-token (signing in to Training Hub elsewhere can do that) the status becomes
-`needs_login`, the session file is deleted, and nothing syncs until the user
-connects again. The **mobile** API is not used, although it is the only source
-of sleep stages: signing in to it logs the user's phone app out.
+**Credentials.** HealthLog never sees the COROS password: the user signs in on
+COROS's page. Only the tokens are kept, in
+`$DATA_DIR/coros/<userId>/session.json` (0600, outside the database). COROS:
+access tokens last 30 days, refresh tokens 180 days and rotate. The access
+token is refreshed a day before it expires, or once on a 401, and the new
+refresh token is saved at once. A refused refresh means `needs_login`: the
+session file is deleted and nothing syncs until the user connects again.
+Disconnect revokes the token at COROS (best effort).
 
-**Load on COROS** (it rate-limits; no published numbers):
+**Load on COROS** (no published MCP limits):
 - Scheduled syncs at most every `COROS_SYNC_INTERVAL_HOURS` (default 4,
   minimum 2), from `COROS_SYNC_HOUR` (default 6, server local time) until
-  midnight. One sync = one `/analyse/query` call plus one `/activity/query`
-  call per 100 activities.
-- HTTP 429, or an HTML gateway page instead of JSON, sets `backoff_until`
-  (`COROS_BACKOFF_HOURS`, default 6); every sync, connect included, is
-  refused until then without contacting COROS.
+  midnight. A normal sync is about eight tool calls plus `getActivityDetail`
+  for each activity not stored yet (at most 30 per sync). FIT files are never
+  fetched (COROS allows 50 a day).
+- HTTP 429 sets `backoff_until` (`COROS_BACKOFF_HOURS`, default 6); every sync
+  and connect is refused until then without contacting COROS.
 - `COROS=off` disables the feature.
 
 **What syncs.** The first sync covers the last 90 days, later ones the last 7
-(a manual `days` forces up to 180). Everything goes through `storeGarmin(...,
-{ source: 'coros' })`, so the field checks and `COALESCE` rules of §6 "Garmin
-insights" apply and Insights, the Activity page and the lifting merge use it as
-they use Garmin data:
-- `activities` (`source = 'coros'`, `external_id` = `labelId`): start =
-  `startTime` (epoch s) shifted by `startTimezone` (quarter-hours east of UTC);
-  `totalTime` → duration, `workoutTime` → moving time, `distance` (m),
-  `calorie` / 1000 → kcal, `avgHr`, `maxHr`, `ascent`, `trainingLoad`; speed =
-  distance / moving time (`avgSpeed` is a pace); `sportType` mapped to the
-  Garmin type keys (`402` → `strength_training`, unknown → `other`).
-- `daily_activity` (`source = 'coros'`): `rhr` → resting HR.
-  `daily_wellness`: `avgSleepHrv` → `hrv_night`. `fitness_metrics`: `vo2max`
-  from `t7dayList`. Zero or negative readings are "none".
-- Not available from the web API: steps, daily calories burned (so no watch
-  figure in the TDEE card), sleep, stress. Days are keyed by date only, so a
-  day with both Garmin and COROS data holds one merged row.
+(a manual `days` forces up to 180). Tools: `querySportRecords` (31-day chunks)
++ `getActivityDetail`; `querySleepOverview` (31-day chunks); `querySleepHrv`
+(7-day chunks); `queryDailyHealthData`, `queryRestingHeartRate`,
+`queryStressLevel` (recent days only: the span is asked for, and a week if
+COROS refuses); `queryFitnessAssessmentOverview` (current VO₂ max, stored on
+the last day). One tool failing (other than auth or rate limiting) does not
+fail the sync: the rest is stored and the skipped tools are listed in
+`warnings` and `lastError`.
+
+The tools answer in human-readable text, not a schema.
+`server/lib/corosParse.js` cuts a reply into blocks (one per date or numbered
+record), reads `Label: value` fields (also `A | B` lines, markdown tables and
+JSON) and finds fields by keyword; unrecognised text is dropped, never guessed
+into a column. `node server/cli.js coros dump --email <e>` (or
+`scripts/hl coros-dump <e>`) prints the raw replies for tuning. Everything is
+written by `storeGarmin(..., { source: 'coros' })`, so the checks and
+`COALESCE` rules of §6 "Garmin insights" apply:
+- `activities` (`source = 'coros'`): `external_id` = the label id (or
+  start + sport + duration when the list has none); start, duration, distance,
+  moving time, kcal, average / max HR, elevation gain, training load; speed =
+  distance / time. Sport codes map to the Garmin type keys (`402` →
+  `strength_training`), then the name decides, else `other`.
+- `daily_activity` (`source = 'coros'`): steps, calories (active / total /
+  resting when labelled; a bare "Calories" ≥ 1000 counts as the day's total),
+  resting HR, main sleep seconds. `daily_wellness`: `hrv_night`, `hrv_status`,
+  `stress_avg`. `sleep_nights` (the wake-up date, as COROS dates them): window
+  start / end, deep / light / REM from their share of main sleep, awake time,
+  score. `fitness_metrics`: `vo2max`.
+- Days are keyed by date only, so a day with both Garmin and COROS data holds
+  one merged row.
 - Disconnect with `deleteData` removes the `coros` activities, the `coros`
-  `daily_activity` rows and the `daily_wellness` rows of those days.
+  `daily_activity` rows and the `daily_wellness` and `sleep_nights` rows of
+  those days.
 
 ### Lifting
 

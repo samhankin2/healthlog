@@ -202,7 +202,7 @@
       <button class="button button--secondary compact-button" type="button" onclick={() => navigate('activity')}>Activities <Icon name="chevron-right" size={17} /></button>
     </div>
     <div class="metric-card-content">
-      <p class="card-note">Workouts, resting heart rate, overnight HRV and VO₂ max from your COROS watch, through the same unofficial API COROS Training Hub uses. Syncs every few hours during the day and re-reads the last 7 days (the first sync brings in 90). Steps, daily calories burned and sleep aren't available this way.</p>
+      <p class="card-note">Workouts, sleep, steps, calories burned, resting heart rate, overnight HRV, stress and VO₂ max from your COROS watch, through COROS's official connection for apps. Syncs every few hours during the day and re-reads the last 7 days. The first sync brings in 90 days of workouts and sleep; the other daily numbers only reach back about a week.</p>
       <CorosCard onchanged={() => actions.loadDashboard()} />
     </div>
   </section>

@@ -1,65 +1,58 @@
 /**
- * COROS sync — SPEC §6 "COROS". COROS has no API for individuals (its partner
- * API needs an approved application), so this drives the endpoints the COROS
- * Training Hub web app uses (as the community clients Pinta365/coros and
- * cygnusb/coros-mcp document). Private and unsupported: COROS can change it.
+ * COROS sync — SPEC §6 "COROS". Uses COROS's official self-service route for
+ * apps: OAuth 2.0 + the COROS MCP server (server/lib/corosMcp.js), whose text
+ * replies server/lib/corosParse.js turns into rows. Everything is written by
+ * storeGarmin(..., { source: 'coros' }), the one writer of watch rows.
  *
- * Credentials:
- *   - The password is used once, in memory, by POST /api/coros/connect: the
- *     login sends its MD5, as the web app does. Neither is stored, logged or
- *     echoed. Only the access token (plus the region host, the COROS user id and
- *     the email) is kept, in $DATA_DIR/coros/<userId>/session.json (0600,
- *     outside the DB, so `backup pull` never carries it off the box).
- *   - There is no refresh token. When COROS rejects the token (result 1019,
- *     e.g. after a sign-in to Training Hub elsewhere) the status becomes
- *     `needs_login`, the session file is deleted and nothing syncs until the
- *     user connects again from Settings. It never logs in on its own.
- *   - Only the web API. The mobile API (the only source of sleep stages) is not
- *     used: signing in to it logs the user's phone app out.
+ * Connecting:
+ *   POST /api/coros/connect -> an authorize URL (PKCE, state). The browser goes
+ *   to COROS, the user signs in there (HealthLog never sees the password) and
+ *   approves, and COROS redirects to GET /api/coros/oauth/callback, which
+ *   swaps the code for tokens and sends the browser back to Settings. The first
+ *   sync then runs in the background.
  *
- * Load on COROS (it rate-limits, numbers undocumented):
- *   - Scheduled syncs every COROS_SYNC_INTERVAL_HOURS (default 4, minimum 2)
- *     from COROS_SYNC_HOUR (default 6) to midnight, nothing overnight.
- *   - One sync = one EvoLab call plus one call per 100 activities.
- *   - HTTP 429 (or a gateway error page) backs off COROS_BACKOFF_HOURS (default
- *     6); every sync, manual included, is refused until then.
+ * Tokens: $DATA_DIR/coros/<userId>/session.json (0600, outside the DB, so
+ * `backup pull` never carries them off the box). The access token is refreshed
+ * a day before it expires, or on a 401; refresh tokens rotate. A refused
+ * refresh means `needs_login`: the session file is deleted and nothing syncs
+ * until the user connects again.
  *
- * What it syncs: activities, and per day resting HR, overnight HRV and VO2max.
- * All of it goes through storeGarmin(..., { source: 'coros' }), the one writer
- * of watch rows. No steps, calories burned per day or sleep: the web API has
- * none of them.
+ * Load on COROS (no published MCP limits): scheduled syncs every
+ * COROS_SYNC_INTERVAL_HOURS (default 4, minimum 2) from COROS_SYNC_HOUR
+ * (default 6) to midnight; a normal sync is about eight tool calls plus one
+ * detail call per new activity (at most MAX_DETAILS). HTTP 429 backs off
+ * COROS_BACKOFF_HOURS (default 6). FIT files are never fetched (COROS allows
+ * 50 a day).
  *
- * Env: COROS=off, COROS_BASE (tests point it at a fake server; replaces the
- * region hosts), COROS_SYNC_HOUR, COROS_SYNC_INTERVAL_HOURS, COROS_BACKOFF_HOURS.
+ * Env: COROS=off, COROS_MCP_URL (tests), COROS_REDIRECT_URI (override the
+ * callback URL derived from the request), COROS_SYNC_HOUR,
+ * COROS_SYNC_INTERVAL_HOURS, COROS_BACKOFF_HOURS.
  */
-import { createHash } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { dataDir, withTx } from '../db.js'
 import { storeGarmin } from './garminStore.js'
 import { addDays, today } from './metrics.js'
+import { authorizeUrl, CorosError, discover, ensureClient, exchangeCode, openMcp, pkce, refreshTokens, revoke } from './corosMcp.js'
+import { parseActivityDetail, parseDailyHealth, parseFitness, parseHrv, parsePerDay, parseSleep, parseSportRecords } from './corosParse.js'
+
+export { CorosError } from './corosMcp.js'
 
 const PROVIDER = 'coros'
 const SESSION_FILE = 'session.json'
-const REQUEST_TIMEOUT_MS = 30_000
 export const MAX_DAYS = 180
-/** The first sync backfills this many days. */
+/** The first sync backfills this many days (sleep and activities; some daily metrics only reach back a week). */
 const BACKFILL_DAYS = 90
-/** Later syncs re-read this many days, so late uploads and edits still arrive. */
+/** Later syncs re-read this many days, so late uploads still arrive. */
 const WINDOW_DAYS = 7
-const PAGE_SIZE = 100
-const MAX_PAGES = 20
-const USER_AGENT = 'Mozilla/5.0 (compatible; HealthLog personal sync)'
-/** Training Hub API hosts per region. A token only works on the host that issued it. */
-const REGION_HOSTS = ['https://teamapi.coros.com', 'https://teameuapi.coros.com', 'https://teamcnapi.coros.com']
+/** New activities per sync that get a detail call (calories, heart rate). */
+const MAX_DETAILS = 30
+const PENDING_TTL_MS = 15 * 60_000
+const REFRESH_BEFORE_MS = 24 * 3600_000
 
 const isOff = (v) => ['0', 'off', 'false', 'no'].includes(String(v || '').trim().toLowerCase())
 const envNum = (name, fallback) => (Number.isFinite(Number(process.env[name])) && process.env[name] !== '' && process.env[name] !== undefined ? Number(process.env[name]) : fallback)
-
-function hosts() {
-  const base = (process.env.COROS_BASE || '').replace(/\/+$/, '')
-  return base ? [base] : REGION_HOSTS
-}
 
 export function corosAvailable() {
   return !isOff(process.env.COROS)
@@ -74,19 +67,6 @@ function syncIntervalHours() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Errors                                                              */
-/* ------------------------------------------------------------------ */
-
-export class CorosError extends Error {
-  /** @param {'bad_login'|'needs_login'|'rate_limited'|'error'|'unavailable'|'busy'} code */
-  constructor(code, message, status = 502) {
-    super(message)
-    this.code = code
-    this.status = status
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /* Session file                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -98,11 +78,11 @@ function sessionPath(userId) {
   return path.join(sessionDir(userId), SESSION_FILE)
 }
 
-/** @returns {{ host: string, accessToken: string, corosUserId: string|null, email: string|null, savedAt: string } | null} */
+/** @returns {{ resource: string, issuer: string, redirectUri: string, accessToken: string, refreshToken: string|null, expiresAt: string, connectedAt: string } | null} */
 export function readSession(userId) {
   try {
     const parsed = JSON.parse(fs.readFileSync(sessionPath(userId), 'utf8'))
-    if (parsed && typeof parsed === 'object' && parsed.accessToken && parsed.host) return parsed
+    if (parsed && typeof parsed === 'object' && parsed.accessToken && parsed.resource) return parsed
   } catch {
     /* none */
   }
@@ -119,202 +99,6 @@ function writeSession(userId, session) {
 
 function deleteSession(userId) {
   fs.rmSync(sessionDir(userId), { recursive: true, force: true })
-}
-
-/* ------------------------------------------------------------------ */
-/* HTTP                                                                */
-/* ------------------------------------------------------------------ */
-
-const INVALID_TOKEN = '1019'
-
-/** One Training Hub call. Resolves with the parsed body ({ result, message, data }). */
-async function call(host, route, { method = 'GET', token, query, body } = {}) {
-  const url = `${host}${route}${query ? `?${new URLSearchParams(query)}` : ''}`
-  let res
-  try {
-    res = await fetch(url, {
-      method,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      headers: {
-        'user-agent': USER_AGENT,
-        accept: 'application/json',
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(token ? { accesstoken: token } : {}),
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
-  } catch (e) {
-    throw new CorosError('error', `Could not reach COROS (${e.name === 'TimeoutError' ? 'timed out' : e.message}).`)
-  }
-  const text = await res.text()
-  if (res.status === 429) throw new CorosError('rate_limited', 'COROS is rate-limiting requests.', 429)
-  let parsed = null
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    /* not JSON */
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    // A gateway error page instead of JSON is how COROS throttles as often as a 429.
-    if (res.status === 503 || res.status === 502 || /<html/i.test(text.slice(0, 200))) {
-      throw new CorosError('rate_limited', `COROS answered with an error page (HTTP ${res.status}); treating it as rate limiting.`, 429)
-    }
-    throw new CorosError('error', `COROS answered unexpectedly (${route}, HTTP ${res.status}).`)
-  }
-  return parsed
-}
-
-/** A call on a signed-in session: unwraps `data`, maps an invalid token to needs_login. */
-async function authed(session, route, options = {}) {
-  const parsed = await call(session.host, route, { ...options, token: session.accessToken })
-  if (String(parsed.result) === INVALID_TOKEN) throw new CorosError('needs_login', 'COROS ended the session. Connect again in Settings.', 409)
-  if (String(parsed.result) !== '0000') {
-    throw new CorosError('error', `COROS refused ${route}: ${String(parsed.message || parsed.result || 'unknown error').slice(0, 200)}`)
-  }
-  return parsed.data ?? {}
-}
-
-/* ------------------------------------------------------------------ */
-/* Login                                                               */
-/* ------------------------------------------------------------------ */
-
-const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex')
-const ymd = (day) => day.replaceAll('-', '')
-
-/**
- * Log in with email + password, finding the account's region: a login on the
- * wrong region's host can hand out a token that every later call rejects, so
- * each host's token is checked with one cheap call. The password lives only in
- * this call.
- * @returns {Promise<{ host: string, accessToken: string, corosUserId: string|null }>}
- */
-export async function login(email, password) {
-  const pwd = md5(password)
-  let lastMessage = null
-  for (const host of hosts()) {
-    const parsed = await call(host, '/account/login', { method: 'POST', body: { account: email, accountType: 2, pwd } })
-    if (String(parsed.result) !== '0000' || !parsed.data?.accessToken) {
-      lastMessage = String(parsed.message || parsed.result || 'login refused').slice(0, 200)
-      continue
-    }
-    const session = { host, accessToken: String(parsed.data.accessToken), corosUserId: parsed.data.userId ? String(parsed.data.userId) : null }
-    try {
-      const day = ymd(today())
-      await authed(session, '/activity/query', { query: { size: 1, pageNumber: 1, startDay: day, endDay: day } })
-      return session
-    } catch (e) {
-      if (e instanceof CorosError && e.code === 'needs_login') continue // wrong region
-      throw e
-    }
-  }
-  throw new CorosError('bad_login', `COROS: ${lastMessage ?? 'the login was not accepted in any region'}`, 400)
-}
-
-/* ------------------------------------------------------------------ */
-/* Fetch + normalise                                                   */
-/* ------------------------------------------------------------------ */
-
-const fin = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
-const pos = (v) => {
-  const x = fin(v)
-  return x !== null && x > 0 ? x : null
-}
-
-/** 20261114 -> '2026-11-14' (null for anything else). */
-export function corosDay(v) {
-  const m = String(v ?? '').match(/^(\d{4})(\d{2})(\d{2})$/)
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : null
-}
-
-/**
- * COROS sportType -> the activity type keys the app already knows (Garmin's
- * typeKeys). Best effort from community clients; an unknown code is 'other'.
- */
-const SPORT_TYPES = {
-  100: 'running', 101: 'indoor_running', 102: 'trail_running', 103: 'track_running', 104: 'hiking', 105: 'mountaineering',
-  200: 'road_biking', 201: 'indoor_cycling', 202: 'cycling', 203: 'gravel_cycling', 204: 'mountain_biking', 205: 'e_bike',
-  299: 'cycling', 300: 'lap_swimming', 301: 'open_water_swimming', 400: 'cardio', 401: 'cardio', 402: 'strength_training',
-  403: 'indoor_rowing', 404: 'elliptical', 405: 'stair_climbing', 500: 'resort_skiing', 501: 'resort_snowboarding',
-  502: 'backcountry_skiing', 503: 'cross_country_skiing', 700: 'rowing', 701: 'indoor_rowing', 702: 'whitewater',
-  704: 'flatwater', 705: 'windsurfing', 706: 'speed_surfing', 800: 'indoor_climbing', 801: 'bouldering', 900: 'walking',
-  901: 'jump_rope', 10000: 'multi_sport', 10001: 'multi_sport', 10002: 'other', 10003: 'walking',
-}
-
-/** Epoch seconds + COROS's timezone (quarter-hours east of UTC) -> 'YYYY-MM-DDTHH:MM:SS' local. */
-export function localStart(epochS, tzQuarters) {
-  const s = fin(epochS)
-  if (s === null || s <= 0) return null
-  const offsetMin = (fin(tzQuarters) ?? 0) * 15
-  return new Date((s + offsetMin * 60) * 1000).toISOString().slice(0, 19)
-}
-
-/** One /activity/query list item -> a storeGarmin activity row. Pure, for tests. */
-export function normaliseActivity(a) {
-  const startLocal = localStart(a?.startTime, a?.startTimezone)
-  if (!a?.labelId || !startLocal) return null
-  const sport = fin(a.sportType)
-  const distanceM = pos(a.distance)
-  const movingS = pos(a.workoutTime)
-  const durationS = pos(a.totalTime) ?? movingS
-  const kcalRaw = pos(a.calorie)
-  return {
-    externalId: String(a.labelId),
-    startLocal,
-    name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : null,
-    type: sport !== null ? SPORT_TYPES[sport] ?? 'other' : 'other',
-    durationS,
-    movingS,
-    distanceM,
-    // The list reports calories in small calories.
-    kcal: kcalRaw !== null ? Math.round(kcalRaw / 100) / 10 : null,
-    avgHr: pos(a.avgHr),
-    maxHr: pos(a.maxHr),
-    elevationGainM: pos(a.ascent),
-    // `avgSpeed` is a pace (s/km) despite its name; distance over moving time is unambiguous.
-    avgSpeedMps: distanceM && (movingS ?? durationS) ? Math.round((distanceM / (movingS ?? durationS)) * 1000) / 1000 : null,
-    trainingLoad: pos(a.trainingLoad),
-  }
-}
-
-/** /analyse/query data -> { days, metrics } for storeGarmin, limited to [from, to]. Pure, for tests. */
-export function normaliseAnalyse(data, from, to) {
-  const inRange = (day) => !!day && day >= from && day <= to
-  const days = []
-  for (const d of Array.isArray(data?.dayList) ? data.dayList : []) {
-    const day = corosDay(d?.happenDay)
-    if (!inRange(day)) continue
-    days.push({ day, restingHr: pos(d.rhr), hrvNight: pos(d.avgSleepHrv) })
-  }
-  const metrics = []
-  for (const d of Array.isArray(data?.t7dayList) ? data.t7dayList : []) {
-    const day = corosDay(d?.happenDay)
-    if (!inRange(day)) continue
-    const vo2max = pos(d.vo2max)
-    if (vo2max !== null) metrics.push({ day, vo2max })
-  }
-  return { days, metrics }
-}
-
-async function fetchActivities(session, from, to) {
-  const out = []
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const data = await authed(session, '/activity/query', { query: { size: PAGE_SIZE, pageNumber: page, startDay: ymd(from), endDay: ymd(to) } })
-    const list = Array.isArray(data.dataList) ? data.dataList : []
-    for (const a of list) {
-      const row = normaliseActivity(a)
-      if (row && row.startLocal.slice(0, 10) >= from && row.startLocal.slice(0, 10) <= to) out.push(row)
-    }
-    const totalPages = fin(data.totalPage) ?? 1
-    if (list.length < PAGE_SIZE || page >= totalPages) break
-  }
-  return out
-}
-
-async function fetchRange(session, from, to) {
-  const analyse = await authed(session, '/analyse/query', { query: { startDay: ymd(from), endDay: ymd(to) } })
-  const { days, metrics } = normaliseAnalyse(analyse, from, to)
-  const activities = await fetchActivities(session, from, to)
-  return { days, metrics, activities }
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,7 +126,7 @@ export function corosStatus(db, userId) {
   return {
     available: corosAvailable(),
     connected: !!session && status !== 'needs_login',
-    email: session?.email ?? null,
+    connectedAt: session?.connectedAt ?? null,
     status, // 'never' | 'connected' | 'needs_login' | 'rate_limited' | 'error'
     syncing: running.has(userId),
     lastAttemptAt: row?.last_attempt_at ?? null,
@@ -355,7 +139,222 @@ export function corosStatus(db, userId) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Connect / sync / disconnect                                         */
+/* Connect (authorization code + PKCE)                                 */
+/* ------------------------------------------------------------------ */
+
+/** state -> { userId, verifier, redirectUri, returnTo, expires } */
+const pending = new Map()
+
+function prunePending() {
+  const now = Date.now()
+  for (const [k, v] of pending) if (v.expires < now) pending.delete(k)
+}
+
+/** Step 1: the URL the browser should open. */
+export async function startConnect(db, userId, { redirectUri, returnTo }) {
+  if (!corosAvailable()) throw new CorosError('unavailable', 'COROS sync is switched off on this server.', 503)
+  const before = stateRow(db, userId)
+  if (before?.backoff_until && Date.parse(before.backoff_until) > Date.now()) {
+    throw new CorosError('rate_limited', `COROS is rate-limiting requests; try again after ${before.backoff_until}.`, 429)
+  }
+  const meta = await discover()
+  const client = await ensureClient(meta, redirectUri)
+  const { verifier, challenge } = pkce()
+  const state = randomBytes(24).toString('base64url')
+  prunePending()
+  for (const [k, v] of pending) if (v.userId === userId) pending.delete(k) // one attempt at a time
+  pending.set(state, { userId, verifier, redirectUri, returnTo, expires: Date.now() + PENDING_TTL_MS })
+  return { authorizeUrl: authorizeUrl(meta, client, { redirectUri, state, challenge }) }
+}
+
+/**
+ * Step 2: COROS redirected back. Swaps the code for tokens and starts the first
+ * sync in the background. Returns where to send the browser.
+ * @returns {Promise<{ userId: string|null, returnTo: string|null, ok: boolean, message?: string }>}
+ */
+export async function finishConnect(db, { code, state, error }) {
+  prunePending()
+  const p = state ? pending.get(state) : null
+  if (!p) return { userId: null, returnTo: null, ok: false, message: 'This COROS sign-in link has expired. Start again from Settings.' }
+  pending.delete(state)
+  if (error || !code) {
+    saveState(db, p.userId, { last_error: `COROS sign-in was not completed (${String(error || 'no code').slice(0, 80)}).` })
+    return { userId: p.userId, returnTo: p.returnTo, ok: false }
+  }
+  try {
+    const meta = await discover()
+    const client = await ensureClient(meta, p.redirectUri)
+    const tokens = await exchangeCode(meta, client, { code, verifier: p.verifier, redirectUri: p.redirectUri })
+    writeSession(p.userId, { resource: meta.resource, issuer: meta.issuer, redirectUri: p.redirectUri, ...tokens, connectedAt: new Date().toISOString() })
+    saveState(db, p.userId, { status: 'connected', last_error: null, backoff_until: null, last_success_at: null })
+    console.log(`[coros] connected for ${p.userId}`)
+  } catch (e) {
+    if (!(e instanceof CorosError)) throw e
+    saveState(db, p.userId, { last_error: String(e.message).slice(0, 500) })
+    console.error(`[coros] connect failed for ${p.userId}: ${e.message}`)
+    return { userId: p.userId, returnTo: p.returnTo, ok: false, message: e.message }
+  }
+  syncUser(db, p.userId, { trigger: 'connect' }).catch((e) => console.error(`[coros] first sync failed for ${p.userId}: ${e.message}`))
+  return { userId: p.userId, returnTo: p.returnTo, ok: true }
+}
+
+/** Stop syncing: revoke at COROS (best effort), forget the tokens; `deleteData` also removes what COROS wrote. */
+export async function disconnect(db, userId, { deleteData = false } = {}) {
+  const session = readSession(userId)
+  if (session) {
+    try {
+      const meta = await discover()
+      const client = await ensureClient(meta, session.redirectUri)
+      await revoke(meta, client, session.refreshToken || session.accessToken)
+    } catch {
+      /* best effort */
+    }
+  }
+  deleteSession(userId)
+  db.prepare('DELETE FROM integrations WHERE user_id = ? AND provider = ?').run(userId, PROVIDER)
+  const deleted = { days: 0, activities: 0, sleep: 0 }
+  if (deleteData) {
+    withTx(db, () => {
+      deleted.activities = Number(db.prepare("DELETE FROM activities WHERE user_id = ? AND source = 'coros'").run(userId).changes)
+      // daily_wellness and sleep_nights have no source column: remove those of the days COROS owned.
+      const owned = "SELECT day FROM daily_activity WHERE user_id = ? AND source = 'coros'"
+      db.prepare(`DELETE FROM daily_wellness WHERE user_id = ? AND day IN (${owned})`).run(userId, userId)
+      deleted.sleep = Number(db.prepare(`DELETE FROM sleep_nights WHERE user_id = ? AND day IN (${owned})`).run(userId, userId).changes)
+      deleted.days = Number(db.prepare("DELETE FROM daily_activity WHERE user_id = ? AND source = 'coros'").run(userId).changes)
+    })
+  }
+  console.log(`[coros] disconnected for ${userId}${deleteData ? ` (${JSON.stringify(deleted)} removed)` : ''}`)
+  return { deleted }
+}
+
+/* ------------------------------------------------------------------ */
+/* MCP with automatic refresh                                          */
+/* ------------------------------------------------------------------ */
+
+async function refreshSession(userId, session) {
+  const meta = await discover()
+  const client = await ensureClient(meta, session.redirectUri)
+  const tokens = await refreshTokens(meta, client, session.refreshToken)
+  Object.assign(session, tokens)
+  writeSession(userId, session) // the old refresh token is spent: save the new one at once
+  return session
+}
+
+/** Run `fn(mcp)` on a fresh MCP session, refreshing the token first if due and once more on a 401. */
+async function withMcp(userId, session, fn) {
+  if (Date.parse(session.expiresAt) - Date.now() < REFRESH_BEFORE_MS) await refreshSession(userId, session)
+  try {
+    return await fn(await openMcp(session.resource, session.accessToken))
+  } catch (e) {
+    if (!(e instanceof CorosError) || e.code !== 'unauthorized') throw e
+    await refreshSession(userId, session)
+    try {
+      return await fn(await openMcp(session.resource, session.accessToken))
+    } catch (e2) {
+      if (e2 instanceof CorosError && e2.code === 'unauthorized') throw new CorosError('needs_login', 'COROS rejected the connection. Connect again in Settings.', 409)
+      throw e2
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Fetch                                                               */
+/* ------------------------------------------------------------------ */
+
+const ymd = (day) => day.replaceAll('-', '')
+
+/** [from, to] in chunks of at most `size` days. */
+function chunks(from, to, size) {
+  const out = []
+  let start = from
+  while (start <= to) {
+    const end = addDays(start, size - 1) < to ? addDays(start, size - 1) : to
+    out.push([start, end])
+    start = addDays(end, 1)
+  }
+  return out
+}
+
+function spanDays(from, to) {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1
+}
+
+/**
+ * Pull [from, to] through the MCP tools. One tool failing (other than auth or
+ * rate limiting) does not sink the sync: it is skipped and reported.
+ */
+async function fetchRange(mcp, from, to, knownActivityIds) {
+  const warnings = []
+  const span = spanDays(from, to)
+  const tool = async (name, args) => {
+    try {
+      return (await mcp.callTool(name, args)).text
+    } catch (e) {
+      if (e instanceof CorosError && e.code !== 'error') throw e
+      warnings.push(`${name}: ${e.message}`.slice(0, 200))
+      return ''
+    }
+  }
+  /** Tools that only take "recent days": ask for the span, fall back to a week if COROS refuses. */
+  const recent = async (name) => {
+    const before = warnings.length
+    const text = await tool(name, { days: span })
+    if (text || span <= 7) return text
+    warnings.length = before
+    return tool(name, { days: 7 })
+  }
+
+  const inRange = (r) => r.day >= from && r.day <= to
+
+  // Activities, then details for the ones not stored yet.
+  const activities = []
+  for (const [a, b] of chunks(from, to, 31)) activities.push(...parseSportRecords(await tool('querySportRecords', { startDate: ymd(a), endDate: ymd(b), limit: 200 })))
+  let details = 0
+  for (const act of activities) {
+    if (details >= MAX_DETAILS || knownActivityIds.has(act.externalId) || !act.labelId || act.sportType === null) continue
+    details++
+    const extra = parseActivityDetail(await tool('getActivityDetail', { labelId: act.labelId, sportType: act.sportType }))
+    for (const [k, v] of Object.entries(extra)) if (v !== null && (act[k] === null || act[k] === undefined)) act[k] = v
+  }
+
+  const sleepRows = []
+  const sleepDays = []
+  for (const [a, b] of chunks(from, to, 31)) {
+    const parsed = parseSleep(await tool('querySleepOverview', { startDate: ymd(a), endDate: ymd(b) }))
+    sleepRows.push(...parsed.sleep)
+    sleepDays.push(...parsed.days)
+  }
+  const hrv = []
+  for (const [a, b] of chunks(from, to, 7)) hrv.push(...parseHrv(await tool('querySleepHrv', { startDate: ymd(a), endDate: ymd(b) })))
+  const daily = parseDailyHealth(await recent('queryDailyHealthData'))
+  const rhr = parsePerDay(await recent('queryRestingHeartRate'), /resting|rhr|heart rate/)
+  const stress = parsePerDay(await recent('queryStressLevel'), /stress/, /max|high|low|time/)
+  const fitness = parseFitness(await tool('queryFitnessAssessmentOverview', {}))
+
+  // One row per day, later sources filling only what earlier ones left empty.
+  const byDay = new Map()
+  const put = (day, fields) => {
+    if (!byDay.has(day)) byDay.set(day, { day })
+    const row = byDay.get(day)
+    for (const [k, v] of Object.entries(fields)) if (v !== null && v !== undefined && (row[k] === null || row[k] === undefined)) row[k] = v
+  }
+  for (const r of daily.filter(inRange)) put(r.day, { steps: r.steps, activeKcal: r.activeKcal, totalKcal: r.totalKcal, bmrKcal: r.bmrKcal, stressAvg: r.stressAvg, restingHr: r.restingHr })
+  for (const r of rhr.filter(inRange)) put(r.day, { restingHr: r.value })
+  for (const r of stress.filter(inRange)) put(r.day, { stressAvg: r.value })
+  for (const r of hrv.filter(inRange)) put(r.day, { hrvNight: r.hrvNight, hrvStatus: r.hrvStatus })
+  for (const r of sleepDays.filter(inRange)) put(r.day, { sleepSeconds: r.sleepSeconds })
+
+  return {
+    days: [...byDay.values()],
+    sleep: sleepRows.filter(inRange),
+    metrics: fitness.vo2max !== null ? [{ day: to, vo2max: fitness.vo2max }] : [],
+    activities: activities.filter((a) => a.startLocal.slice(0, 10) >= from && a.startLocal.slice(0, 10) <= to),
+    warnings,
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Sync                                                                */
 /* ------------------------------------------------------------------ */
 
 const running = new Set()
@@ -368,39 +367,6 @@ export function syncRange(lastSuccessAt, todayDay, days) {
   }
   const span = lastSuccessAt ? WINDOW_DAYS : BACKFILL_DAYS
   return { from: addDays(todayDay, -(span - 1)), to: todayDay }
-}
-
-/** Log in, keep the token (never the password), then run the first sync. */
-export async function connect(db, userId, email, password) {
-  if (!corosAvailable()) throw new CorosError('unavailable', 'COROS sync is switched off on this server.', 503)
-  if (running.has(userId)) throw new CorosError('busy', 'A COROS sync is already running.', 409)
-  const before = stateRow(db, userId)
-  if (before?.backoff_until && Date.parse(before.backoff_until) > Date.now()) {
-    throw new CorosError('rate_limited', `COROS is rate-limiting requests; try again after ${before.backoff_until}.`, 429)
-  }
-  const session = await login(email, password)
-  writeSession(userId, { ...session, email })
-  // A fresh login clears an old failure, and a reconnect after a gap backfills again.
-  saveState(db, userId, { status: 'connected', last_error: null, backoff_until: null })
-  console.log(`[coros] connected for ${userId}`)
-  return syncUser(db, userId, { trigger: 'connect' })
-}
-
-/** Stop syncing. `deleteData` also removes the activities and days COROS wrote. */
-export function disconnect(db, userId, { deleteData = false } = {}) {
-  deleteSession(userId)
-  db.prepare('DELETE FROM integrations WHERE user_id = ? AND provider = ?').run(userId, PROVIDER)
-  const deleted = { days: 0, activities: 0 }
-  if (deleteData) {
-    withTx(db, () => {
-      deleted.activities = Number(db.prepare("DELETE FROM activities WHERE user_id = ? AND source = 'coros'").run(userId).changes)
-      // daily_wellness has no source column: remove the wellness rows of the days COROS owned.
-      db.prepare("DELETE FROM daily_wellness WHERE user_id = ? AND day IN (SELECT day FROM daily_activity WHERE user_id = ? AND source = 'coros')").run(userId, userId)
-      deleted.days = Number(db.prepare("DELETE FROM daily_activity WHERE user_id = ? AND source = 'coros'").run(userId).changes)
-    })
-  }
-  console.log(`[coros] disconnected for ${userId}${deleteData ? ` (${deleted.activities} activities, ${deleted.days} days removed)` : ''}`)
-  return { deleted }
 }
 
 /**
@@ -421,11 +387,14 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
   running.add(userId)
   saveState(db, userId, { last_attempt_at: new Date().toISOString() })
   try {
-    const payload = await fetchRange(session, from, to)
+    const known = new Set(db.prepare("SELECT external_id FROM activities WHERE user_id = ? AND source = 'coros'").all(userId).map((r) => r.external_id))
+    const payload = await withMcp(userId, session, (mcp) => fetchRange(mcp, from, to, known))
     const counts = storeGarmin(db, userId, payload, { source: PROVIDER })
-    saveState(db, userId, { status: 'connected', last_success_at: new Date().toISOString(), last_error: null, backoff_until: null })
-    console.log(`[coros] ${trigger} sync ok for ${userId}: ${counts.days} days, ${counts.activities} activities (${from}..${to})`)
-    return { ok: true, from, to, days: counts.days, activities: counts.activities, sleep: 0 }
+    const warning = payload.warnings.length ? `Partly synced; COROS refused: ${payload.warnings.join('; ')}`.slice(0, 500) : null
+    saveState(db, userId, { status: 'connected', last_success_at: new Date().toISOString(), last_error: warning, backoff_until: null })
+    if (warning) console.error(`[coros] ${trigger} sync for ${userId}: ${warning}`)
+    console.log(`[coros] ${trigger} sync ok for ${userId}: ${counts.days} days, ${counts.sleep} nights, ${counts.activities} activities (${from}..${to})`)
+    return { ok: true, from, to, days: counts.days, sleep: counts.sleep, activities: counts.activities, warnings: payload.warnings }
   } catch (e) {
     if (!(e instanceof CorosError)) throw e
     const kind = ['needs_login', 'rate_limited'].includes(e.code) ? e.code : 'error'
@@ -438,6 +407,47 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
   } finally {
     running.delete(userId)
   }
+}
+
+/**
+ * The raw text of every tool the sync uses, for tuning the parsers against a
+ * real account (`node server/cli.js coros dump`). Read-only.
+ */
+export async function dumpRaw(db, userId, { days = 3 } = {}) {
+  const session = readSession(userId)
+  if (!session) throw new CorosError('needs_login', 'COROS is not connected for this user.', 409)
+  const to = today()
+  const from = addDays(to, -(Math.max(1, days) - 1))
+  return withMcp(userId, session, async (mcp) => {
+    const out = [['tools/list', (await mcp.tools()).join(', ')]]
+    const calls = [
+      ['querySportRecords', { startDate: ymd(from), endDate: ymd(to), limit: 5 }],
+      ['querySleepOverview', { startDate: ymd(from), endDate: ymd(to) }],
+      ['querySleepHrv', { startDate: ymd(from), endDate: ymd(to) }],
+      ['queryDailyHealthData', { days }],
+      ['queryRestingHeartRate', { days }],
+      ['queryStressLevel', { days }],
+      ['queryFitnessAssessmentOverview', {}],
+    ]
+    for (const [name, args] of calls) {
+      try {
+        const r = await mcp.callTool(name, args)
+        out.push([`${name} ${JSON.stringify(args)}`, r.text + (r.structured ? `\n[structuredContent] ${JSON.stringify(r.structured)}` : '')])
+      } catch (e) {
+        out.push([`${name} ${JSON.stringify(args)}`, `ERROR: ${e.message}`])
+      }
+    }
+    const first = parseSportRecords(out[1][1])[0]
+    if (first?.labelId && first.sportType !== null) {
+      const args = { labelId: first.labelId, sportType: first.sportType }
+      try {
+        out.push([`getActivityDetail ${JSON.stringify(args)}`, (await mcp.callTool('getActivityDetail', args)).text])
+      } catch (e) {
+        out.push([`getActivityDetail ${JSON.stringify(args)}`, `ERROR: ${e.message}`])
+      }
+    }
+    return out
+  })
 }
 
 /** Should the scheduler try this user now? Pure, for tests. */

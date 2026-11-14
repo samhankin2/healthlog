@@ -251,8 +251,8 @@ export type CorosState = 'never' | 'connected' | 'needs_login' | 'rate_limited' 
 export interface CorosStatus {
   available: boolean
   connected: boolean
-  /** The COROS account email, kept with the access token (never the password). */
-  email: string | null
+  /** When the current COROS authorisation was granted (null when not connected). */
+  connectedAt: string | null
   status: CorosState
   syncing: boolean
   lastAttemptAt: string | null
@@ -270,6 +270,8 @@ export interface CorosSyncResult {
   days?: number
   sleep?: number
   activities?: number
+  /** Tools COROS refused this time; the rest synced. */
+  warnings?: string[]
   error?: string
   message?: string
 }

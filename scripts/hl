@@ -19,6 +19,9 @@
 #   scripts/hl garmin-login EMAIL one-time interactive Garmin login (password + MFA prompt)
 #   scripts/hl garmin-sync EMAIL [DAYS]   sync Garmin now with the saved tokens
 #   scripts/hl garmin-status      Garmin connection + last sync per account
+#   scripts/hl coros-status       COROS connection + last sync per account
+#   scripts/hl coros-sync EMAIL [DAYS]    sync COROS now
+#   scripts/hl coros-dump EMAIL [DAYS]    raw COROS MCP replies (to tune the parsers)
 #   scripts/hl ssh                plain shell on the box
 #
 # The DB on the box is read through server/cli.js, so nothing extra needs
@@ -37,7 +40,7 @@ ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
 remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Only fixed flags are forwarded to the remote command line; the SQL itself
 # goes over stdin, so no quoting or injection worries.
@@ -193,6 +196,18 @@ EOF
 
   garmin-status)
     remote "$CLI garmin status"
+    ;;
+
+  coros-sync|coros-dump)
+    email="${1:-}"
+    [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || { echo "usage: hl $cmd <healthlog account email> [DAYS]" >&2; exit 2; }
+    days="${2:-}"
+    [ -z "$days" ] || [[ "$days" =~ ^[0-9]+$ ]] || { echo "DAYS must be a number" >&2; exit 2; }
+    remote "$CLI coros ${cmd#coros-} --email '$email'${days:+ --days $days}"
+    ;;
+
+  coros-status)
+    remote "$CLI coros status"
     ;;
 
   help|-h|--help)
