@@ -1,7 +1,8 @@
 /**
  * A fake cronometer.com for tests: login page with an anticsrf token, form
  * login, the GWT RPC endpoint (authenticate / generateAuthorizationToken /
- * logout, rejecting a stale permutation or policy) and the servings CSV export.
+ * logout, rejecting a stale permutation or policy) and the servings and daily
+ * nutrition CSV exports.
  *
  *   const fake = await startFakeCronometer({ diary })
  *   fake.base, fake.state (sessions, exports, logins, logouts, diary), fake.close()
@@ -13,6 +14,7 @@ export const CRONO_PASSWORD = 'sup3r-secret-crono-pw'
 const PERMUTATION = 'ABCDEF0123456789ABCDEF0123456789'
 const POLICY = '0123456789ABCDEF0123456789ABCDEF'
 const HEADER = ['Day', 'Time', 'Group', 'Food Name', 'Amount', 'Energy (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)', 'Fiber (g)', 'Category']
+const DAILY_HEADER = ['Date', 'Energy (kcal)', 'Alcohol (g)', 'Carbs (g)', 'Fiber (g)', 'Fat (g)', 'Protein (g)', 'Completed']
 const csvCell = (v) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
 
 function cookies(req) {
@@ -21,7 +23,8 @@ function cookies(req) {
 
 /** @param {{ diary: string[][] }} opts  rows: [Day, Time, Group, Food Name, Amount, kcal, protein, carbs, fat, fiber] */
 export async function startFakeCronometer({ diary }) {
-  const fake = { sessions: new Set(), tokens: new Set(), exports: [], logins: 0, logouts: 0, lastLoginBody: '', diary }
+  // servingsNutrients: false makes the servings export come back with no nutrient columns.
+  const fake = { sessions: new Set(), tokens: new Set(), exports: [], logins: 0, logouts: 0, lastLoginBody: '', diary, servingsNutrients: true }
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x')
     let body = ''
@@ -60,11 +63,36 @@ export async function startFakeCronometer({ diary }) {
         return send(500, 'unknown call')
       }
       if (req.method === 'GET' && url.pathname === '/export') {
-        if (!fake.tokens.has(url.searchParams.get('nonce')) || url.searchParams.get('generate') !== 'servings') return send(403, 'nope')
+        const generate = url.searchParams.get('generate')
+        if (!fake.tokens.has(url.searchParams.get('nonce')) || !['servings', 'dailySummary'].includes(generate)) return send(403, 'nope')
         const start = url.searchParams.get('start')
         const end = url.searchParams.get('end')
-        fake.exports.push({ start, end })
-        const rows = fake.diary.filter((r) => r[0] >= start && r[0] <= end).map((r) => [...r, 'Food'].map(csvCell).join(','))
+        fake.exports.push({ start, end, generate })
+        const inRange = fake.diary.filter((r) => r[0] >= start && r[0] <= end)
+        if (generate === 'dailySummary') {
+          // One row per day in the range, logged or not, like Cronometer's daily nutrition export.
+          const totals = new Map()
+          for (const r of inRange) {
+            const t = totals.get(r[0]) ?? [0, 0, 0, 0, 0]
+            for (let i = 0; i < 5; i++) t[i] += Number(r[5 + i]) || 0
+            totals.set(r[0], t)
+          }
+          const days = []
+          for (let d = new Date(`${start}T12:00:00`); d <= new Date(`${end}T12:00:00`); d.setDate(d.getDate() + 1)) {
+            days.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+          }
+          const rows = days.map((day) => {
+            const [kcal, protein, carbs, fat, fiber] = (totals.get(day) ?? [0, 0, 0, 0, 0]).map((n) => n.toFixed(2))
+            return [day, kcal, '0.00', carbs, fiber, fat, protein, totals.has(day) ? 'true' : 'false'].join(',')
+          })
+          return send(200, [DAILY_HEADER.join(','), ...rows].join('\r\n') + '\r\n', { 'content-type': 'text/csv' })
+        }
+        if (!fake.servingsNutrients) {
+          // What some accounts get: the diary without any nutrient columns.
+          const rows = inRange.map((r) => [r[0], r[2], r[3], r[4], 'Food'].map(csvCell).join(','))
+          return send(200, ['Day,Group,Food Name,Amount,Category', ...rows].join('\r\n') + '\r\n', { 'content-type': 'text/csv' })
+        }
+        const rows = inRange.map((r) => [...r, 'Food'].map(csvCell).join(','))
         return send(200, [HEADER.join(','), ...rows].join('\r\n') + '\r\n', { 'content-type': 'text/csv' })
       }
       send(404, 'not found')

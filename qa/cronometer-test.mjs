@@ -14,7 +14,7 @@ import { CRONO_EMAIL, CRONO_PASSWORD, startFakeCronometer } from './fixtures/fak
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { servingsToMeals } from '../server/lib/cronometer.js'
+import { dailyToMeals, servingsToMeals } from '../server/lib/cronometer.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..')
@@ -67,6 +67,20 @@ const DIARY = [
   let message = ''
   try { servingsToMeals('Day,Food Name,Protein (g)\n2026-11-14,Apple,0.3\n') } catch (e) { message = e.message }
   ok('headers: a missing column is named, with what Cronometer sent', /missing the Energy column/.test(message) && /it sent: Day, Food Name, Protein \(g\)/.test(message), message)
+  let code = ''
+  try { servingsToMeals('Day,Group,Food Name,Amount,Category\n2026-11-14,Breakfast,Oats,60 g,Cereals\n') } catch (e) { code = e.code }
+  eq('headers: a servings export with no nutrients is flagged for the daily fallback', code, 'no_nutrients')
+}
+
+/* ---------- daily nutrition export (pure) ---------- */
+{
+  const daily = dailyToMeals('Date,Energy (kcal),Carbs (g),Fiber (g),Fat (g),Protein (g),Completed\n2026-11-13,0.00,0,0,0,0,false\n2026-11-14,2104.5,210.2,31.0,80.1,140.4,true\n')
+  eq('daily: unlogged days skipped, one meal per logged day', daily.meals.map((m) => [m.day, m.group, m.kcal, m.proteinG, m.carbsG, m.fatG, m.fiberG]), [['2026-11-14', 'Day total', 2104.5, 140.4, 210.2, 80.1, 31]])
+  const kj = dailyToMeals('Date,Energy (kJ)\n2026-11-14,8368\n')
+  eq('daily: kilojoules convert', kj.meals[0]?.kcal, 2000)
+  let message = ''
+  try { dailyToMeals('Date,Protein (g)\n2026-11-14,100\n') } catch (e) { message = e.message }
+  ok('daily: no energy column there either is a clear error', /carry no calories/.test(message), message)
 }
 
 let fake // the fake server's state, set in run()
@@ -256,6 +270,27 @@ async function run() {
   r = await api('GET', `/api/meals?day=${TODAY}`, { token: a })
   eq('disconnect without deleteMeals keeps the meals', r.json?.meals?.length, 3)
   ok('disconnect: session files removed', !fs.existsSync(path.join(dataDir, 'cronometer')) || fs.readdirSync(path.join(dataDir, 'cronometer')).length === 0)
+
+  /* ---------- servings export without nutrients -> daily totals ---------- */
+  fake.servingsNutrients = false
+  const c = await makeUser('c@example.com')
+  let before = fake.exports.length
+  r = await api('POST', '/api/cronometer/connect', { token: c, body: { email: CRONO_EMAIL, password: CRONO_PASSWORD } })
+  eq('no nutrients: connect still syncs, as daily totals', [r.status, r.json?.result?.ok, r.json?.result?.format], [200, true, 'daily'])
+  eq('no nutrients: servings tried, then the daily export', fake.exports.slice(before).map((e) => e.generate), ['servings', 'dailySummary'])
+  eq('no nutrients: both exports counted', r.json?.cronometer?.exportsToday, 2)
+  r = await api('GET', `/api/meals?day=${TODAY}`, { token: c })
+  const dayTotal = r.json?.meals?.[0]
+  eq('no nutrients: one day-total meal with the day\'s figures', [r.json?.meals?.length, dayTotal?.name, dayTotal?.kcal, dayTotal?.proteinG, dayTotal?.source], [1, 'Day total', 936, 64.9, 'cronometer'])
+  r = await api('GET', `/api/meals?day=${isoDay(-2)}`, { token: c })
+  eq('no nutrients: an unlogged day gets no meal', r.json?.meals?.length, 0)
+  before = fake.exports.length
+  r = await api('POST', '/api/cronometer/sync', { token: c, body: {} })
+  eq('no nutrients: later syncs go straight to the daily export (one export)', [r.json?.result?.ok, fake.exports.slice(before).map((e) => e.generate)], [true, ['dailySummary']])
+  r = await api('GET', `/api/meals?day=${TODAY}`, { token: c })
+  eq('no nutrients: resync replaces, no duplicates', r.json?.meals?.length, 1)
+  await api('POST', '/api/cronometer/disconnect', { token: c, body: { deleteMeals: true } })
+  fake.servingsNutrients = true
 
   /* ---------- connect rate limit ---------- */
   let last

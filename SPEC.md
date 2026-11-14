@@ -542,7 +542,7 @@ POST /api/cronometer/connect { email, password }
         400 Cronometer rejected the login (its message is relayed) / missing fields
         429 too many connect attempts
 POST /api/cronometer/sync { days? }   days 1..365 forces the last N days
-     -> 200 { ok:true, result:{ ok, from, to, meals?, servings?, error?, message? }, cronometer }
+     -> 200 { ok:true, result:{ ok, from, to, meals?, servings?, format?:'servings'|'daily', error?, message? }, cronometer }
         409 not connected / needs a fresh login / already running
         429 inside backoff, or today's export budget is used
 POST /api/cronometer/disconnect { deleteMeals?:boolean }
@@ -554,7 +554,8 @@ drives the endpoints its web app uses (the flow `gocronometer` documents): GET
 `/login/` for the `anticsrf` token, POST `/login` (form), GWT RPC
 `authenticate` on `/cronometer/app` for the Cronometer user id, GWT
 `generateAuthorizationToken` for a short-lived export token, then GET
-`/export?generate=servings&start&end&nonce`. The GWT permutation and RPC policy
+`/export?generate=servings&start&end&nonce` (or `generate=dailySummary`, see
+"Daily totals" below). The GWT permutation and RPC policy
 hash change with Cronometer releases, so they are read from
 `/cronometer/cronometer.nocache.js` and `/cronometer/<permutation>.cache.js`
 (cached 6 h, re-read once on a stale-policy error, last known values as a
@@ -571,7 +572,8 @@ deleted, and nothing syncs until the user connects again. Accounts with
 two-factor sign-in are not supported.
 
 **Load on Cronometer** (it allows about 10 exports per account per day):
-- One export per sync. Scheduled syncs at most every
+- One export per sync (two once, on the sync that finds the servings export
+  has no nutrients, see "Daily totals"). Scheduled syncs at most every
   `CRONOMETER_SYNC_INTERVAL_HOURS` (default 4, minimum 2), from
   `CRONOMETER_SYNC_HOUR` (default 6, server local time) until midnight.
 - A hard cap of `CRONOMETER_DAILY_EXPORTS` (default 8, max 10) exports per user
@@ -594,6 +596,19 @@ edits and deletions in Cronometer carry over; days outside the range and meals
 from any other source are never touched. A synced meal edited in HealthLog
 keeps `source = 'cronometer'` and is replaced by the next sync that covers its
 day.
+
+**Daily totals.** Some accounts get a servings export with no nutrient
+columns at all (`Day, Group, Food Name, Amount, Category`). When the servings
+export has Day and Food Name but no Energy column, the same sync fetches
+`generate=dailySummary` (one row per day: Date, Energy, macros, fibre) if
+today's budget has room for a second export, and stores one meal per day with
+energy > 0: name "Day total", description "From Cronometer (day total)", no
+items, the day's kcal/macros/fibre, `eaten_at` 12:00 local. `session.json`
+then records `format: "daily"`, so later syncs spend their one export on
+`dailySummary` only; a fresh connect clears it and tries servings again. With
+no room for the second export the sync fails with a message saying daily
+totals start tomorrow. Energy headers are matched loosely (case, spacing,
+`Energy (kJ)` converted to kcal).
 
 ### COROS
 

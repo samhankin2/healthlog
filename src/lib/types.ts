@@ -242,6 +242,8 @@ export interface CronometerSyncResult {
   to?: DayString
   meals?: number
   servings?: number
+  /** 'daily' when the account's servings export has no nutrients and day totals were synced. */
+  format?: 'servings' | 'daily'
   error?: string
   message?: string
 }

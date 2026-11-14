@@ -51,8 +51,9 @@
     }
   }
 
-  function syncedToast(result: { ok: boolean; meals?: number; servings?: number; error?: string; message?: string }): void {
-    if (result.ok) showToast(`Cronometer synced: ${result.servings ?? 0} food${result.servings === 1 ? '' : 's'} in ${result.meals ?? 0} meal${result.meals === 1 ? '' : 's'}.`, 'success')
+  function syncedToast(result: { ok: boolean; meals?: number; servings?: number; format?: 'servings' | 'daily'; error?: string; message?: string }): void {
+    if (result.ok && result.format === 'daily') showToast(`Cronometer synced: daily totals for ${result.meals ?? 0} day${result.meals === 1 ? '' : 's'}.`, 'success')
+    else if (result.ok) showToast(`Cronometer synced: ${result.servings ?? 0} food${result.servings === 1 ? '' : 's'} in ${result.meals ?? 0} meal${result.meals === 1 ? '' : 's'}.`, 'success')
     else if (result.error === 'needs_login') showToast('Cronometer ended the session. Sign in again.', 'error')
     else showToast(result.message ?? 'Cronometer sync failed. Your synced meals are still here.', 'error')
   }

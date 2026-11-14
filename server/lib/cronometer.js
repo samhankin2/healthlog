@@ -20,7 +20,9 @@
  *   - A failed export or a rejected request backs off CRONOMETER_BACKOFF_HOURS
  *     (default 6) when Cronometer answers 429.
  *
- * What it syncs: the food diary ("servings" export). Each sync replaces the
+ * What it syncs: the food diary ("servings" export), or the daily nutrition
+ * totals ("dailySummary") when an account's servings export has no nutrient
+ * columns. Each sync replaces the
  * Cronometer meals of every day in its range, so edits and deletions made in
  * Cronometer carry over. Meals logged in HealthLog itself are never touched.
  *
@@ -284,22 +286,28 @@ export async function login(email, password) {
   return { cookies: jar.cookies, cronometerUserId }
 }
 
-/** Download the servings CSV for [from, to]. Refreshes the session cookies in `session`. */
-async function exportServings(session, from, to) {
+/**
+ * Download one CSV export for [from, to]: `servings` (the food diary) or
+ * `dailySummary` (one row of nutrient totals per day). Refreshes the session
+ * cookies in `session`.
+ */
+async function exportCsv(session, from, to, generate) {
   const jar = new Jar(session.cookies)
   const userId = await authenticate(jar)
   if (!jar.cookies.sesnonce) throw new CronometerError('needs_login', 'Cronometer ended the session. Connect again in Settings.', 409)
   const tokenText = await gwt(jar, 'token', { nonce: jar.cookies.sesnonce, userId })
   const token = tokenText.match(/"([^"]+)"/)?.[1]
   if (!token) throw new CronometerError('error', 'Cronometer did not issue an export token.')
-  const query = new URLSearchParams({ end: to, generate: 'servings', nonce: token, start: from })
+  const query = new URLSearchParams({ end: to, generate, nonce: token, start: from })
   const res = await http(jar, `${base()}/export?${query}`, {
     headers: { 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'same-origin' },
   })
   session.cookies = jar.cookies
   session.cronometerUserId = userId
   if (res.status !== 200) throw new CronometerError('error', `Cronometer refused the export (HTTP ${res.status}). It allows about 10 exports a day.`)
-  if (!/\bfood\b/i.test(res.text.slice(0, 2000))) throw new CronometerError('error', 'Cronometer\'s export did not look like a food diary.')
+  const head = res.text.slice(0, 2000)
+  if (generate === 'servings' && !/\bfood\b/i.test(head)) throw new CronometerError('error', 'Cronometer\'s export did not look like a food diary.')
+  if (generate === 'dailySummary' && !/\b(date|day)\b/i.test(head)) throw new CronometerError('error', 'Cronometer\'s daily nutrition export did not look like one.')
   return res.text
 }
 
@@ -338,13 +346,11 @@ function num(v) {
 }
 
 /**
- * Servings CSV -> one meal per (day, group), servings as items. Pure, for tests.
- * @returns {{ meals: Array<{day:string, group:string, eatenAt:string, items:object[], fiberG:number}>, rows: number }}
+ * Column lookup over a CSV header. Header names vary a little (case, spacing,
+ * quotes, kJ vs kcal, Date vs Day), so a normalised form is compared.
  */
-export function servingsToMeals(csvText) {
-  const { headers, rows } = parseCsv(csvText)
-  // Header names vary a little (case, spacing, kJ vs kcal, Date vs Day): compare a normalised form.
-  const norm = (h) => String(h ?? '').replace(/\u00a0/g, ' ').trim().replace(/^["']+|["']+$/g, '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/\s*\(\s*/g, ' (').replace(/\s*\)/g, ')')
+function columns(headers) {
+  const norm = (h) => String(h ?? '').replace(/ /g, ' ').trim().replace(/^["']+|["']+$/g, '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/\s*\(\s*/g, ' (').replace(/\s*\)/g, ')')
   const normHeaders = headers.map(norm)
   const col = (...names) => {
     for (const name of names) {
@@ -355,24 +361,36 @@ export function servingsToMeals(csvText) {
   }
   const kcalCol = col('Energy (kcal)', 'Calories (kcal)', 'Calories', 'Energy')
   const kjCol = kcalCol < 0 ? col('Energy (kJ)') : -1
-  const idx = {
+  return {
+    col,
     day: col('Day', 'Date'),
-    time: col('Time'),
-    group: col('Group', 'Meal'),
-    name: col('Food Name', 'Food', 'Name'),
-    amount: col('Amount', 'Serving'),
     kcal: kcalCol >= 0 ? kcalCol : kjCol,
+    // An account set to kilojoules exports "Energy (kJ)".
+    energyScale: kcalCol < 0 && kjCol >= 0 ? 1 / 4.184 : 1,
     protein: col('Protein (g)', 'Protein'),
     carbs: col('Carbs (g)', 'Net Carbs (g)', 'Carbohydrates (g)', 'Carbs'),
     fat: col('Fat (g)', 'Fat'),
     fiber: col('Fiber (g)', 'Fibre (g)', 'Fiber', 'Fibre'),
+    seen: headers.slice(0, 15).map((h) => String(h).trim()).join(', ').slice(0, 300),
   }
-  // An account set to kilojoules exports "Energy (kJ)".
-  const energyScale = kcalCol < 0 && kjCol >= 0 ? 1 / 4.184 : 1
+}
+
+/**
+ * Servings CSV -> one meal per (day, group), servings as items. Pure, for tests.
+ * @returns {{ meals: Array<{day:string, group:string, eatenAt:string, items:object[], fiberG:number}>, rows: number }}
+ */
+export function servingsToMeals(csvText) {
+  const { headers, rows } = parseCsv(csvText)
+  const c = columns(headers)
+  const idx = { ...c, time: c.col('Time'), group: c.col('Group', 'Meal'), name: c.col('Food Name', 'Food', 'Name'), amount: c.col('Amount', 'Serving') }
+  const energyScale = c.energyScale
   const missing = [idx.day < 0 && 'Day', idx.name < 0 && 'Food Name', idx.kcal < 0 && 'Energy'].filter(Boolean)
   if (missing.length) {
-    const seen = headers.slice(0, 15).map((h) => String(h).trim()).join(', ')
-    throw new CronometerError('error', `Cronometer's export is missing the ${missing.join(', ')} column (it sent: ${seen.slice(0, 300)}).`)
+    // Some accounts get a servings export with no nutrient columns at all
+    // (Day, Group, Food Name, Amount, Category): 'no_nutrients' sends the sync
+    // to the daily nutrition export instead.
+    const code = idx.day >= 0 && idx.name >= 0 ? 'no_nutrients' : 'error'
+    throw new CronometerError(code, `Cronometer's export is missing the ${missing.join(', ')} column (it sent: ${c.seen}).`)
   }
 
   /** @type {Map<string, {day:string, group:string, clocks:number[][], items:object[], fiberG:number}>} */
@@ -410,19 +428,63 @@ export function servingsToMeals(csvText) {
   return { meals, rows: count }
 }
 
-/** Replace the user's Cronometer meals for every day in [from, to]. */
+/**
+ * Daily nutrition CSV -> one meal per logged day carrying the day's totals.
+ * Used when the servings export has no nutrient columns. Pure, for tests.
+ */
+export function dailyToMeals(csvText) {
+  const { headers, rows } = parseCsv(csvText)
+  const c = columns(headers)
+  const missing = [c.day < 0 && 'Date', c.kcal < 0 && 'Energy'].filter(Boolean)
+  if (missing.length) {
+    throw new CronometerError('error', `Cronometer's exports carry no calories for this account: the daily nutrition export is missing the ${missing.join(', ')} column too (it sent: ${c.seen}).`)
+  }
+  const meals = []
+  for (const row of rows) {
+    const day = String(row[c.day] ?? '').trim().slice(0, 10)
+    const kcal = Math.round(num(row[c.kcal]) * c.energyScale * 10) / 10
+    if (!isISODate(day) || kcal <= 0) continue // nothing logged that day
+    const [y, mo, d] = day.split('-').map(Number)
+    meals.push({
+      day,
+      group: 'Day total',
+      eatenAt: new Date(y, mo - 1, d, 12, 0).toISOString(),
+      kcal,
+      proteinG: c.protein >= 0 ? num(row[c.protein]) : 0,
+      carbsG: c.carbs >= 0 ? num(row[c.carbs]) : 0,
+      fatG: c.fat >= 0 ? num(row[c.fat]) : 0,
+      fiberG: c.fiber >= 0 ? num(row[c.fiber]) : 0,
+      items: [],
+    })
+  }
+  meals.sort((a, b) => a.day.localeCompare(b.day))
+  return { meals, rows: meals.length }
+}
+
+/** Replace the user's Cronometer meals for every day in [from, to] with the servings CSV's meals. */
 export function storeServings(db, userId, from, to, csvText) {
   const { meals, rows } = servingsToMeals(csvText)
+  return storeMeals(db, userId, from, to, meals, rows, 'From Cronometer')
+}
+
+/** Replace the user's Cronometer meals for every day in [from, to] with the daily nutrition CSV's totals. */
+export function storeDaily(db, userId, from, to, csvText) {
+  const { meals, rows } = dailyToMeals(csvText)
+  return storeMeals(db, userId, from, to, meals, rows, 'From Cronometer (day total)')
+}
+
+function storeMeals(db, userId, from, to, meals, rows, description) {
   const inRange = meals.filter((m) => m.day >= from && m.day <= to)
   return withTx(db, () => {
     const removed = db.prepare("DELETE FROM meals WHERE user_id = ? AND source = 'cronometer' AND day >= ? AND day <= ?").run(userId, from, to)
     for (const m of inRange) {
-      const sum = (k) => m.items.reduce((acc, it) => acc + it[k], 0)
+      // Servings meals sum their items; a day total carries its own figures.
+      const sum = (k) => (m.items.length ? m.items.reduce((acc, it) => acc + it[k], 0) : m[k] ?? 0)
       insertMeal(db, userId, {
         eatenAt: m.eatenAt,
         day: m.day,
         name: m.group,
-        description: 'From Cronometer',
+        description,
         kcal: sum('kcal'),
         proteinG: sum('proteinG'),
         carbsG: sum('carbsG'),
@@ -546,12 +608,34 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
   running.add(userId)
   saveState(db, userId, { last_attempt_at: new Date().toISOString(), export_day: today(), export_count: used + 1 })
   try {
-    const csv = await exportServings(session, from, to)
-    writeSession(userId, session)
-    const counts = storeServings(db, userId, from, to, csv)
+    let counts = null
+    if (session.format !== 'daily') {
+      const csv = await exportCsv(session, from, to, 'servings')
+      writeSession(userId, session)
+      try {
+        counts = storeServings(db, userId, from, to, csv)
+      } catch (e) {
+        if (!(e instanceof CronometerError) || e.code !== 'no_nutrients') throw e
+        // This account's servings export has no nutrients. Remember that (until the
+        // next connect), so later syncs spend their one export on the daily totals.
+        session.format = 'daily'
+        writeSession(userId, session)
+        console.log(`[cronometer] servings export for ${userId} has no nutrient columns; switching to daily totals`)
+        if (used + 1 >= dailyExports()) {
+          throw new CronometerError('error', "Cronometer's food diary export has no calories for this account. HealthLog will sync daily totals instead, from the next sync tomorrow (today's exports are used).")
+        }
+        saveState(db, userId, { export_count: used + 2 })
+      }
+    }
+    if (!counts) {
+      const csv = await exportCsv(session, from, to, 'dailySummary')
+      writeSession(userId, session)
+      counts = storeDaily(db, userId, from, to, csv)
+    }
+    const format = session.format === 'daily' ? 'daily' : 'servings'
     saveState(db, userId, { status: 'connected', last_success_at: new Date().toISOString(), last_error: null, backoff_until: null })
-    console.log(`[cronometer] ${trigger} sync ok for ${userId}: ${counts.servings} servings in ${counts.meals} meals (${from}..${to})`)
-    return { ok: true, from, to, meals: counts.meals, servings: counts.servings }
+    console.log(`[cronometer] ${trigger} sync ok for ${userId}: ${counts.servings} ${format === 'daily' ? 'days' : 'servings'} in ${counts.meals} meals (${from}..${to})`)
+    return { ok: true, from, to, meals: counts.meals, servings: counts.servings, format }
   } catch (e) {
     if (!(e instanceof CronometerError)) throw e
     const kind = ['needs_login', 'rate_limited'].includes(e.code) ? e.code : 'error'
