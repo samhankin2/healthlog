@@ -6,6 +6,8 @@ import type {
   GarminStatus,
   CronometerStatus,
   CronometerSyncResult,
+  CorosStatus,
+  CorosSyncResult,
   GarminSyncResult,
   GarminImportResult,
   InsightsPayload,
@@ -311,6 +313,23 @@ export const api = {
 
   disconnectCronometer(deleteMeals: boolean, options?: ApiRequestOptions): Promise<SuccessResponse & { deletedMeals: number; cronometer: CronometerStatus }> {
     return request('/cronometer/disconnect', { method: 'POST', body: { deleteMeals } }, options)
+  },
+
+  getCoros(options?: ApiRequestOptions): Promise<SuccessResponse & { coros: CorosStatus }> {
+    return request('/coros', {}, options)
+  },
+
+  /** The password is used once on the server to log in; only the access token is kept. */
+  connectCoros(email: string, password: string, options?: ApiRequestOptions): Promise<SuccessResponse & { result: CorosSyncResult; coros: CorosStatus }> {
+    return request('/coros/connect', { method: 'POST', body: { email, password } }, { timeoutMs: 180_000, ...options })
+  },
+
+  syncCoros(options?: ApiRequestOptions): Promise<SuccessResponse & { result: CorosSyncResult; coros: CorosStatus }> {
+    return request('/coros/sync', { method: 'POST', body: {} }, { timeoutMs: 180_000, ...options })
+  },
+
+  disconnectCoros(deleteData: boolean, options?: ApiRequestOptions): Promise<SuccessResponse & { deleted: { days: number; activities: number }; coros: CorosStatus }> {
+    return request('/coros/disconnect', { method: 'POST', body: { deleteData } }, options)
   },
 
   /** A Garmin Connect data export, already unpacked + normalised in the browser. */

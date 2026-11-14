@@ -246,6 +246,34 @@ export interface CronometerSyncResult {
   message?: string
 }
 
+export type CorosState = 'never' | 'connected' | 'needs_login' | 'rate_limited' | 'error'
+
+export interface CorosStatus {
+  available: boolean
+  connected: boolean
+  /** The COROS account email, kept with the access token (never the password). */
+  email: string | null
+  status: CorosState
+  syncing: boolean
+  lastAttemptAt: string | null
+  lastSuccessAt: string | null
+  lastError: string | null
+  backoffUntil: string | null
+  syncHour: number
+  syncIntervalHours: number
+}
+
+export interface CorosSyncResult {
+  ok: boolean
+  from?: DayString
+  to?: DayString
+  days?: number
+  sleep?: number
+  activities?: number
+  error?: string
+  message?: string
+}
+
 export interface Activity {
   id: string
   source: string
