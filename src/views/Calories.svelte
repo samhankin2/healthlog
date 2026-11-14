@@ -261,7 +261,7 @@
     <section class="metric-card history-card" aria-labelledby="intake-history-title">
       <div class="metric-card-header chart-header">
         <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="activity" size={20} /></span><h2 class="metric-card-title" id="intake-history-title">Intake history</h2></div>
-        <span class="badge">{summary.loggedDays} of {summary.windowDays} days logged</span>
+        <span class="badge">{summary.loggedDays + summary.partialDays} of {summary.windowDays} days logged</span>
       </div>
       <div class="metric-card-content">
         <div class="range-wrap"><SegmentedControl options={RANGES} value={String(range)} ariaLabel="Calorie history range" onchange={changeRange} /></div>
@@ -279,14 +279,31 @@
     <section class="metrics-section" aria-labelledby="intake-metrics-title">
       <div class="section-heading"><h2 id="intake-metrics-title">Over {rangeLabel}</h2><span>Completed days only — today is excluded</span></div>
       {#if summary.loggedDays === 0}
-        <p class="quiet-empty">No completed days with meals in this range yet.</p>
+        <p class="quiet-empty">
+          {summary.partialDays > 0
+            ? `The ${summary.partialDays} logged ${summary.partialDays === 1 ? 'day' : 'days'} in this range look only partly logged, so there is no average yet.`
+            : 'No completed days with meals in this range yet.'}
+        </p>
       {:else}
         <div class="stat-grid">
-          <StatTile label="Average intake" value={fmtNumber(summary.avgKcal ?? 0, 0)} unit="kcal/day" sublabel="On days you logged" tone="accent" />
+          <StatTile
+            label="Average intake"
+            value={fmtNumber(summary.avgKcal ?? 0, 0)}
+            unit="kcal/day"
+            sublabel={summary.partialDays > 0 ? `On ${summary.loggedDays} complete days · ${summary.partialDays} partly logged left out` : 'On days you logged'}
+            tone="accent"
+          />
           {#if summary.avgVsTarget !== null}
             <StatTile label="Versus target" value={signedKcal(summary.avgVsTarget)} unit="kcal/day" sublabel={summary.avgVsTarget <= 0 ? 'Under target on average' : 'Over target on average'} />
           {/if}
-          <StatTile label="Days logged" value={summary.loggedDays} unit={`of ${summary.windowDays}`} sublabel={`${Math.round((summary.loggedDays / Math.max(1, summary.windowDays)) * 100)}% coverage`} />
+          <StatTile
+            label="Days logged"
+            value={summary.loggedDays + summary.partialDays}
+            unit={`of ${summary.windowDays}`}
+            sublabel={summary.partialDays > 0
+              ? `${summary.loggedDays} complete · ${summary.partialDays} look partial`
+              : `${Math.round((summary.loggedDays / Math.max(1, summary.windowDays)) * 100)}% coverage`}
+          />
           {#if target !== null}
             <StatTile label="On target" value={summary.onTargetDays} unit={summary.onTargetDays === 1 ? 'day' : 'days'} sublabel={`Within ±${ON_TARGET_TOLERANCE * 100}% · ${summary.overDays} over · ${summary.underDays} under`} />
           {/if}
@@ -344,10 +361,10 @@
                 {#each weeks as week (week.weekStart)}
                   <tr>
                     <th scope="row">{fmtShort(week.weekStart)}{week.weekStart === thisWeek ? ' · this week' : ''}</th>
-                    <td class="num">{fmtNumber(week.avgKcal ?? 0, 0)}</td>
-                    {#if target !== null}<td class="num" data-tone={week.avgVsTarget !== null && week.avgVsTarget > 0 ? 'over' : 'under'}>{signedKcal(week.avgVsTarget)}</td>{/if}
-                    <td class="num wide-only">{fmtNumber(week.avgProteinG ?? 0, 0)} g</td>
-                    <td class="num">{week.loggedDays}/7</td>
+                    <td class="num">{week.avgKcal === null ? '—' : fmtNumber(week.avgKcal, 0)}</td>
+                    {#if target !== null}<td class="num" data-tone={week.avgVsTarget !== null && week.avgVsTarget > 0 ? 'over' : 'under'}>{week.avgVsTarget === null ? '—' : signedKcal(week.avgVsTarget)}</td>{/if}
+                    <td class="num wide-only">{week.avgProteinG === null ? '—' : `${fmtNumber(week.avgProteinG, 0)} g`}</td>
+                    <td class="num">{week.loggedDays}/7{#if week.partialDays > 0}<span class="partial-note"> +{week.partialDays} partial</span>{/if}</td>
                   </tr>
                 {/each}
               </tbody>
@@ -363,6 +380,7 @@
   .calories-header { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-3); }
   .calories-header .button { flex: 0 0 auto; }
   .view--calories { display: flex; flex-direction: column; gap: var(--space-4); }
+  .partial-note { color: var(--color-text-muted); font-size: var(--text-xs); white-space: nowrap; }
   .retry { align-self: flex-start; }
   .loading-panel { min-height: 14rem; }
 

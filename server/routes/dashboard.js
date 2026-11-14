@@ -14,6 +14,8 @@ import {
   computeOverallStats,
   isISODate,
   mifflinStJeor,
+  PARTIAL_DAY_RULES,
+  partialDays,
   sumIntake,
   today,
 } from '../lib/metrics.js'
@@ -77,7 +79,11 @@ export function registerDashboardRoutes(router) {
       .map((m) => ({ kcal: m.kcal, proteinG: m.protein_g, carbsG: m.carbs_g, fatG: m.fat_g }))
     const intakeBlock = sumIntake(mealsToday)
 
-    const historyRows = intakeByDay(db, user.id, addDaysLocal(day, -(days - 1)), day)
+    // Partial-day detection compares each day with its neighbours, so read a
+    // margin before the range (and before the TDEE window, below).
+    const margin = PARTIAL_DAY_RULES.radiusDays
+    const historyRows = intakeByDay(db, user.id, addDaysLocal(day, -(days - 1) - margin), day)
+    const partial = partialDays(historyRows.map((row) => ({ day: row.day, kcal: Number(row.kcal) })), day)
     const historyByDay = new Map(historyRows.map((row) => [row.day, row]))
     const intakeHistory = []
     for (let i = 0; i < days; i++) {
@@ -89,13 +95,15 @@ export function registerDashboardRoutes(router) {
         proteinG: row ? r1(row.protein_g) : 0,
         carbsG: row ? r1(row.carbs_g) : 0,
         fatG: row ? r1(row.fat_g) : 0,
+        partial: partial.has(d),
       })
     }
 
     // Adaptive TDEE always looks at its own fixed window, whatever the chart range.
-    const tdeeRows = intakeByDay(db, user.id, addDaysLocal(day, -ADAPTIVE_TDEE_RULES.windowDays), addDaysLocal(day, -1))
+    const tdeeRows = intakeByDay(db, user.id, addDaysLocal(day, -ADAPTIVE_TDEE_RULES.windowDays - margin), addDaysLocal(day, -1))
+    const tdeePartial = partialDays(tdeeRows.map((row) => ({ day: row.day, kcal: Number(row.kcal) })), day)
     const adaptive = computeAdaptiveTdee(
-      tdeeRows.map((row) => ({ day: row.day, kcal: Number(row.kcal) })),
+      tdeeRows.map((row) => ({ day: row.day, kcal: Number(row.kcal), partial: tdeePartial.has(row.day) })),
       entries,
       day,
     )

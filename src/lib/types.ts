@@ -162,6 +162,8 @@ export interface Intake {
 
 export interface IntakeHistoryDay extends Nutrition {
   day: DayString
+  /** Logged, but far below the person's usual day: left out of averages (SPEC §6). */
+  partial?: boolean
 }
 
 export interface Metrics {
@@ -190,7 +192,10 @@ export interface AdaptiveTdee {
   windowStart: DayString
   windowEnd: DayString
   windowDays: number
+  /** Complete logged days used for the average (partial days excluded). */
   loggedDays: number
+  /** Logged days in the window left out as likely partial. Older servers leave it out. */
+  partialDays?: number
   weighIns: number
   confidence: 'high' | 'medium' | 'low' | null
   reason: string | null
@@ -527,7 +532,7 @@ export interface InsightsPayload {
   sleep: SleepNight[]
   metrics: FitnessMetric[]
   activities: InsightActivity[]
-  intake: { day: DayString; kcal: number; proteinG: number }[]
+  intake: { day: DayString; kcal: number; proteinG: number; partial?: boolean }[]
   weights: { day: DayString; weightKg: number }[]
   records: PersonalRecord[]
   meta: {
@@ -535,6 +540,8 @@ export interface InsightsPayload {
     thresholds?: Partial<Record<'lthr' | 'ftp' | 'ltPaceSPerKm', number>>
     lastImport?: { at: string; range: { from: DayString; to: DayString } | null; counts: Record<string, number> }
   }
+  /** Which watch wrote the data (any date). Older servers leave it out. */
+  sources?: { garmin: boolean; coros: boolean }
 }
 
 export interface GarminImportResult {

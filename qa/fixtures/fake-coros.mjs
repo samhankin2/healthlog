@@ -4,7 +4,8 @@
  * endpoint that approves at once (302 back with a code), the token endpoint
  * (authorization_code with PKCE S256, rotating refresh tokens), revocation, and
  * the MCP endpoint (streamable HTTP, SSE replies, Mcp-Session-Id) with text
- * tools shaped like COROS's documented examples.
+ * tools laid out like the real COROS replies, double JSON-encoded as COROS
+ * sends them.
  *
  *   const fake = await startFakeCoros({ ... })
  *   fake.base, fake.mcpUrl, fake.state, fake.close()
@@ -41,53 +42,86 @@ export async function startFakeCoros({ activities = [], sleep = [], hrv = [], da
     return out
   }
 
-  /** Tool name + arguments -> reply text, in the style of COROS's Tool Guide. */
+  /** The watch's offset: Melbourne in summer, +11:00 (COROS: timezone=44 quarter hours). */
+  const TZ_Q = 44
+  const epochOf = (day, hhmm) => Math.round(Date.parse(`${day}T${hhmm}:00+11:00`) / 1000)
+  const compact = (day) => day.replaceAll('-', '')
+  const dashed = (ymd) => `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6)}`
+
+  /**
+   * Tool name + arguments -> reply text, laid out as the real COROS MCP
+   * answered on 2026-11-14 (values changed). The server sends each text block
+   * JSON-encoded a second time; see the tools/call handler.
+   */
   function tool(name, args) {
     if (name === 'querySportRecords') {
       const hits = fake.activities.filter((x) => inRange(x.day, args.startDate, args.endDate)).slice(0, args.limit ?? 20)
-      const lines = [`Sport Records — ${args.startDate} to ${args.endDate} (${hits.length} records)`, '']
+      const lines = [`Sport Records — ${dashed(args.startDate)} to ${dashed(args.endDate)} (${hits.length} records)`, '========================', '']
       hits.forEach((x, i) => {
-        lines.push(`${i + 1}. ${x.name}(${x.sportType}) — ${x.day} ${x.start}`)
-        lines.push(`   Label ID: ${x.labelId} | Sport Type: ${x.sportType}`)
+        const start = epochOf(x.day, x.start)
+        const kcal = fake.details[x.labelId]?.kcal
+        lines.push(`${i + 1}. ${x.name} — ${x.day}`)
+        lines.push('   Location: Somewhere Run')
+        lines.push('   Start Coordinates: -37.800000, 145.000000')
+        lines.push(`   Time Window: startTimestamp=${start} | endTimestamp=${start + 1800}`)
         lines.push(`   Duration: ${x.duration} | Distance: ${x.distance}`)
-        lines.push(`   Average Pace: 5:00 /km`)
+        lines.push(`   Average Pace: 5:00 /km | Avg HR: ${fake.details[x.labelId]?.avgHr ?? 150} bpm${kcal ? ` | Calories: ${kcal} kcal` : ''}`)
+        lines.push(`   LabelId: ${x.labelId} | SportType: ${x.sportType}`)
+        lines.push('')
       })
-      return lines.join('\n')
+      return lines.join('\n').trim()
     }
     if (name === 'getActivityDetail') {
       const d = fake.details[args.labelId]
       if (!d) throw new Error('no such activity')
-      return [`Activity Details`, '', `Workout Time: ${d.workoutTime}`, `Calories: ${d.kcal} kcal`, `Average Heart Rate: ${d.avgHr} bpm`, `Max Heart Rate: ${d.maxHr} bpm`, `Elevation Gain: ${d.ascent} m`].join('\n')
+      return ['Activity Details', '', `Workout Time: ${d.workoutTime}`, `Calories: ${d.kcal} kcal`, `Average Heart Rate: ${d.avgHr} bpm`, `Max Heart Rate: ${d.maxHr} bpm`, `Elevation Gain: ${d.ascent} m`].join('\n')
     }
     if (name === 'querySleepOverview') {
-      const lines = ['Sleep Overview', '']
+      const lines = ['Sleep Overview', '========================', 'Note: each record below is dated by its wake-up day.', '']
       for (const s of fake.sleep.filter((x) => inRange(x.day, args.startDate, args.endDate))) {
-        lines.push(s.day, `Sleep Score: ${s.score}`, `Daily Sleep: ${s.main} (incl. naps)`, `Main Sleep (asleep): ${s.main}`, `Deep Sleep Ratio: ${s.deep}%`, `Light Sleep Ratio: ${s.light}%`, `REM Ratio: ${s.rem}%`, `Awake Time: ${s.awake}`, `Main Sleep Window: ${s.window}`, 'Naps Total: 0 min', '')
+        lines.push(s.day, `Sleep Score: ${s.score}`, `Daily Sleep: ${s.main} (incl. naps)`, `Main Sleep (asleep): ${s.main}`, `Main Sleep Period (incl. awake): ${s.main}`, 'Sleep metrics scope: daily',
+          `Deep Sleep Ratio: ${s.deep}%`, `Light Sleep Ratio: ${s.light}%`, `REM Ratio: ${s.rem}%`, 'Awake Ratio: 3%', `Awake Time: ${s.awake}`, 'Awake Count (>5 min): 0', `Main Sleep Window: ${s.window}`, 'Naps Total: 0 min', '')
       }
-      return lines.join('\n')
+      return lines.join('\n').trim()
     }
     if (name === 'querySleepHrv') {
-      const span = (Date.parse(`${args.endDate.slice(0, 4)}-${args.endDate.slice(4, 6)}-${args.endDate.slice(6)}`) - Date.parse(`${args.startDate.slice(0, 4)}-${args.startDate.slice(4, 6)}-${args.startDate.slice(6)}`)) / 86400000 + 1
+      const span = (Date.parse(dashed(args.endDate)) - Date.parse(dashed(args.startDate))) / 86400000 + 1
       if (span > 7) throw new Error('HRV queries cover at most 7 days')
-      const lines = ['Sleep HRV', '']
-      for (const h of fake.hrv.filter((x) => inRange(x.day, args.startDate, args.endDate))) lines.push(h.day, `Average HRV: ${h.ms} ms`, 'Normal Range: 50-70 ms', `Evaluation: ${h.eval}`, '')
-      return lines.join('\n')
+      const hits = fake.hrv.filter((x) => inRange(x.day, args.startDate, args.endDate))
+      const lines = [`Sleep HRV — ${dashed(args.startDate)} to ${dashed(args.endDate)}`, '========================', 'Note: dates are wake-up days (each value comes from the night that ended that morning).', '', 'HRV Assessment — Last 7 days', '========================', '']
+      for (const h of hits) lines.push(`${h.day}:`, `  HRV Avg: ${h.ms} ms — ${h.eval}`, '  Normal Range: 50 - 70 ms', '  Baseline: 60 ms')
+      lines.push('', 'Sleep HRV Time Series — Last 7 days', '========================', '')
+      for (const h of hits) {
+        const t = epochOf(h.day, '02:00')
+        lines.push(`${h.day}:`, `  timestamp=${t}, timezone=${TZ_Q}, hrv=${h.ms + 10} ms, status=4, confidence=87500`, `  timestamp=${t + 900}, timezone=${TZ_Q}, hrv=${h.ms - 10} ms, status=4, confidence=85000`)
+      }
+      return lines.join('\n').trim()
     }
     if (name === 'queryDailyHealthData') {
       if ((args.days ?? 7) > 30) throw new Error('days must be at most 30')
       const days = new Set(recentDays(args.days ?? 7))
-      const rows = fake.daily.filter((x) => days.has(x.day))
-      return ['Daily Health Overview', '', '| Date | Steps | Calories | Stress |', '|---|---|---|---|', ...rows.map((x) => `| ${x.day} | ${x.steps.toLocaleString('en-US')} | ${x.kcal.toLocaleString('en-US')} kcal | ${x.stress} |`)].join('\n')
+      const rows = fake.daily.filter((x) => days.has(x.day)).sort((a, b) => a.day.localeCompare(b.day))
+      const lines = [`Daily Health Data — Last ${args.days ?? 7} days | Resting HR: 51 bpm | HRV Baseline: 42 ms`, 'Note: sleep entries are dated by their wake-up day.', '']
+      for (const x of rows) {
+        lines.push(`--- ${compact(x.day)} ---`, `Steps: ${x.steps.toLocaleString('en-US')} | Calories: ${x.kcal.toLocaleString('en-US')} kcal | Exercise: ${x.exercise ?? 0} min`, `Stress: Avg ${x.stress}`,
+          'Sleep Summary:', '  Total: 7h 41min | Deep: 1h 58min | Light: 3h 38min | REM: 1h 53min | Awake: 12 min', '  Sleep HR: Avg 52 bpm | Min 45 bpm | Max 67 bpm', '')
+      }
+      return lines.join('\n').trim()
     }
     if (name === 'queryRestingHeartRate') {
       const days = new Set(recentDays(args.days ?? 7))
-      return [`Resting Heart Rate (last ${args.days ?? 7} days)`, ...fake.rhr.filter((x) => days.has(x.day)).map((x) => `${x.day}: ${x.bpm} bpm`)].join('\n')
+      return [`Resting Heart Rate — Last ${args.days ?? 7} days`, '========================', '', ...fake.rhr.filter((x) => days.has(x.day)).map((x) => `${x.day}: ${x.bpm} bpm`)].join('\n')
     }
     if (name === 'queryStressLevel') {
       const days = new Set(recentDays(args.days ?? 7))
-      return ['Stress Level', ...fake.stress.filter((x) => days.has(x.day)).map((x) => `${x.day} — Average Stress: ${x.avg}`)].join('\n')
+      const lines = [`Stress Level — Last ${args.days ?? 7} days`, '========================', '']
+      for (const x of fake.stress.filter((y) => days.has(y.day))) lines.push(`${x.day}:`, `Average Stress: ${x.avg}`, 'Relaxed: No data', 'Low: No data', 'Medium: No data', 'High: No data', '')
+      return lines.join('\n').trim()
     }
-    if (name === 'queryFitnessAssessmentOverview') return fake.vo2max ? `Fitness Assessment\nVO2max: ${fake.vo2max}\nRunning Level: 72.4` : 'No assessment available.'
+    if (name === 'queryFitnessAssessmentOverview') {
+      if (!fake.vo2max) return 'No assessment available.'
+      return ['Fitness Assessment Overview', '========================', '', `VO2max: ${fake.vo2max}`, 'Running Level: 75', 'Threshold Pace: 4:40 /km', '5 km Prediction: 21:30', '10 km Prediction: 44:50', 'Half Marathon Prediction: 1:39:00', 'Marathon Prediction: 3:28:15'].join('\n')
+    }
     throw new Error(`unknown tool ${name}`)
   }
 
@@ -181,7 +215,8 @@ export async function startFakeCoros({ activities = [], sleep = [], hrv = [], da
           fake.toolCalls.push({ name, args })
           if (fake.failTool === name) return sse({ content: [{ type: 'text', text: 'Service temporarily unavailable' }], isError: true })
           try {
-            return sse({ content: [{ type: 'text', text: tool(name, args ?? {}) }] })
+            // As the real server does: the text block is itself a JSON string literal.
+            return sse({ content: [{ type: 'text', text: JSON.stringify(tool(name, args ?? {})) }] })
           } catch (e) {
             return sse({ content: [{ type: 'text', text: e.message }], isError: true })
           }

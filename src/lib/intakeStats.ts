@@ -6,6 +6,9 @@
  * Conventions:
  * - A day is "logged" when it has any calories. Zero-filled gaps are not
  *   counted as 0-kcal days — that would drag every average down.
+ * - A logged day the server flags `partial` (far below the person's usual
+ *   day, SPEC §6) is left out of every average and target count too: half a
+ *   day's food is not a low-intake day. Streaks still count it as logged.
  * - Today is still in progress, so the summary statistics take only the
  *   completed days. The chart still shows today.
  */
@@ -20,7 +23,10 @@ export const ON_TARGET_TOLERANCE = 0.1
 export interface IntakeSummary {
   /** Completed days in the window, logged or not. */
   windowDays: number
+  /** Complete logged days: what the averages use. */
   loggedDays: number
+  /** Logged days left out as likely partial. */
+  partialDays: number
   avgKcal: number | null
   avgProteinG: number | null
   avgCarbsG: number | null
@@ -45,6 +51,7 @@ export interface WeekRollup {
   /** Monday of the week. */
   weekStart: DayString
   loggedDays: number
+  partialDays: number
   avgKcal: number | null
   avgProteinG: number | null
   totalKcal: number
@@ -52,6 +59,8 @@ export interface WeekRollup {
 }
 
 const isLogged = (day: IntakeHistoryDay): boolean => day.kcal > 0
+/** Logged and not flagged partial: the days averages are taken over. */
+export const isComplete = (day: IntakeHistoryDay): boolean => day.kcal > 0 && !day.partial
 
 function mean(values: number[]): number | null {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length
@@ -83,14 +92,14 @@ export function completedDays(days: IntakeHistoryDay[], todayDay: DayString): In
 export type IntakeMetric = 'kcal' | 'proteinG' | 'carbsG' | 'fatG'
 
 /**
- * Trailing average of `metric` over the logged days in the last `window`
+ * Trailing average of `metric` over the complete logged days in the last `window`
  * calendar days, per point. Null where the window holds no logged day.
  * "Logged" is decided by calories, so a day with meals but 0 g fat still
  * counts as a 0 g fat day.
  */
 export function rollingAverage(days: IntakeHistoryDay[], window = 7, metric: IntakeMetric = 'kcal'): (number | null)[] {
   return days.map((_, index) => {
-    const slice = days.slice(Math.max(0, index - window + 1), index + 1).filter(isLogged)
+    const slice = days.slice(Math.max(0, index - window + 1), index + 1).filter(isComplete)
     const avg = mean(slice.map((day) => day[metric]))
     return avg === null ? null : Math.round(avg * 10) / 10
   })
@@ -120,7 +129,8 @@ function streaks(days: IntakeHistoryDay[], todayDay: DayString): { current: numb
  */
 export function summarize(days: IntakeHistoryDay[], target: number | null, todayDay: DayString): IntakeSummary {
   const done = completedDays(days, todayDay)
-  const logged = done.filter(isLogged)
+  const logged = done.filter(isComplete)
+  const partialCount = done.filter((day) => isLogged(day) && day.partial).length
   const avgKcal = mean(logged.map((day) => day.kcal))
   const hasTarget = target !== null && target > 0
 
@@ -144,6 +154,7 @@ export function summarize(days: IntakeHistoryDay[], target: number | null, today
   return {
     windowDays: done.length,
     loggedDays: logged.length,
+    partialDays: partialCount,
     avgKcal,
     avgProteinG: mean(logged.map((day) => day.proteinG)),
     avgCarbsG: mean(logged.map((day) => day.carbsG)),
@@ -171,17 +182,18 @@ export function weeklyRollups(days: IntakeHistoryDay[], target: number | null): 
   }
   const hasTarget = target !== null && target > 0
   return Array.from(byWeek, ([weekStart, members]) => {
-    const logged = members.filter(isLogged)
+    const logged = members.filter(isComplete)
     const avgKcal = mean(logged.map((day) => day.kcal))
     return {
       weekStart,
       loggedDays: logged.length,
+      partialDays: members.filter((day) => isLogged(day) && day.partial).length,
       avgKcal,
       avgProteinG: mean(logged.map((day) => day.proteinG)),
       totalKcal: logged.reduce((sum, day) => sum + day.kcal, 0),
       avgVsTarget: hasTarget && avgKcal !== null ? avgKcal - target : null,
     }
   })
-    .filter((week) => week.loggedDays > 0)
+    .filter((week) => week.loggedDays > 0 || week.partialDays > 0)
     .sort((a, b) => b.weekStart.localeCompare(a.weekStart))
 }

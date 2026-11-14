@@ -39,7 +39,7 @@
         <strong>{fmtKcal(tdee.kcal)}</strong><span>/ day</span>
       </div>
       <p class="tdee-basis">
-        Based on {tdee.loggedDays} of {tdee.windowDays} days logged at {fmtKcal(tdee.avgIntakeKcal ?? 0)} on average,
+        Based on {tdee.loggedDays} of {tdee.windowDays} days logged{tdee.partialDays ? ` (${tdee.partialDays} partly logged left out)` : ''} at {fmtKcal(tdee.avgIntakeKcal ?? 0)} on average,
         while your weight trend was {tdee.weightSlopeKgPerWeek !== null && tdee.weightSlopeKgPerWeek > 0 ? '+' : ''}{fmtNumber(tdee.weightSlopeKgPerWeek ?? 0, 2)} kg/wk.
       </p>
 

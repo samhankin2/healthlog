@@ -3,7 +3,7 @@
  * Unit test for computeAdaptiveTdee (server/lib/metrics.js). No server, no network.
  *   node qa/tdee-test.mjs
  */
-import { addDays, computeAdaptiveTdee } from '../server/lib/metrics.js'
+import { addDays, computeAdaptiveTdee, partialDays } from '../server/lib/metrics.js'
 
 let pass = 0
 let fail = 0
@@ -47,6 +47,38 @@ t = computeAdaptiveTdee(intake, weights.slice(20), END)
 ok('weigh-ins bunched together → null', t.kcal === null && /spread/.test(t.reason ?? ''), t.reason)
 t = computeAdaptiveTdee([], [], END)
 ok('empty → null with nulls', t.kcal === null && t.avgIntakeKcal === null && t.loggedDays === 0)
+
+/* ---------- partial days ---------- */
+{
+  // A real-looking inconsistent log: full days ~1900–2300, and some days where
+  // only breakfast (~350) or breakfast + lunch (~900) got logged.
+  const full = [2100, 1950, 2250, 2050, 1900, 2300, 2000]
+  const log = days(28, (day, i) => ({ day, kcal: i % 4 === 1 ? 350 : i % 7 === 3 ? 900 : full[i % 7] }))
+  const flagged = partialDays(log, END)
+  const expected = log.filter((d) => d.kcal < 1000).map((d) => d.day)
+  ok('partial: every breakfast-only and half day flagged', expected.every((d) => flagged.has(d)), `${[...flagged].length} flagged of ${expected.length}`)
+  ok('partial: no full day flagged', log.filter((d) => d.kcal >= 1900).every((d) => !flagged.has(d.day)))
+
+  // The upper-percentile reference holds even when partial days are the majority.
+  const mostlyPartial = days(28, (day, i) => ({ day, kcal: i % 3 === 0 ? 2200 : 500 }))
+  const mp = partialDays(mostlyPartial, END)
+  ok('partial: still detected when most days are partial', mostlyPartial.filter((d) => d.kcal === 500).every((d) => mp.has(d.day)) && mostlyPartial.filter((d) => d.kcal === 2200).every((d) => !mp.has(d.day)))
+
+  // A naturally varying eater is left alone: 1500–2400 is within range.
+  const varied = days(28, (day, i) => ({ day, kcal: [1500, 2400, 1800, 2100, 1650, 2300, 1950][i % 7] }))
+  ok('partial: normal day-to-day variation is not flagged', partialDays(varied, END).size === 0, [...partialDays(varied, END)].join(','))
+
+  // Too little history to judge, and today, are never flagged.
+  ok('partial: under 7 neighbours never flags', partialDays(days(5, (day, i) => ({ day, kcal: i === 2 ? 300 : 2000 })), END).size === 0)
+  ok('partial: today is in progress, never flagged', !partialDays([...log, { day: END, kcal: 200 }], END).has(END))
+
+  // TDEE leaves flagged days out: same loss, same true intake → same estimate.
+  const marked = log.map((d) => ({ ...d, partial: flagged.has(d.day) }))
+  t = computeAdaptiveTdee(marked, weights, END)
+  const fullAvg = log.filter((d) => !flagged.has(d.day)).reduce((a, d) => a + d.kcal, 0) / log.filter((d) => !flagged.has(d.day)).length
+  near('partial: TDEE averages complete days only', t.avgIntakeKcal, fullAvg, 1)
+  ok('partial: TDEE reports how many it left out', t.partialDays === flagged.size && t.loggedDays === 28 - flagged.size, `${t.loggedDays} + ${t.partialDays}`)
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
