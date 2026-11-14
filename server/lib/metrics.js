@@ -394,6 +394,52 @@ export function roundOrNull(v, digits = 2) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Partial days — logged, but clearly not everything that was eaten    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A logged day counts as partial when its kcal is under `fraction` of the
+ * person's typical full day: the `percentile` of their logged days within
+ * ±`radiusDays` (the day itself left out). The upper percentile rather than the
+ * median, so that a run of partial days cannot drag the reference down with it.
+ * Fewer than `minReferenceDays` neighbours: not enough to judge, never partial.
+ */
+export const PARTIAL_DAY_RULES = { fraction: 0.6, percentile: 0.75, radiusDays: 14, minReferenceDays: 7 }
+
+function percentileOf(sorted, p) {
+  if (!sorted.length) return null
+  const i = (sorted.length - 1) * p
+  const lo = Math.floor(i)
+  const hi = Math.ceil(i)
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo)
+}
+
+/**
+ * The days in `intakeDays` ([{ day, kcal }]) that look partially logged. Days
+ * on or after `todayDay` are still in progress and never flagged. Pass rows
+ * reaching `radiusDays` beyond the range you care about, so the days at its
+ * edges have neighbours to compare with. Pure.
+ * @returns {Set<string>}
+ */
+export function partialDays(intakeDays, todayDay = null, rules = PARTIAL_DAY_RULES) {
+  const { fraction, percentile, radiusDays, minReferenceDays } = rules
+  const logged = intakeDays.filter((d) => Number(d.kcal) > 0).sort((a, b) => (a.day < b.day ? -1 : 1))
+  const out = new Set()
+  for (const d of logged) {
+    if (todayDay && d.day >= todayDay) continue
+    const lo = addDays(d.day, -radiusDays)
+    const hi = addDays(d.day, radiusDays)
+    const ref = logged
+      .filter((o) => o.day !== d.day && o.day >= lo && o.day <= hi && !(todayDay && o.day >= todayDay))
+      .map((o) => Number(o.kcal))
+      .sort((a, b) => a - b)
+    if (ref.length < minReferenceDays) continue
+    if (Number(d.kcal) < fraction * percentileOf(ref, percentile)) out.add(d.day)
+  }
+  return out
+}
+
+/* ------------------------------------------------------------------ */
 /* Adaptive TDEE — an observed maintenance estimate, shown alongside   */
 /* (never replacing) the profile's kcal target and activity level.     */
 /* ------------------------------------------------------------------ */
@@ -408,7 +454,8 @@ export const ADAPTIVE_TDEE_RULES = { windowDays: 28, minLoggedDays: 14, minWeigh
  *
  * Window: the `windowDays` complete days ending the day before `endDay` (today
  * is still being logged). Intake is averaged over days with at least one meal
- * — unlogged days are treated as missing, not as zero. Weight change is the
+ * — unlogged days are treated as missing, not as zero, and days flagged
+ * `partial` (see partialDays) are left out too. Weight change is the
  * least-squares slope through every weigh-in in the window, which is far less
  * noisy than first-vs-last.
  *
@@ -422,7 +469,9 @@ export function computeAdaptiveTdee(intakeDays, entries, endDay, rules = ADAPTIV
   const to = addDays(endDay, -1)
   const from = addDays(to, -(windowDays - 1))
 
-  const logged = intakeDays.filter((d) => d.day >= from && d.day <= to && Number(d.kcal) > 0)
+  const inWindow = intakeDays.filter((d) => d.day >= from && d.day <= to && Number(d.kcal) > 0)
+  // A partially logged day would read as a low-intake day and pull the estimate down.
+  const logged = inWindow.filter((d) => !d.partial)
   const weighIns = sortEntries(entries).filter((e) => e.date >= from && e.date <= to)
   const spanDays = weighIns.length > 1 ? daysBetween(weighIns[0].date, weighIns[weighIns.length - 1].date) : 0
 
@@ -434,6 +483,7 @@ export function computeAdaptiveTdee(intakeDays, entries, endDay, rules = ADAPTIV
     windowEnd: to,
     windowDays,
     loggedDays: logged.length,
+    partialDays: inWindow.length - logged.length,
     weighIns: weighIns.length,
     confidence: null,
     reason: null,

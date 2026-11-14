@@ -32,6 +32,17 @@ const ANY_DAY = '(?:\\d{4}-\\d{2}-\\d{2}|\\d{4}/\\d{2}/\\d{2}|20\\d{6})'
 /** "2026-09-19 to 2026-10-18", "20260919 – 20261018": a heading over a range of days. */
 const RANGE = new RegExp(`${ANY_DAY}\\s*(?:to|until|–|—|-|~)\\s*${ANY_DAY}`)
 
+/**
+ * Does a reply carry dated records, beyond the dates of its "A to B" range
+ * heading? Used to flag replies that parsed to nothing although they had data.
+ */
+export function hasDatedRecords(text) {
+  const t = String(text ?? '')
+  const dates = t.match(new RegExp(ANY_DAY, 'g'))?.length ?? 0
+  const ranges = t.match(new RegExp(RANGE.source, 'g'))?.length ?? 0
+  return dates - 2 * ranges > 0
+}
+
 /** The first calendar date in a string, as YYYY-MM-DD. */
 export function findDay(s) {
   const t = String(s ?? '')
@@ -123,6 +134,9 @@ export function normLabel(s) {
 }
 
 const FIELD = /^\s*[-*•]?\s*([A-Za-z][A-Za-z0-9 ()%/₂.'&+-]{0,60}?)\s*[:：]\s*(.+?)\s*$/
+/** "endTimestamp=1794649389": the second half of "Time Window: startTimestamp=… | endTimestamp=…". */
+const KV = /^\s*([A-Za-z][A-Za-z0-9_]{0,40})\s*=\s*(\S.*?)\s*$/
+const asField = (part) => part.match(FIELD) ?? part.match(KV)
 
 /**
  * Cut a reply into blocks: [{ title, day, fields: [[label, value], ...] }].
@@ -163,7 +177,7 @@ export function blocks(text) {
       continue
     }
     const parts = line.split(/\s+\|\s+/)
-    const asFields = parts.map((p) => p.match(FIELD)).filter(Boolean)
+    const asFields = parts.map(asField).filter(Boolean)
     const isField = asFields.length === parts.length && asFields.length > 0
     const day = findDay(line)
     // "Sport Records — 2026-09-19 to 2026-10-18": a heading over a range, not a record.
@@ -270,8 +284,45 @@ function typeFrom(code, name) {
   return 'other'
 }
 
-/** querySportRecords -> [{ externalId, labelId, sportType, startLocal, name, type, durationS, distanceM, ... }]. */
-export function parseSportRecords(text) {
+/** "startTimestamp=1794647390" anywhere in a block (label or value) -> epoch seconds. */
+function epochField(block, key) {
+  const re = new RegExp(`${key}\\s*[=:]\\s*(\\d{9,13})`, 'i')
+  for (const [label, value] of block.fields) {
+    const m = `${label}=${value}`.match(re)
+    if (m) return m[1].length > 10 ? Math.floor(Number(m[1]) / 1000) : Number(m[1])
+  }
+  return null
+}
+
+/** Epoch seconds + offset (minutes east of UTC) -> "YYYY-MM-DDTHH:MM:SS" on the watch's clock. */
+export function epochToLocal(epochS, offsetMin) {
+  return new Date((epochS + offsetMin * 60) * 1000).toISOString().slice(0, 19)
+}
+
+/**
+ * The watch's UTC offset in minutes, from the `timezone=<quarter hours>` that
+ * querySleepHrv's time series carries (44 -> +11:00). The most common value
+ * wins; null when the reply has none.
+ */
+export function parseTimezone(text) {
+  const counts = new Map()
+  for (const m of String(text ?? '').matchAll(/\btimezone\s*[=:]\s*(-?\d{1,3})\b/gi)) {
+    const q = Number(m[1])
+    if (q >= -48 && q <= 56) counts.set(q, (counts.get(q) ?? 0) + 1)
+  }
+  if (!counts.size) return null
+  const [q] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+  return q * 15
+}
+
+/**
+ * querySportRecords -> [{ externalId, labelId, sportType, startLocal, startEpoch, name, type, durationS, distanceM, ... }].
+ * COROS gives the start as an epoch (`startTimestamp=`) and the record's local
+ * date. With `tzOffsetMin` (the watch's offset, see parseTimezone) the epoch
+ * becomes local time, kept only when it lands on the record's date; otherwise
+ * the start is the date at 00:00.
+ */
+export function parseSportRecords(text, { tzOffsetMin = null } = {}) {
   const out = []
   for (const b of blocks(text)) {
     if (!b.day || !b.fields.length) continue
@@ -281,7 +332,14 @@ export function parseSportRecords(text) {
     const labelId = pick(b, /^(label ?id|activity ?id|id|record ?id)$/)
     const startRaw = pick(b, /^(start|start time|start local|started|time)$/)
     const startTs = [startRaw, b.title].map((s) => String(s ?? '').match(/(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/)).find(Boolean)
-    const startLocal = startTs ? `${startTs[1]}T${startTs[2].padStart(2, '0')}:${startTs[3]}:${startTs[4] ?? '00'}` : `${b.day}T00:00:00`
+    const startEpoch = epochField(b, 'start ?timestamp')
+    const endEpoch = epochField(b, 'end ?timestamp')
+    const fromEpoch = startEpoch !== null && tzOffsetMin !== null ? epochToLocal(startEpoch, tzOffsetMin) : null
+    const startLocal = startTs
+      ? `${startTs[1]}T${startTs[2].padStart(2, '0')}:${startTs[3]}:${startTs[4] ?? '00'}`
+      : fromEpoch && fromEpoch.slice(0, 10) === b.day
+        ? fromEpoch
+        : `${b.day}T00:00:00`
     const name =
       String(pick(b, /^(name|title|activity name)$/) ?? '')
         .trim() ||
@@ -291,12 +349,13 @@ export function parseSportRecords(text) {
         .replace(/\s*\(\d{2,6}\)\s*/, '')
         .trim() ||
       null
-    const durationS = duration(pick(b, /^(duration|total time|workout time|elapsed time|time)$/))
+    const durationS = duration(pick(b, /^(duration|total time|workout time|elapsed time|time)$/)) ?? (startEpoch !== null && endEpoch > startEpoch ? endEpoch - startEpoch : null)
     const distanceM = distance(pick(b, /^distance$/))
     const row = {
       labelId: labelId !== undefined && String(labelId).trim() ? String(labelId).trim() : null,
       sportType,
       startLocal,
+      startEpoch,
       name: name && name.toLowerCase() !== 'sport' ? name : null,
       type: typeFrom(sportType, name),
       durationS,
@@ -374,9 +433,11 @@ export function parseHrv(text) {
     if (!b.day) continue
     const v = pick(b, /^(avg|average|daily|nightly|sleep)\b.*hrv|^hrv( avg| average)?$|^value$/, /range|base|baseline|normal|sd|interval/)
     const hrv = number(v)
-    const status = pick(b, /evaluation|assessment|status/)
+    // "HRV Avg: 65 ms — Normal": the verdict rides on the value line.
+    const inline = String(v ?? '').match(/\d\s*(?:ms)?\s*[—–-]\s*([A-Za-z][A-Za-z ]{1,30})$/)
+    const status = pick(b, /evaluation|assessment|status/) ?? inline?.[1]
     if (hrv === null && status === undefined) continue
-    out.push({ day: b.day, hrvNight: hrv, hrvStatus: status !== undefined ? String(status).slice(0, 32) : null })
+    out.push({ day: b.day, hrvNight: hrv, hrvStatus: status !== undefined ? String(status).trim().slice(0, 32) : null })
   }
   return out
 }
@@ -395,12 +456,11 @@ export function parseDailyHealth(text) {
       bmrKcal: number(pick(b, /(rest|resting|basal|bmr).*(calorie|kcal|energy)/)),
       stressAvg: number(pick(b, /stress/, /max|high|low|time|duration/)),
       restingHr: number(pick(b, /resting (heart rate|hr)|^rhr$/)),
+      intensityMinutes: number(pick(b, /^(exercise|exercise time|exercise minutes|active minutes)$/)),
     }
-    // A bare "Calories" line: COROS's daily figure. Large values are a whole-day total.
-    if (plainKcal !== null && row.activeKcal === null && row.totalKcal === null) {
-      if (plainKcal >= 1000) row.totalKcal = plainKcal
-      else row.activeKcal = plainKcal
-    }
+    // A bare "Calories" line is COROS's active calories (a rest day with 11k
+    // steps reads ~475, a 54-minute run day ~995), never the whole-day burn.
+    if (plainKcal !== null && row.activeKcal === null) row.activeKcal = plainKcal
     if (Object.entries(row).some(([k, v]) => k !== 'day' && v !== null)) out.push(row)
   }
   return out
@@ -417,8 +477,33 @@ export function parsePerDay(text, include, exclude = null) {
   return out
 }
 
-/** queryFitnessAssessmentOverview -> { vo2max }. */
+/** "5:23 /km" -> 323 seconds per km; "8:40 /mi" -> per km. */
+function pacePerKm(s) {
+  const t = String(s ?? '')
+  const m = t.match(/(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  const sec = Number(m[1]) * 60 + Number(m[2])
+  return /\/\s*mi/i.test(t) ? Math.round(sec / 1.609344) : sec
+}
+
+/**
+ * queryFitnessAssessmentOverview -> { vo2max, race5kS, race10kS, raceHalfS,
+ * raceMarathonS, ltPaceSPerKm }. Race predictions are clock times ("25:55",
+ * "2:03:07"); the threshold pace is per km.
+ */
 export function parseFitness(text) {
   const b = { title: '', day: null, fields: blocks(text).flatMap((x) => x.fields) }
-  return { vo2max: number(pick(b, /vo2 ?max/)) }
+  // "5 km Prediction: 25:55" starts with a digit, so it is not a field: read the line.
+  const race = (km) => {
+    const m = String(text ?? '').match(new RegExp(`(?:^|\\n)\\s*[-*•]?\\s*${km}\\s*k(?:m)?\\b[^:\\n]*predict[^:\\n]*[:：]\\s*([^\\n]+)`, 'i'))
+    return m ? duration(m[1]) : null
+  }
+  return {
+    vo2max: number(pick(b, /vo2 ?max/)),
+    race5kS: race(5),
+    race10kS: race(10),
+    raceHalfS: duration(pick(b, /^half marathon\b.*predict/)),
+    raceMarathonS: duration(pick(b, /^marathon\b.*predict/)),
+    ltPaceSPerKm: pacePerKm(pick(b, /threshold pace|lactate threshold pace/)),
+  }
 }

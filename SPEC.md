@@ -495,7 +495,8 @@ POST /api/garmin/import { range?, days?, sleep?, metrics?, activities?, records?
 GET  /api/insights?from&to   (default: the last 365 days)
      -> 200 { ok:true, from, to, coverage:{ first, last }, days:[...daily_activity + daily_wellness],
               sleep:[...], metrics:[...], activities:[...with insight columns], intake:[{ day, kcal, proteinG }],
-              weights:[{ day, weightKg }], records:[...], meta:{ hrZones?, thresholds?, lastImport? } }
+              weights:[{ day, weightKg }], records:[...], meta:{ hrZones?, thresholds?, lastImport? },
+              sources:{ garmin, coros } }   which watch wrote the data (any date)
 ```
 
 - **Two sources, one store.** `server/lib/garminStore.js` is the only writer of
@@ -675,30 +676,47 @@ Disconnect revokes the token at COROS (best effort).
 + `getActivityDetail`; `querySleepOverview` (31-day chunks); `querySleepHrv`
 (7-day chunks); `queryDailyHealthData`, `queryRestingHeartRate`,
 `queryStressLevel` (recent days only: the span is asked for, and a week if
-COROS refuses); `queryFitnessAssessmentOverview` (current VO₂ max, stored on
-the last day). One tool failing (other than auth or rate limiting) does not
+COROS refuses); `queryFitnessAssessmentOverview` (current VO₂ max and race
+predictions, stored on the last day; threshold pace into `thresholds.ltPaceSPerKm`,
+merged with any Garmin thresholds). One tool failing (other than auth or rate limiting) does not
 fail the sync: the rest is stored and the skipped tools are listed in
 `warnings` and `lastError`.
 
-The tools answer in human-readable text, not a schema.
+The tools answer in human-readable text, not a schema, and COROS JSON-encodes
+each text block a second time (the text is a JSON string literal with `\n`
+escapes); `corosMcp.js` decodes it once before anything parses it.
 `server/lib/corosParse.js` cuts a reply into blocks (one per date or numbered
 record), reads `Label: value` fields (also `A | B` lines, markdown tables and
 JSON) and finds fields by keyword; unrecognised text is dropped, never guessed
 into a column. `node server/cli.js coros dump --email <e>` (or
-`scripts/hl coros-dump <e>`) prints the raw replies for tuning. Everything is
+`scripts/hl coros-dump <e>`) prints the raw replies for tuning. Every sync logs
+each tool call (arguments, size, a 300-character preview) to the journal, logs
+an error when a reply with dated records parsed to nothing, and keeps the full
+replies of the latest sync in `$DATA_DIR/coros/<userId>/last-sync.txt` (0600,
+removed on disconnect; `cli.js coros last --email <e>` / `scripts/hl coros-last <e>`).
+Everything is
 written by `storeGarmin(..., { source: 'coros' })`, so the checks and
 `COALESCE` rules of §6 "Garmin insights" apply:
 - `activities` (`source = 'coros'`): `external_id` = the label id (or
-  start + sport + duration when the list has none); start, duration, distance,
+  start + sport + duration when the list has none); start (the list gives a
+  UTC `startTimestamp`; it becomes local time with the watch's offset from
+  `querySleepHrv`'s `timezone=` quarter hours, kept only when it lands on the
+  record's date, else the date at 00:00), duration, distance,
   moving time, kcal, average / max HR, elevation gain, training load; speed =
   distance / time. Sport codes map to the Garmin type keys (`402` →
   `strength_training`), then the name decides, else `other`.
 - `daily_activity` (`source = 'coros'`): steps, calories (active / total /
-  resting when labelled; a bare "Calories" ≥ 1000 counts as the day's total),
-  resting HR, main sleep seconds. `daily_wellness`: `hrv_night`, `hrv_status`,
-  `stress_avg`. `sleep_nights` (the wake-up date, as COROS dates them): window
-  start / end, deep / light / REM from their share of main sleep, awake time,
-  score. `fitness_metrics`: `vo2max`.
+  resting when labelled; a bare "Calories" is COROS's active calories),
+  exercise minutes (`intensity_minutes`), resting HR, main sleep seconds.
+  `daily_wellness`: `hrv_night`, `hrv_status` (also the verdict after
+  "HRV Avg: 65 ms —"), `stress_avg`. `sleep_nights` (the wake-up date, as COROS
+  dates them): window start / end, deep / light / REM from their share of main
+  sleep, awake time, score. `fitness_metrics`: `vo2max`, `race_5k_s`,
+  `race_10k_s`, `race_half_s`, `race_marathon_s`.
+- The Insights tab follows `sources`: COROS-only data shows "COROS insights",
+  an overnight HRV chart in place of Body Battery, no empty heart-rate-zone
+  card and no Garmin export panel; a connected COROS with no data yet shows a
+  waiting card instead of the Garmin import.
 - Days are keyed by date only, so a day with both Garmin and COROS data holds
   one merged row.
 - Disconnect with `deleteData` removes the `coros` activities, the `coros`

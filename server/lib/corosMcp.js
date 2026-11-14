@@ -245,6 +245,24 @@ export async function revoke(meta, client, token) {
 /* ------------------------------------------------------------------ */
 
 /** Pull the JSON-RPC message with `id` out of an SSE body. Exported for tests. */
+/**
+ * COROS sends each text block JSON-encoded a second time: the text is a JSON
+ * string literal ("\"Sport Records ...\\n1. Outdoor Run ...\""), so its line
+ * breaks arrive as the two characters \n. Decode it once; anything else is
+ * returned as it came.
+ */
+export function unwrapText(text) {
+  const t = String(text ?? '')
+  const s = t.trim()
+  if (s.length < 2 || !s.startsWith('"') || !s.endsWith('"')) return t
+  try {
+    const v = JSON.parse(s)
+    return typeof v === 'string' ? v : t
+  } catch {
+    return t
+  }
+}
+
 export function messageFromSse(text, id) {
   const events = text.split(/\r?\n\r?\n/)
   for (const event of events) {
@@ -326,7 +344,7 @@ export async function openMcp(resourceUrl, accessToken) {
       const result = await request('tools/call', { name, arguments: args })
       const text = (Array.isArray(result?.content) ? result.content : [])
         .filter((c) => c?.type === 'text' && typeof c.text === 'string')
-        .map((c) => c.text)
+        .map((c) => unwrapText(c.text))
         .join('\n')
       if (result?.isError) throw new CorosError('error', `COROS ${name}: ${text.slice(0, 200) || 'tool error'}`)
       return { text, structured: result?.structuredContent ?? null }

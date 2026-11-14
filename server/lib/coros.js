@@ -35,7 +35,7 @@ import { dataDir, withTx } from '../db.js'
 import { storeGarmin } from './garminStore.js'
 import { addDays, today } from './metrics.js'
 import { authorizeUrl, CorosError, discover, ensureClient, exchangeCode, openMcp, pkce, refreshTokens, revoke } from './corosMcp.js'
-import { parseActivityDetail, parseDailyHealth, parseFitness, parseHrv, parsePerDay, parseSleep, parseSportRecords } from './corosParse.js'
+import { hasDatedRecords, parseActivityDetail, parseDailyHealth, parseFitness, parseHrv, parsePerDay, parseSleep, parseSportRecords, parseTimezone } from './corosParse.js'
 
 export { CorosError } from './corosMcp.js'
 
@@ -283,17 +283,30 @@ function spanDays(from, to) {
  * Pull [from, to] through the MCP tools. One tool failing (other than auth or
  * rate limiting) does not sink the sync: it is skipped and reported.
  */
-async function fetchRange(mcp, from, to, knownActivityIds) {
+async function fetchRange(mcp, from, to, knownActivityIds, { log = () => {} } = {}) {
   const warnings = []
+  /** Every reply as it came, for $DATA_DIR/coros/<userId>/last-sync.txt. */
+  const raw = []
   const span = spanDays(from, to)
   const tool = async (name, args) => {
     try {
-      return (await mcp.callTool(name, args)).text
+      const { text } = await mcp.callTool(name, args)
+      raw.push({ name, args, text })
+      log(`${name} ${JSON.stringify(args)}: ${text.length} chars: ${preview(text)}`)
+      return text
     } catch (e) {
       if (e instanceof CorosError && e.code !== 'error') throw e
+      raw.push({ name, args, text: `ERROR: ${e.message}` })
+      log(`${name} ${JSON.stringify(args)}: ERROR ${e.message}`)
       warnings.push(`${name}: ${e.message}`.slice(0, 200))
       return ''
     }
+  }
+  /** Parse one reply, and say so loudly when COROS sent records that yielded nothing. */
+  const parsed = (name, text, rows, hasData = hasDatedRecords(text)) => {
+    const n = Array.isArray(rows) ? rows.length : rows
+    if (!n && hasData) log(`${name}: ${text.length} chars parsed to 0 rows - corosParse.js needs tuning (see last-sync.txt)`, true)
+    return rows
   }
   /** Tools that only take "recent days": ask for the span, fall back to a week if COROS refuses. */
   const recent = async (name) => {
@@ -306,9 +319,32 @@ async function fetchRange(mcp, from, to, knownActivityIds) {
 
   const inRange = (r) => r.day >= from && r.day <= to
 
+  const sleepRows = []
+  const sleepDays = []
+  for (const [a, b] of chunks(from, to, 31)) {
+    const text = await tool('querySleepOverview', { startDate: ymd(a), endDate: ymd(b) })
+    const p = parseSleep(text)
+    parsed('querySleepOverview', text, p.sleep.length + p.days.length)
+    sleepRows.push(...p.sleep)
+    sleepDays.push(...p.days)
+  }
+  // The HRV time series carries the watch's timezone, which the activity
+  // list needs: it gives start times only as UTC epochs.
+  const hrv = []
+  let tzOffsetMin = null
+  for (const [a, b] of chunks(from, to, 7)) {
+    const text = await tool('querySleepHrv', { startDate: ymd(a), endDate: ymd(b) })
+    hrv.push(...parsed('querySleepHrv', text, parseHrv(text)))
+    tzOffsetMin ??= parseTimezone(text)
+  }
+
   // Activities, then details for the ones not stored yet.
   const activities = []
-  for (const [a, b] of chunks(from, to, 31)) activities.push(...parseSportRecords(await tool('querySportRecords', { startDate: ymd(a), endDate: ymd(b), limit: 200 })))
+  for (const [a, b] of chunks(from, to, 31)) {
+    const text = await tool('querySportRecords', { startDate: ymd(a), endDate: ymd(b), limit: 200 })
+    activities.push(...parsed('querySportRecords', text, parseSportRecords(text, { tzOffsetMin })))
+  }
+  if (activities.length && tzOffsetMin === null) log('no timezone in querySleepHrv: activity start times fall back to 00:00', true)
   let details = 0
   for (const act of activities) {
     if (details >= MAX_DETAILS || knownActivityIds.has(act.externalId) || !act.labelId || act.sportType === null) continue
@@ -317,19 +353,15 @@ async function fetchRange(mcp, from, to, knownActivityIds) {
     for (const [k, v] of Object.entries(extra)) if (v !== null && (act[k] === null || act[k] === undefined)) act[k] = v
   }
 
-  const sleepRows = []
-  const sleepDays = []
-  for (const [a, b] of chunks(from, to, 31)) {
-    const parsed = parseSleep(await tool('querySleepOverview', { startDate: ymd(a), endDate: ymd(b) }))
-    sleepRows.push(...parsed.sleep)
-    sleepDays.push(...parsed.days)
-  }
-  const hrv = []
-  for (const [a, b] of chunks(from, to, 7)) hrv.push(...parseHrv(await tool('querySleepHrv', { startDate: ymd(a), endDate: ymd(b) })))
-  const daily = parseDailyHealth(await recent('queryDailyHealthData'))
-  const rhr = parsePerDay(await recent('queryRestingHeartRate'), /resting|rhr|heart rate/)
-  const stress = parsePerDay(await recent('queryStressLevel'), /stress/, /max|high|low|time/)
-  const fitness = parseFitness(await tool('queryFitnessAssessmentOverview', {}))
+  const dailyText = await recent('queryDailyHealthData')
+  const daily = parsed('queryDailyHealthData', dailyText, parseDailyHealth(dailyText))
+  const rhrText = await recent('queryRestingHeartRate')
+  const rhr = parsed('queryRestingHeartRate', rhrText, parsePerDay(rhrText, /resting|rhr|heart rate/))
+  const stressText = await recent('queryStressLevel')
+  const stress = parsed('queryStressLevel', stressText, parsePerDay(stressText, /stress/, /max|high|low|time/))
+  const fitnessText = await tool('queryFitnessAssessmentOverview', {})
+  const fitness = parseFitness(fitnessText)
+  parsed('queryFitnessAssessmentOverview', fitnessText, Object.values(fitness).filter((v) => v !== null).length, /vo2/i.test(fitnessText))
 
   // One row per day, later sources filling only what earlier ones left empty.
   const byDay = new Map()
@@ -338,19 +370,63 @@ async function fetchRange(mcp, from, to, knownActivityIds) {
     const row = byDay.get(day)
     for (const [k, v] of Object.entries(fields)) if (v !== null && v !== undefined && (row[k] === null || row[k] === undefined)) row[k] = v
   }
-  for (const r of daily.filter(inRange)) put(r.day, { steps: r.steps, activeKcal: r.activeKcal, totalKcal: r.totalKcal, bmrKcal: r.bmrKcal, stressAvg: r.stressAvg, restingHr: r.restingHr })
+  for (const r of daily.filter(inRange)) put(r.day, { steps: r.steps, activeKcal: r.activeKcal, totalKcal: r.totalKcal, bmrKcal: r.bmrKcal, stressAvg: r.stressAvg, restingHr: r.restingHr, intensityMinutes: r.intensityMinutes })
   for (const r of rhr.filter(inRange)) put(r.day, { restingHr: r.value })
   for (const r of stress.filter(inRange)) put(r.day, { stressAvg: r.value })
   for (const r of hrv.filter(inRange)) put(r.day, { hrvNight: r.hrvNight, hrvStatus: r.hrvStatus })
   for (const r of sleepDays.filter(inRange)) put(r.day, { sleepSeconds: r.sleepSeconds })
 
+  const { ltPaceSPerKm, ...metric } = fitness
   return {
     days: [...byDay.values()],
     sleep: sleepRows.filter(inRange),
-    metrics: fitness.vo2max !== null ? [{ day: to, vo2max: fitness.vo2max }] : [],
+    metrics: Object.values(metric).some((v) => v !== null) ? [{ day: to, ...metric }] : [],
     activities: activities.filter((a) => a.startLocal.slice(0, 10) >= from && a.startLocal.slice(0, 10) <= to),
+    ltPaceSPerKm,
     warnings,
+    raw,
   }
+}
+
+/** One line of a reply for the journal: newlines shown as ⏎, cut at 300 chars. */
+function preview(text) {
+  const t = String(text ?? '').replace(/\r?\n/g, ' ⏎ ').replace(/\s+/g, ' ').trim()
+  return t.length > 300 ? `${t.slice(0, 300)}…` : t
+}
+
+const LAST_SYNC_FILE = 'last-sync.txt'
+
+/** The raw replies of the latest sync, beside the session (0600; removed on disconnect). */
+function writeLastSync(userId, { from, to, trigger }, raw) {
+  try {
+    fs.mkdirSync(sessionDir(userId), { recursive: true, mode: 0o700 })
+    const head = `COROS ${trigger} sync ${from}..${to} at ${new Date().toISOString()}\n\n`
+    const body = raw.map((r) => `===== ${r.name} ${JSON.stringify(r.args)}\n${r.text}\n`).join('\n')
+    fs.writeFileSync(path.join(sessionDir(userId), LAST_SYNC_FILE), head + body, { mode: 0o600 })
+  } catch (e) {
+    console.error(`[coros] could not save the raw replies for ${userId}: ${e.message}`)
+  }
+}
+
+/** The raw replies of the latest sync (`node server/cli.js coros last`), or null. */
+export function readLastSync(userId) {
+  try {
+    return fs.readFileSync(path.join(sessionDir(userId), LAST_SYNC_FILE), 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/** COROS's threshold pace joins whatever thresholds are stored (a Garmin import may have set lthr / ftp). */
+function thresholdsMeta(db, userId, ltPaceSPerKm) {
+  if (!ltPaceSPerKm) return undefined
+  let current = {}
+  try {
+    current = JSON.parse(db.prepare("SELECT value FROM garmin_meta WHERE user_id = ? AND key = 'thresholds'").get(userId)?.value ?? '{}') ?? {}
+  } catch {
+    /* a broken row is replaced */
+  }
+  return { thresholds: { ...current, ltPaceSPerKm } }
 }
 
 /* ------------------------------------------------------------------ */
@@ -388,8 +464,10 @@ export async function syncUser(db, userId, { days, trigger = 'manual' } = {}) {
   saveState(db, userId, { last_attempt_at: new Date().toISOString() })
   try {
     const known = new Set(db.prepare("SELECT external_id FROM activities WHERE user_id = ? AND source = 'coros'").all(userId).map((r) => r.external_id))
-    const payload = await withMcp(userId, session, (mcp) => fetchRange(mcp, from, to, known))
-    const counts = storeGarmin(db, userId, payload, { source: PROVIDER })
+    const log = (line, error = false) => (error ? console.error : console.log)(`[coros] ${userId} ${line}`)
+    const payload = await withMcp(userId, session, (mcp) => fetchRange(mcp, from, to, known, { log }))
+    writeLastSync(userId, { from, to, trigger }, payload.raw)
+    const counts = storeGarmin(db, userId, { ...payload, meta: thresholdsMeta(db, userId, payload.ltPaceSPerKm) }, { source: PROVIDER })
     const warning = payload.warnings.length ? `Partly synced; COROS refused: ${payload.warnings.join('; ')}`.slice(0, 500) : null
     saveState(db, userId, { status: 'connected', last_success_at: new Date().toISOString(), last_error: warning, backoff_until: null })
     if (warning) console.error(`[coros] ${trigger} sync for ${userId}: ${warning}`)

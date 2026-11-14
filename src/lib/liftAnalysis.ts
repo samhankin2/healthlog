@@ -337,7 +337,7 @@ export function factorReport(forms: SessionForm[], workouts: Workout[], data: In
   }
   const hrv = metric('hrvNight')
   const rhr = metric('restingHr')
-  const intake = new Map((data?.intake ?? []).filter((r) => r.kcal > 0).map((r) => [r.day, r]))
+  const intake = new Map((data?.intake ?? []).filter((r) => r.kcal > 0 && !r.partial).map((r) => [r.day, r]))
   const avgIntake = (day: string, k: 'kcal' | 'proteinG'): number | null => {
     const v = [1, 2, 3].map((i) => intake.get(shiftDay(day, -i))?.[k]).filter(isNum)
     return v.length >= 2 ? meanOf(v) : null

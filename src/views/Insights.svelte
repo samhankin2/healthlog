@@ -47,11 +47,27 @@
     localStorage.setItem(RANGE_KEY, range)
   }
 
+  /** COROS connected (even before its first sync has landed anything). */
+  let corosConnected = $state(false)
+  /** Which watch the tab speaks for: the data decides, then a COROS connection. */
+  const watch = $derived.by(() => {
+    const s = data?.sources
+    if (s?.garmin && s?.coros) return 'both'
+    if (s?.coros) return 'coros'
+    if (s?.garmin) return 'garmin'
+    return corosConnected ? 'coros' : 'garmin'
+  })
+  const watchName = $derived(watch === 'coros' ? 'COROS' : watch === 'garmin' ? 'Garmin' : 'Watch')
+
   async function load(): Promise<void> {
     loading = !data
     loadError = ''
     try {
-      const [payload] = await Promise.all([api.getInsights({ from: '2000-01-01', to: todayDay }), loadLifting().catch(() => {})])
+      const [payload] = await Promise.all([
+        api.getInsights({ from: '2000-01-01', to: todayDay }),
+        loadLifting().catch(() => {}),
+        api.getCoros().then((r) => { corosConnected = r.coros.connected }).catch(() => {}),
+      ])
       raw = payload
     } catch (cause) {
       loadError = cause instanceof Error ? cause.message : 'Could not load your insights.'
@@ -235,7 +251,7 @@
 <div class="view view--insights">
   <header class="ins-head">
     <div>
-      <p class="eyebrow"><Icon name="insights" size={14} /> Garmin insights</p>
+      <p class="eyebrow"><Icon name="insights" size={14} /> {watchName} insights</p>
       <h1 class="view-title">How you’re really doing</h1>
       {#if ins?.hasData && data?.coverage.first}
         <p class="view-subtitle">{fmtDayShort(from)} {from.slice(0, 4)} – today · {Math.round((dayNum(todayDay) - dayNum(from) + 1)).toLocaleString()} days of watch data, analysed on this device.</p>
@@ -251,9 +267,17 @@
   {:else if loadError}
     <div class="card pad" role="alert"><p>{loadError}</p><button class="button button--secondary" type="button" onclick={load}>Try again</button></div>
   {:else if !ins || !ins.hasData}
-    <GarminImportPanel hero onimported={load} />
+    {#if watch === 'coros'}
+      <div class="card pad coros-wait" role="status">
+        <p><b>COROS is connected.</b> Your sleep, HRV, resting heart rate and workouts show up here once the first sync has landed. It runs every few hours, or start one now from Settings.</p>
+        <button class="button button--secondary" type="button" onclick={() => navigate('settings')}>Open Settings</button>
+      </div>
+    {:else}
+      <GarminImportPanel hero onimported={load} />
+      <p class="chart-note">Wear a COROS watch? Connect it in <button class="link-button" type="button" onclick={() => navigate('settings')}>Settings</button> instead.</p>
+    {/if}
     <ul class="promise">
-      <li><Icon name="heart" size={18} /><span><b>Recovery</b> from sleep, Body Battery and resting heart rate, against your own norm.</span></li>
+      <li><Icon name="heart" size={18} /><span><b>Recovery</b> from sleep, overnight HRV and resting heart rate (plus Body Battery on Garmin), against your own norm.</span></li>
       <li><Icon name="zap" size={18} /><span><b>Fitness</b>: VO₂ max, race predictions, training status and load.</span></li>
       <li><Icon name="moon" size={18} /><span><b>Sleep</b> stages, timing and consistency — and what changes them.</span></li>
       <li><Icon name="sparkles" size={18} /><span><b>Findings</b> tested on your own data: what actually moves your sleep, stress and heart rate.</span></li>
@@ -422,6 +446,17 @@
           <LineChart label="Resting heart rate" {from} to={todayDay} raw={ins.heart.rhr} line={ins.heart.rhr7} band={ins.heart.band} bandLabel="Your 30-day norm" format={(v) => `${Math.round(v)}`} rawLabel="That morning" height={190} />
           <p class="chart-note">Shaded: your 30-day norm ± 1 SD. {#if isNum(ins.heart.slopePerMonth)}Trend {fmtSigned(ins.heart.slopePerMonth, 1)} bpm/month{#if isNum(ins.heart.min)}, lowest {ins.heart.min}{/if}.{/if}</p>
         </article>
+        {#if !ins.stress.battery.length && ins.heart.hrv.some((p) => isNum(p.value))}
+        <!-- No Body Battery (COROS): overnight HRV is the recovery signal it gives instead. -->
+        <article class="card pad">
+          <div class="chart-head">
+            <h3><Icon name="activity" size={16} /> Overnight HRV</h3>
+            <span class="head-num">{isNum(ins.heart.hrvAvg) ? Math.round(ins.heart.hrvAvg) : '—'}<small> ms avg</small></span>
+          </div>
+          <LineChart label="Overnight HRV" {from} to={todayDay} raw={ins.heart.hrv} line={ins.heart.hrv7} format={(v) => `${Math.round(v)}`} rawLabel="That night" height={190} />
+          <p class="chart-note">Dots: each night. Line: 7-day average. Higher than your usual means better recovered.</p>
+        </article>
+        {:else}
         <article class="card pad">
           <div class="chart-head">
             <h3><Icon name="battery" size={16} /> Body Battery</h3>
@@ -435,6 +470,7 @@
             <p class="chart-note">Weekly averages. Bar: typical low to high. Dot: typical wake-up level.</p>
           {/if}
         </article>
+        {/if}
         <article class="card pad span-2">
           <div class="chart-head">
             <h3><Icon name="activity" size={16} /> Stress</h3>
@@ -497,6 +533,8 @@
           <Calendar label="Training minutes per day" values={ins.training.calendar.map((c) => ({ day: c.day, value: c.minutes, detail: c.load ? `load ${Math.round(c.load)}` : undefined }))} {from} to={todayDay} format={(v) => `${Math.round(v)} min`} />
         </article>
         <div class="grid-2">
+          <!-- COROS's activity list carries no zone times: no card rather than empty bars. -->
+          {#if ins.training.zones.slice(1).some((z) => z > 0)}
           <article class="card pad">
             <div class="chart-head"><h3>Heart-rate zones</h3></div>
             <SegmentBar label="Training time by heart-rate zone" parts={zoneParts} format={(v) => hrsFmt(v / 3600)} />
@@ -505,7 +543,8 @@
               <p class="chart-note">{Math.round(easy * 100)}% of your zoned time is easy (Z1–Z2). Endurance coaches usually aim for about 80%.</p>
             {/if}
           </article>
-          <article class="card pad">
+          {/if}
+          <article class="card pad" class:span-2={!ins.training.zones.slice(1).some((z) => z > 0)}>
             <div class="chart-head"><h3>Latest sessions</h3></div>
             <ul class="recent">
               {#each recentActs as a (a.id)}
@@ -688,12 +727,16 @@
       </Sheet>
     {/if}
 
-    <section class="block" aria-label="Import">
-      <GarminImportPanel onimported={load} />
-      {#if lastImport}
-        <p class="chart-note">Last export imported {new Date(lastImport.at).toLocaleDateString()}{lastImport.range ? ` · covers ${fmtDayShort(lastImport.range.from)} ${lastImport.range.from.slice(0, 4)} – ${fmtDayShort(lastImport.range.to)} ${lastImport.range.to.slice(0, 4)}` : ''}. New days arrive through the Garmin sync.</p>
-      {/if}
-    </section>
+    {#if watch === 'coros'}
+      <p class="chart-note source-note">From your COROS watch, synced every few hours. Manage the connection in <button class="link-button" type="button" onclick={() => navigate('settings')}>Settings</button>.</p>
+    {:else}
+      <section class="block" aria-label="Import">
+        <GarminImportPanel onimported={load} />
+        {#if lastImport}
+          <p class="chart-note">Last export imported {new Date(lastImport.at).toLocaleDateString()}{lastImport.range ? ` · covers ${fmtDayShort(lastImport.range.from)} ${lastImport.range.from.slice(0, 4)} – ${fmtDayShort(lastImport.range.to)} ${lastImport.range.to.slice(0, 4)}` : ''}. New days arrive through the Garmin sync.</p>
+        {/if}
+      </section>
+    {/if}
   {/if}
 </div>
 
@@ -748,6 +791,10 @@
   .head-num { font-size: var(--text-xl); font-weight: var(--weight-bold); letter-spacing: -0.02em; }
   .head-num small { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-medium); letter-spacing: 0; }
   .chart-note { margin: var(--space-2) 0 0; color: var(--color-text-muted); font-size: var(--text-xs); }
+  .link-button { padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; text-decoration: underline; cursor: pointer; }
+  .coros-wait { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+  .coros-wait p { margin: 0; flex: 1 1 18rem; }
+  .source-note { text-align: center; }
   .chart-head .chart-note { margin: 0; }
   h4 { margin: 0 0 var(--space-3); color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
   .legend { display: flex; margin: 0; padding: 0; flex-wrap: wrap; gap: var(--space-1) var(--space-3); list-style: none; font-size: var(--text-xs); color: var(--color-text-muted); }

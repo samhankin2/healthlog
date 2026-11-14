@@ -72,7 +72,8 @@
         label: spec.label,
         // Unlogged days are gaps, not zero bars.
         data: rows.map((day) => (day.kcal > 0 ? day[spec.metric] : null)),
-        backgroundColor: rows.map((day) => (day.day === todayDay ? theme.soft : theme.fill)),
+        // Today (in progress) and partly logged days are drawn faint: neither counts toward averages.
+        backgroundColor: rows.map((day) => (day.day === todayDay || day.partial ? theme.soft : theme.fill)),
         borderColor: theme.fill,
         borderWidth: rows.map((day) => (day.day === todayDay ? 1.5 : 0)),
         borderRadius: dense ? 2 : 6,
@@ -149,6 +150,7 @@
                   const delta = Math.round(row[spec.metric] - (spec.target ?? 0))
                   lines.push(delta === 0 ? 'Exactly on target' : `${delta > 0 ? '+' : '−'}${amount(Math.abs(delta))} vs target`)
                 }
+                if (row.partial) lines.push('Looks partly logged, so it is left out of averages')
                 return lines
               },
             },

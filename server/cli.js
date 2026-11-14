@@ -14,6 +14,7 @@
  *   node server/cli.js coros status                   COROS connection + last sync per user
  *   node server/cli.js coros sync --email <email> [--days N]   sync COROS now
  *   node server/cli.js coros dump --email <email> [--days N]   raw COROS MCP replies (for tuning the parsers)
+ *   node server/cli.js coros last --email <email>     the raw replies of that user's latest sync (no COROS call)
  *   node server/cli.js invite create --note "sam"
  *   node server/cli.js invite list
  *   node server/cli.js user create --email me@example.com --password "hunter22"
@@ -39,7 +40,7 @@ import {
 import { backupNow, listBackups } from './lib/backup.js'
 import { spawnSync } from 'node:child_process'
 import { garminAvailable, garminStatus, markLoggedIn, pythonBin, scriptPath, syncUser, tokensDir } from './lib/garmin.js'
-import { corosStatus, dumpRaw as corosDump, syncUser as corosSync } from './lib/coros.js'
+import { corosStatus, dumpRaw as corosDump, readLastSync as corosLastSync, syncUser as corosSync } from './lib/coros.js'
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -78,6 +79,7 @@ function usage() {
     '  node server/cli.js coros status                   COROS connection + last sync per user',
     '  node server/cli.js coros sync --email <email> [--days N]   sync COROS now',
     '  node server/cli.js coros dump --email <email> [--days N]   raw COROS MCP replies, for tuning the parsers',
+    '  node server/cli.js coros last --email <email>     raw replies of the latest sync (no COROS call)',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
     '  node server/cli.js invite list                    list invite codes',
     '  node server/cli.js invite revoke --code <code>',
@@ -479,7 +481,15 @@ async function cmdCoros(action, args) {
     for (const [title, text] of await corosDump(db, user.id, { days })) console.log(`===== ${title}\n${text}\n`)
     return
   }
-  fail('usage: node server/cli.js coros status|sync|dump [--email <email>] [--days N]')
+  if (action === 'last') {
+    // Read-only, from disk. The user's own health data; no tokens are in the file.
+    const user = userByEmailArg(db, args)
+    const text = corosLastSync(user.id)
+    if (!text) fail('no COROS sync has been recorded for this user yet')
+    console.log(text)
+    return
+  }
+  fail('usage: node server/cli.js coros status|sync|dump|last [--email <email>] [--days N]')
 }
 
 async function main() {

@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { withTx } from '../db.js'
+import { addDays, PARTIAL_DAY_RULES, partialDays, today } from './metrics.js'
 
 const isDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
 const LOCAL_TS = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?/
@@ -281,8 +282,12 @@ export function insightsPayload(db, userId, from, to) {
     }
     return out
   })
-  const intake = q(`SELECT day, SUM(kcal) AS kcal, SUM(protein_g) AS protein FROM meals WHERE user_id = ? AND day >= ? AND day <= ? GROUP BY day ORDER BY day`)
-    .map((r) => ({ day: r.day, kcal: r.kcal, proteinG: r.protein }))
+  // Read a margin before `from` so partial-day detection has neighbours at the range's start.
+  const intakeRows = db.prepare(`SELECT day, SUM(kcal) AS kcal, SUM(protein_g) AS protein FROM meals WHERE user_id = ? AND day >= ? AND day <= ? GROUP BY day ORDER BY day`)
+    .all(userId, addDays(from, -PARTIAL_DAY_RULES.radiusDays), to)
+  const partial = partialDays(intakeRows.map((r) => ({ day: r.day, kcal: Number(r.kcal) })), today())
+  const intake = intakeRows.filter((r) => r.day >= from)
+    .map((r) => ({ day: r.day, kcal: r.kcal, proteinG: r.protein, partial: partial.has(r.day) }))
   const weights = db.prepare('SELECT date AS day, weight_kg FROM weight_entries WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date').all(userId, from, to)
     .map((r) => ({ day: r.day, weightKg: r.weight_kg }))
   const records = db.prepare('SELECT * FROM personal_records WHERE user_id = ? ORDER BY type').all(userId)
@@ -293,7 +298,11 @@ export function insightsPayload(db, userId, from, to) {
   }
   const span = db.prepare(`SELECT MIN(day) AS first, MAX(day) AS last FROM (
       SELECT day FROM daily_activity WHERE user_id = ? UNION ALL SELECT day FROM sleep_nights WHERE user_id = ?)`).get(userId, userId)
-  return { from, to, coverage: { first: span?.first ?? null, last: span?.last ?? null }, days: daily, sleep, metrics, activities, intake, weights, records, meta }
+  // Which watch the data came from (any date), so the tab can speak its language.
+  const tagged = new Set(db.prepare(`SELECT DISTINCT source FROM daily_activity WHERE user_id = ?
+      UNION SELECT DISTINCT source FROM activities WHERE user_id = ?`).all(userId, userId).map((r) => r.source))
+  const sources = { garmin: tagged.has('garmin'), coros: tagged.has('coros') }
+  return { from, to, coverage: { first: span?.first ?? null, last: span?.last ?? null }, days: daily, sleep, metrics, activities, intake, weights, records, meta, sources }
 }
 
 /** Write one garmin_meta entry (server-built values only). */

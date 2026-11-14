@@ -18,8 +18,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startFakeCoros } from './fixtures/fake-coros.mjs'
-import { blocks, clockRange, duration, parseDailyHealth, parseHrv, parsePerDay, parseSleep, parseSportRecords } from '../server/lib/corosParse.js'
-import { messageFromSse } from '../server/lib/corosMcp.js'
+import { blocks, clockRange, duration, parseDailyHealth, parseFitness, parseHrv, parsePerDay, parseSleep, parseSportRecords, parseTimezone } from '../server/lib/corosParse.js'
+import { messageFromSse, unwrapText } from '../server/lib/corosMcp.js'
 import { syncRange } from '../server/lib/coros.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -83,11 +83,42 @@ eq('durations', ['7h 57min', '2:12:38', '45:10', '5 min', '1 h 5 m', '90 s'].map
 eq('window across midnight from clocks only', clockRange('23:40 - 07:10', '2026-10-15'), ['2026-10-14T23:40:00', '2026-10-15T07:10:00'])
 eq('per-day lines', parsePerDay('Resting Heart Rate\n2026-10-13: 49 bpm\n2026-10-14: 48 bpm', /resting/), [{ day: '2026-10-13', value: 49 }, { day: '2026-10-14', value: 48 }])
 eq('HRV ignores the normal range', parseHrv('2026-10-15\nNormal Range: 50-70 ms\nAverage HRV: 62 ms\nEvaluation: Normal'), [{ day: '2026-10-15', hrvNight: 62, hrvStatus: 'Normal' }])
-eq('markdown table + thousands', parseDailyHealth('| Date | Steps | Calories |\n|---|---|---|\n| 2026-10-14 | 9,812 | 2,450 kcal |')[0], { day: '2026-10-14', steps: 9812, activeKcal: null, totalKcal: 2450, bmrKcal: null, stressAvg: null, restingHr: null })
-eq('JSON reply', parseDailyHealth(JSON.stringify({ list: [{ date: 20261014, steps: 9000, activeCalories: 520 }] }))[0], { day: '2026-10-14', steps: 9000, activeKcal: 520, totalKcal: null, bmrKcal: null, stressAvg: null, restingHr: null })
+eq('markdown table + thousands; a bare Calories is active', parseDailyHealth('| Date | Steps | Calories |\n|---|---|---|\n| 2026-10-14 | 9,812 | 1,450 kcal |')[0], { day: '2026-10-14', steps: 9812, activeKcal: 1450, totalKcal: null, bmrKcal: null, stressAvg: null, restingHr: null, intensityMinutes: null })
+eq('JSON reply', parseDailyHealth(JSON.stringify({ list: [{ date: 20261014, steps: 9000, activeCalories: 520 }] }))[0], { day: '2026-10-14', steps: 9000, activeKcal: 520, totalKcal: null, bmrKcal: null, stressAvg: null, restingHr: null, intensityMinutes: null })
 eq('nothing recognisable -> nothing', [blocks('No data for this period.').filter((b) => b.day).length, parseSleep('No sleep recorded.').sleep.length], [0, 0])
 eq('SSE: picks the reply with the right id', messageFromSse('event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress"}\n\nevent: message\ndata: {"jsonrpc":"2.0","id":3,"result":{"x":1}}\n\n', 3)?.result, { x: 1 })
 eq('range: first sync backfills 90 days, later 7', [syncRange(null, '2026-11-14').from, syncRange('2026-11-13T10:00:00Z', '2026-11-14').from], ['2026-08-17', '2026-11-08'])
+
+/* ---- the layout the real COROS MCP sent on 2026-11-14 (values changed) ---- */
+eq('wire: a JSON-encoded text block is decoded once', [unwrapText('"Sleep Overview\\n\\n2026-11-14"'), unwrapText('plain "quoted" text'), unwrapText('"not json')], ['Sleep Overview\n\n2026-11-14', 'plain "quoted" text', '"not json'])
+const REAL_SPORT = `Sport Records — 2026-11-08 to 2026-11-14 (2 records)
+========================
+
+1. Outdoor Run — 2026-11-14
+   Location: City Run
+   Start Coordinates: -37.800000, 145.000000
+   Time Window: startTimestamp=1794647390 | endTimestamp=1794649389
+   Duration: 33:14 | Distance: 5.00 km
+   Average Pace: 6:39 /km | Avg HR: 160 bpm | Calories: 374 kcal
+   LabelId: 481748088193581463 | SportType: 100
+
+2. Outdoor Run — 2026-11-11
+   Time Window: startTimestamp=1794339991 | endTimestamp=1794341957
+   Duration: 32:34 | Distance: 5.00 km
+   LabelId: 481675607669768594 | SportType: 100`
+const realSport = parseSportRecords(REAL_SPORT, { tzOffsetMin: 660 })
+eq('real sport list: both records', realSport.length, 2)
+eq('real sport list: epoch start on the watch clock, numbers, ids', [realSport[0]?.startLocal, realSport[0]?.durationS, realSport[0]?.distanceM, realSport[0]?.avgHr, realSport[0]?.kcal, realSport[0]?.labelId, realSport[0]?.type, realSport[0]?.name],
+  ['2026-11-14T20:09:50', 1994, 5000, 160, 374, '481748088193581463', 'running', 'Outdoor Run'])
+eq('real sport list: without a timezone the start is the date at 00:00', parseSportRecords(REAL_SPORT)[1]?.startLocal, '2026-11-11T00:00:00')
+eq('real sport list: an offset that moves the date is not trusted', parseSportRecords(REAL_SPORT, { tzOffsetMin: -600 })[0]?.startLocal, '2026-11-14T00:00:00')
+eq('timezone from the HRV time series (quarter hours)', [parseTimezone('2026-11-08:\n  timestamp=1794056690, timezone=44, hrv=105 ms\n  timestamp=1794057590, timezone=44, hrv=71 ms'), parseTimezone('none here')], [660, null])
+eq('real HRV: verdict after the dash, range and baseline ignored', parseHrv('2026-11-14:\n  HRV Avg: 65 ms — Normal\n  Normal Range: 52 - 84 ms\n  Baseline: 68 ms\n2026-11-10:\n  HRV Avg: 88 ms — Above normal'),
+  [{ day: '2026-11-14', hrvNight: 65, hrvStatus: 'Normal' }, { day: '2026-11-10', hrvNight: 88, hrvStatus: 'Above normal' }])
+eq('real daily: dashed date heading, steps, active calories, exercise, stress', parseDailyHealth('Daily Health Data — Last 7 days | Resting HR: 51 bpm | HRV Baseline: 42 ms\n\n--- 20261108 ---\nSteps: 15,443 | Calories: 995 kcal | Exercise: 54 min\nStress: Avg 28\nSleep Summary:\n  Total: 8h 6min | Deep: 2h 12min | Light: 4h 19min | REM: 1h 25min | Awake: 10 min\n  Sleep HR: Avg 50 bpm | Min 44 bpm | Max 91 bpm'),
+  [{ day: '2026-11-08', steps: 15443, activeKcal: 995, totalKcal: null, bmrKcal: null, stressAvg: 28, restingHr: null, intensityMinutes: 54 }])
+eq('real fitness: VO2max, race predictions, threshold pace', parseFitness('Fitness Assessment Overview\n========================\n\nVO2max: 41\nRunning Level: 75\nThreshold Pace: 5:23 /km\n5 km Prediction: 25:55\n10 km Prediction: 54:21\nHalf Marathon Prediction: 2:03:07\nMarathon Prediction: 4:22:39'),
+  { vo2max: 41, race5kS: 1555, race10kS: 3261, raceHalfS: 7387, raceMarathonS: 15759, ltPaceSPerKm: 323 })
 
 /* ------------------------------------------------------------------ */
 /* HealthLog against the fake                                          */
@@ -165,7 +196,7 @@ async function run() {
       { day: LONG_AGO, score: 70, main: '6h 0min', deep: 15, light: 60, rem: 20, awake: '20 min', window: `${isoDay(-41)} 00:30 - ${LONG_AGO} 06:50` },
     ],
     hrv: [{ day: TODAY, ms: 62, eval: 'Normal' }, { day: LONG_AGO, ms: 55, eval: 'Low' }],
-    daily: [{ day: TODAY, steps: 11234, kcal: 2650, stress: 28 }, { day: YESTERDAY, steps: 8000, kcal: 2400, stress: 35 }],
+    daily: [{ day: TODAY, steps: 11234, kcal: 820, exercise: 50, stress: 28 }, { day: YESTERDAY, steps: 8000, kcal: 610, exercise: 45, stress: 35 }],
     rhr: [{ day: TODAY, bpm: 48 }, { day: YESTERDAY, bpm: 50 }],
     stress: [{ day: TODAY, avg: 28 }, { day: YESTERDAY, avg: 35 }],
     vo2max: 54,
@@ -243,7 +274,7 @@ async function run() {
   r = await api('GET', `/api/activity/daily?from=${LONG_AGO}&to=${TODAY}`, { token: a })
   const daysRows = r.json?.days ?? []
   const todayRow = daysRows.find((d) => d.day === TODAY)
-  eq('daily: today steps, calories, resting HR, sleep, source', [todayRow?.steps, todayRow?.totalKcal, todayRow?.restingHr, todayRow?.sleepSeconds, todayRow?.source], [11234, 2650, 48, 27000, 'coros'])
+  eq('daily: today steps, active calories, resting HR, sleep, source', [todayRow?.steps, todayRow?.activeKcal, todayRow?.totalKcal, todayRow?.restingHr, todayRow?.sleepSeconds, todayRow?.source], [11234, 820, null, 48, 27000, 'coros'])
   eq('daily: an old day has sleep only (daily metrics reach back a week)', [daysRows.find((d) => d.day === LONG_AGO)?.sleepSeconds, daysRows.find((d) => d.day === LONG_AGO)?.steps], [21600, null])
   r = await api('GET', `/api/insights?from=${LONG_AGO}&to=${TODAY}`, { token: a })
   const ins = r.json ?? {}
@@ -251,7 +282,14 @@ async function run() {
   eq('insights: HRV + status, stress', [insToday?.hrvNight, insToday?.hrvStatus, insToday?.stressAvg], [62, 'Normal', 28])
   const night = ins.sleep?.find((s) => s.day === TODAY)
   eq('insights: sleep night with stages and window', [night?.startLocal, night?.endLocal, night?.deepS, night?.lightS, night?.remS, night?.awakeS, night?.score], [`${YESTERDAY}T23:30:00`, `${TODAY}T07:12:00`, 5400, 13500, 6750, 720, 88])
-  eq('insights: VO2max today', (ins.metrics ?? []).map((m) => [m.day, m.vo2max]), [[TODAY, 54]])
+  eq('insights: VO2max and race predictions today', (ins.metrics ?? []).map((m) => [m.day, m.vo2max, m.race5kS, m.race10kS, m.raceHalfS, m.raceMarathonS]), [[TODAY, 54, 1290, 2690, 5940, 12495]])
+  eq('insights: threshold pace from COROS', ins.meta?.thresholds?.ltPaceSPerKm, 280)
+  eq('insights: sources say COROS, not Garmin', ins.sources, { garmin: false, coros: true })
+  const corosDirs = fs.readdirSync(path.join(dataDir, 'coros'))
+  const lastSync = corosDirs.map((u) => path.join(dataDir, 'coros', u, 'last-sync.txt')).find((f) => fs.existsSync(f))
+  const lastText = lastSync ? fs.readFileSync(lastSync, 'utf8') : ''
+  ok('raw replies of the sync saved, decoded', /===== querySportRecords/.test(lastText) && lastText.includes('\n1. Morning Run'))
+  ok('server log: each tool reply logged, nothing flagged as unparsed', /\[coros\] \S+ querySportRecords \{/.test(serverLog) && !/parsed to 0 rows/.test(serverLog), serverLog.match(/.*parsed to 0 rows.*/)?.[0])
   eq('insights: strength typed for the lifting merge', ins.activities?.find((x) => x.name === 'Strength')?.type, 'strength_training')
   r = await api('GET', '/api/activities', { token: b })
   eq('isolation: user B sees none of it', r.json?.activities?.length, 0)

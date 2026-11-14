@@ -210,7 +210,7 @@ export interface Insights {
   heroDay: string | null
   recovery: Recovery | null
   vitals: Vital[]
-  heart: { rhr: Point[]; rhr7: Point[]; band: { day: string; lo: number; hi: number }[]; avg: number | null; slopePerMonth: number | null; min: number | null }
+  heart: { rhr: Point[]; rhr7: Point[]; band: { day: string; lo: number; hi: number }[]; avg: number | null; slopePerMonth: number | null; min: number | null; hrv: Point[]; hrv7: Point[]; hrvAvg: number | null }
   stress: {
     series: Point[]
     series7: Point[]
@@ -631,6 +631,9 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
   const rangeDays = eachDay(from, to)
   const rhr = rangeDays.map((day) => ({ day, value: dayMap.get(day)?.restingHr ?? null }))
   const rhr7 = rolling(rhr)
+  // Overnight HRV: the recovery chart for watches without Body Battery (COROS).
+  const hrv = rangeDays.map((day) => ({ day, value: dayMap.get(day)?.hrvNight ?? null }))
+  const hrv7 = rolling(hrv)
   const band = rangeDays.map((day) => {
     const vals: number[] = []
     for (let i = 1; i <= 30; i++) {
@@ -733,7 +736,8 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
   const goalDays = stepDays.filter((d) => isNum(d.stepGoal) && (d.steps as number) >= (d.stepGoal as number)).length
 
   // Energy (needs meals logged in HealthLog)
-  const intakeMap = new Map(data.intake.map((i) => [i.day, i.kcal]))
+  // Partly logged days would read as eating far less than the watch says was burned.
+  const intakeMap = new Map(data.intake.filter((i) => !i.partial).map((i) => [i.day, i.kcal]))
   const loggedDays = days.filter((d) => isNum(intakeMap.get(d.day)) && (intakeMap.get(d.day) as number) > 300 && isNum(d.totalKcal) && d.day < to)
   let energy: Insights['energy'] = null
   if (loggedDays.length >= 7) {
@@ -772,7 +776,7 @@ export function buildInsights(data: InsightsPayload, from: string, to: string): 
     heroDay,
     recovery,
     vitals,
-    heart: { rhr, rhr7, band, avg: mean(rhr.map((p) => p.value)), slopePerMonth: isNum(rhrSlope) ? rhrSlope * 30 : null, min: rhr.some((p) => isNum(p.value)) ? Math.min(...rhr.map((p) => p.value).filter(isNum)) : null },
+    heart: { rhr, rhr7, band, avg: mean(rhr.map((p) => p.value)), slopePerMonth: isNum(rhrSlope) ? rhrSlope * 30 : null, min: rhr.some((p) => isNum(p.value)) ? Math.min(...rhr.map((p) => p.value).filter(isNum)) : null, hrv, hrv7, hrvAvg: mean(hrv.map((p) => p.value)) },
     stress: {
       series: stressSeries,
       series7: rolling(stressSeries),
