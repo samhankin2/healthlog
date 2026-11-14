@@ -173,11 +173,11 @@ function upsertDays(db, userId, table, rows, map, now, extraCols = {}) {
 /* ------------------------------------------------------------------ */
 
 /** Activity rows from either source; returns the number stored. */
-function upsertActivities(db, userId, rows, now) {
+function upsertActivities(db, userId, rows, now, source) {
   const cols = Object.values(ACTIVITY).map(([c]) => c)
   const stmt = db.prepare(`
     INSERT INTO activities (id, user_id, source, external_id, start_local, day, ${cols.join(', ')}, synced_at)
-    VALUES (?, ?, 'garmin', ?, ?, ?, ${cols.map(() => '?').join(', ')}, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ${cols.map(() => '?').join(', ')}, ?)
     ON CONFLICT (user_id, source, external_id) DO UPDATE SET
       start_local = excluded.start_local, day = excluded.day,
       ${cols.map((c) => `${c} = COALESCE(excluded.${c}, ${c})`).join(', ')},
@@ -188,7 +188,7 @@ function upsertActivities(db, userId, rows, now) {
     const start = localTs(a?.startLocal)
     if (!externalId || !start) continue
     const v = coerce(a, ACTIVITY) ?? Object.fromEntries(cols.map((c) => [c, null]))
-    stmt.run(randomUUID(), userId, externalId, start, start.slice(0, 10), ...cols.map((c) => v[c]), now)
+    stmt.run(randomUUID(), userId, source, externalId, start, start.slice(0, 10), ...cols.map((c) => v[c]), now)
     count++
   }
   return count
@@ -226,22 +226,23 @@ function upsertMeta(db, userId, meta, now) {
 }
 
 /**
- * Store a normalised Garmin payload:
+ * Store a normalised watch payload:
  *   { days?, sleep?, metrics?, activities?, records?, meta? }
  * `days` rows carry both the daily_activity fields and the daily_wellness
- * fields. Returns counts per kind.
+ * fields. `source` tags daily_activity and activities rows: 'garmin' (live
+ * sync, export import) or 'coros' (server/lib/coros.js). Returns counts per kind.
  */
-export function storeGarmin(db, userId, payload) {
+export function storeGarmin(db, userId, payload, { source = 'garmin' } = {}) {
   const list = (k) => (Array.isArray(payload?.[k]) ? payload[k] : [])
   const now = new Date().toISOString()
   return withTx(db, () => {
     const days = list('days')
     const counts = {
-      days: upsertDays(db, userId, 'daily_activity', days, ACTIVITY_DAY, now, { source: 'garmin' }),
+      days: upsertDays(db, userId, 'daily_activity', days, ACTIVITY_DAY, now, { source }),
       wellness: upsertDays(db, userId, 'daily_wellness', days, WELLNESS, now),
       sleep: upsertDays(db, userId, 'sleep_nights', list('sleep'), SLEEP, now),
       metrics: upsertDays(db, userId, 'fitness_metrics', list('metrics'), METRICS, now),
-      activities: upsertActivities(db, userId, list('activities'), now),
+      activities: upsertActivities(db, userId, list('activities'), now, source),
       records: upsertRecords(db, userId, list('records'), now),
     }
     upsertMeta(db, userId, payload?.meta, now)

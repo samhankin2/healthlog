@@ -29,9 +29,11 @@ import { registerImportRoutes } from './routes/imports.js'
 import { registerGarminRoutes } from './routes/garmin.js'
 import { registerLiftingRoutes } from './routes/lifting.js'
 import { registerCronometerRoutes } from './routes/cronometer.js'
+import { registerCorosRoutes } from './routes/coros.js'
 import { scheduleBackups } from './lib/backup.js'
 import { scheduleGarminSync } from './lib/garmin.js'
 import { scheduleCronometerSync } from './lib/cronometer.js'
+import { scheduleCorosSync } from './lib/coros.js'
 import { clientIp, requestsByIp } from './lib/ratelimit.js'
 
 const SERVICE = 'healthlog'
@@ -56,6 +58,7 @@ export function buildRouter() {
   registerGarminRoutes(router)
   registerLiftingRoutes(router)
   registerCronometerRoutes(router)
+  registerCorosRoutes(router)
   return router
 }
 
@@ -303,6 +306,7 @@ export function start() {
   const stopBackups = scheduleBackups(db)
   const stopGarmin = scheduleGarminSync(db)
   const stopCronometer = scheduleCronometerSync(db)
+  const stopCoros = scheduleCorosSync(db)
 
   const server = createServer()
   server.listen(port, host, () => {
@@ -314,6 +318,7 @@ export function start() {
     stopBackups()
     stopGarmin()
     stopCronometer()
+    stopCoros()
     server.close(() => {
       closeDb()
       process.exit(0)

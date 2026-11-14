@@ -56,6 +56,7 @@ server/               API — node:http + node:sqlite, zero runtime dependencies
   db.js auth.js ai.js lib/ routes/ cli.js   (cli.js: admin - stats, sql, backups, invites)
   lib/garminStore.js  the only writer of Garmin rows (live sync + export import)
   lib/cronometer.js   Cronometer food-diary sync (unofficial web API; keeps the session, never the password)
+  lib/coros.js        COROS watch sync over COROS's official MCP (OAuth; corosMcp.js client, corosParse.js text parsers)
 sync/
   garmin_sync.py      Garmin fetcher (python-garminconnect); spawned by server/lib/garmin.js
   requirements.txt    the pinned version — the only Python dependency
@@ -71,6 +72,7 @@ qa/                   smoke / API / browser checks
                       garmin-export-test.mjs <zip>: runs the browser importer on a real export
                       cronometer-test.mjs: Cronometer sync against a fake cronometer.com
                       cronometer-browser-test.mjs: the Settings card in headless Edge (after npm run build)
+                      coros-test.mjs: COROS OAuth + MCP sync against a fake COROS
                       lifting-browser-test.mjs: headless-Edge run of the gym logger (after npm run build)
                       progression-test.mjs: progression engine on realistic training histories
                       lift-analysis-test.mjs: analytics on synthetic logs with known answers
@@ -141,6 +143,13 @@ No `npm install` on the server: the API imports only Node built-ins
   account per day. Keep the per-user daily cap, the scheduled interval
   (minimum 2 h, nothing overnight) and the 429 backoff, and never store the
   Cronometer password — only the session (SPEC §6 "Cronometer").
+- **COROS: official MCP only.** Use the OAuth + MCP route (SPEC §6 "COROS").
+  Never ask for or store the COROS password, and do not go back to the
+  unofficial Training Hub or mobile APIs (the mobile login logs the user's
+  phone app out). Save a rotated refresh token the moment it arrives. The MCP
+  replies are text: tune `server/lib/corosParse.js` against
+  `scripts/hl coros-dump`, never guess a value into the wrong column. Keep the
+  scheduled interval (minimum 2 h, nothing overnight) and the 429 backoff.
 - **Do not restart Caddy in a loop.** Let's Encrypt rate-limits `sslip.io`;
   `bootstrap.sh` only restarts it when the Caddyfile actually changed.
 - **The deploy script self-refreshes** from `deploy/healthlog-deploy.sh` after a

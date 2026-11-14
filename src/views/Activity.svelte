@@ -101,7 +101,7 @@
 <div class="view view--activity">
   <header class="view-header">
     <h1 class="view-title">Activity</h1>
-    <p class="view-subtitle">Workouts and daily numbers from your Garmin watch.</p>
+    <p class="view-subtitle">Workouts and daily numbers from your watch.</p>
   </header>
 
   <section class="metric-card" aria-labelledby="garmin-sync-title">

@@ -5,6 +5,7 @@
   import ConfirmPanel from '../lib/panels/ConfirmPanel.svelte'
   import GarminSyncControl from '../lib/components/GarminSyncControl.svelte'
   import CronometerCard from '../lib/components/CronometerCard.svelte'
+  import CorosCard from '../lib/components/CorosCard.svelte'
   import { actions, app, navigate } from '../lib/state.svelte'
   import { api } from '../lib/api'
   import { logout } from '../lib/auth'
@@ -192,6 +193,17 @@
     <div class="metric-card-content">
       <p class="card-note">Steps, calories burned, resting heart rate, sleep and workouts from your watch. It syncs every {garmin?.syncIntervalHours ?? 3} hours from {garmin?.syncHour ?? 6}:00 to midnight, or whenever you press Sync now. Finished days are kept and only today (and yesterday, until noon) is fetched again.</p>
       <GarminSyncControl status={garmin} showHelp email={app.user?.email} onsynced={() => actions.loadDashboard()} />
+    </div>
+  </section>
+
+  <section class="metric-card settings-card" aria-labelledby="coros-title">
+    <div class="metric-card-header">
+      <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="activity" size={20} /></span><h2 class="metric-card-title" id="coros-title">COROS</h2></div>
+      <button class="button button--secondary compact-button" type="button" onclick={() => navigate('activity')}>Activities <Icon name="chevron-right" size={17} /></button>
+    </div>
+    <div class="metric-card-content">
+      <p class="card-note">Workouts, sleep, steps, calories burned, resting heart rate, overnight HRV, stress and VO₂ max from your COROS watch, through COROS's official connection for apps. Syncs every few hours during the day and re-reads the last 7 days. The first sync brings in 90 days of workouts and sleep; the other daily numbers only reach back about a week.</p>
+      <CorosCard onchanged={() => actions.loadDashboard()} />
     </div>
   </section>
 
