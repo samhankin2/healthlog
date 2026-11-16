@@ -1,31 +1,54 @@
 <script lang="ts">
   import type { BenchLog, BenchRun } from '../types'
-  import { ROLE_COLOR, ROLE_LABEL, fmtLatency, fmtSignedPct, modelLabel } from './bench'
+  import { niceTicks } from '../viz/scale'
+  import { ROLE_COLOR, ROLE_LABEL, fmtLatency, fmtSignedKcal, fmtSignedPct, modelLabel, type Unit } from './bench'
 
-  interface Props { logs: BenchLog[]; pageSize?: number }
-  let { logs, pageSize = 15 }: Props = $props()
+  interface Props { logs: BenchLog[]; unit: Unit; pageSize?: number }
+  let { logs, unit, pageSize = 15 }: Props = $props()
 
   let width = $state(0)
   let shown = $state(15)
   let hover = $state<{ log: string; i: number } | null>(null)
 
-  const R = 50 // ± % around the panel's median; further out is pinned to the edge
   const H = 34
   const PADX = 10
-  const x = (pct: number): number => PADX + ((Math.max(-R, Math.min(R, pct)) + R) / (2 * R)) * Math.max(1, width - 2 * PADX)
-  const TICKS = [-50, -25, -10, 0, 10, 25, 50]
 
-  interface Mark { kind: 'run' | 'logged' | 'ref'; label: string; role: string; pct: number; kcal: number; run?: BenchRun }
+  /**
+   * In kcal every meal shares ONE scale, so a 400 kcal disagreement on a
+   * dinner looks big and a 25 kcal one on a coffee looks small — which is
+   * what they mean for the day. The scale covers 95% of all gaps; the rest are
+   * pinned to the edge with an arrow. In % it is a fixed ±50%.
+   */
+  const R = $derived.by(() => {
+    if (unit === 'pct') return 50
+    const gaps = logs.flatMap((l) => l.runs.map((r) => Math.abs(r.devKcal ?? 0))).sort((a, b) => a - b)
+    const p95 = gaps[Math.floor(gaps.length * 0.95)] ?? 0
+    return niceTicks(0, Math.min(800, Math.max(100, p95)), 2).domain[1]
+  })
+  const x = (v: number): number => PADX + ((Math.max(-R, Math.min(R, v)) + R) / (2 * R)) * Math.max(1, width - 2 * PADX)
+  const TICKS = $derived(unit === 'pct' ? [-50, -25, -10, 0, 10, 25, 50] : [-R, -R / 2, 0, R / 2, R])
+  const BAND = $derived(unit === 'pct' ? 10 : 100)
+  const tickText = (t: number): string => {
+    if (t === 0) return width >= 520 ? 'median of all 7' : 'median'
+    const sign = t > 0 ? '+' : '−'
+    return unit === 'pct' ? `${sign}${Math.abs(t)}%` : `${sign}${Math.abs(t)} kcal`
+  }
+
+  interface Mark { kind: 'run' | 'ref'; label: string; role: string; v: number; pct: number; dk: number; kcal: number; run?: BenchRun }
   function marks(l: BenchLog): Mark[] {
     const out: Mark[] = []
     const c = l.consensusKcal
     if (!c) return out
     const order = (r: BenchRun): number => (r.role === 'a' || r.role === 'b' ? 1 : 0)
     for (const r of [...l.runs].sort((p, q) => order(p) - order(q))) {
-      if (r.kcal == null || r.devPct == null) continue
-      out.push({ kind: 'run', label: modelLabel(r.model), role: r.role, pct: r.devPct, kcal: r.kcal, run: r })
+      if (r.kcal == null || r.devPct == null || r.devKcal == null) continue
+      out.push({ kind: 'run', label: modelLabel(r.model), role: r.role, v: unit === 'pct' ? r.devPct : r.devKcal, pct: r.devPct, dk: r.devKcal, kcal: r.kcal, run: r })
     }
-    if (l.reference) out.push({ kind: 'ref', label: `Your ${l.reference.source}`, role: 'logged', pct: ((l.reference.kcal - c) / c) * 100, kcal: l.reference.kcal })
+    if (l.reference) {
+      const dk = l.reference.kcal - c
+      const pct = (dk / c) * 100
+      out.push({ kind: 'ref', label: `Your ${l.reference.source}`, role: 'logged', v: unit === 'pct' ? pct : dk, pct, dk, kcal: l.reference.kcal })
+    }
     return out
   }
 
@@ -34,7 +57,7 @@
     let best = -1
     let dist = Infinity
     ms.forEach((m, i) => {
-      const d = Math.abs(x(m.pct) - px)
+      const d = Math.abs(x(m.v) - px)
       if (d < dist) { dist = d; best = i }
     })
     hover = dist < 16 ? { log: l.id, i: best } : null
@@ -43,7 +66,7 @@
     if (!ms.length) return
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       e.preventDefault()
-      const sorted = ms.map((m, i) => ({ m, i })).sort((a, b) => a.m.pct - b.m.pct)
+      const sorted = ms.map((m, i) => ({ m, i })).sort((a, b) => a.m.v - b.m.v)
       const cur = hover?.log === l.id ? sorted.findIndex((s) => s.i === hover?.i) : -1
       const next = Math.max(0, Math.min(sorted.length - 1, cur + (e.key === 'ArrowRight' ? 1 : -1)))
       hover = { log: l.id, i: sorted[next].i }
@@ -60,7 +83,7 @@
 
 <div class="strips" bind:clientWidth={width}>
   <div class="axis" aria-hidden="true">
-    {#each TICKS.filter((t) => width >= 520 || Math.abs(t) !== 10) as t (t)}<span style:left="{x(t)}px">{t === 0 ? (width >= 520 ? 'median of all 7' : 'median') : `${t > 0 ? '+' : '−'}${Math.abs(t)}%`}</span>{/each}
+    {#each TICKS.filter((t) => width >= 520 || (unit === 'pct' ? Math.abs(t) !== 10 : Math.abs(t) !== R / 2)) as t (t)}<span style:left="{x(t)}px">{tickText(t)}</span>{/each}
   </div>
   {#each logs.slice(0, shown) as l (l.id)}
     {@const ms = marks(l)}
@@ -70,32 +93,30 @@
         <span class="when">{when(l.createdAt)}</span>
         <span class="text" title={l.text}>{l.text || 'Meal'}</span>
         <span class="meta">
-          {#if l.spreadPct != null}<span class="spread" class:wide={l.differed}>{Math.round(l.spreadPct)}% spread</span>{/if}
+          {#if l.spreadPct != null && l.spreadKcal != null}<span class="spread" class:wide={l.differed} title="Highest minus lowest estimate">{unit === 'kcal' ? `${Math.round(l.spreadKcal)} kcal apart` : `${Math.round(l.spreadPct)}% apart`}<small> · {unit === 'kcal' ? `${Math.round(l.spreadPct)}%` : `${Math.round(l.spreadKcal)} kcal`}</small></span>{/if}
           <span class="outcome" data-outcome={l.outcome}>{OUTCOME[l.outcome]}</span>
         </span>
       </header>
       {#if width > 0 && ms.length}
         <div class="strip">
-          <svg width={width} height={H} role="slider" tabindex="0" aria-label="Estimates for {l.text || 'this meal'}, relative to the median of all the models. Arrow keys step through them." aria-valuemin={0} aria-valuemax={ms.length - 1} aria-valuenow={hm ? hover?.i ?? 0 : 0} aria-valuetext={hm ? `${hm.label}: ${Math.round(hm.kcal)} kcal, ${fmtSignedPct(hm.pct)}` : `Median of the models ${Math.round(l.consensusKcal ?? 0)} kcal`} onpointermove={(e) => onmove(e, l, ms)} onpointerleave={() => (hover = null)} onkeydown={(e) => onkey(e, l, ms)} onblur={() => (hover = null)}>
-            <rect class="band" x={x(-10)} y="4" width={x(10) - x(-10)} height={H - 8} rx="4" />
+          <svg width={width} height={H} role="slider" tabindex="0" aria-label="Estimates for {l.text || 'this meal'}, relative to the median of all the models. Arrow keys step through them." aria-valuemin={0} aria-valuemax={ms.length - 1} aria-valuenow={hm ? hover?.i ?? 0 : 0} aria-valuetext={hm ? `${hm.label}: ${Math.round(hm.kcal)} kcal, ${fmtSignedKcal(hm.dk)}, ${fmtSignedPct(hm.pct)}` : `Median of the models ${Math.round(l.consensusKcal ?? 0)} kcal`} onpointermove={(e) => onmove(e, l, ms)} onpointerleave={() => (hover = null)} onkeydown={(e) => onkey(e, l, ms)} onblur={() => (hover = null)}>
+            <rect class="band" x={x(-BAND)} y="4" width={x(BAND) - x(-BAND)} height={H - 8} rx="4" />
             {#each TICKS as t (t)}<line class="grid" class:zero={t === 0} x1={x(t)} x2={x(t)} y1="2" y2={H - 2} />{/each}
             {#each ms as m, i (i)}
-              {@const cx = x(m.pct)}
+              {@const cx = x(m.v)}
               {@const dim = hm !== null && hover?.i !== i}
-              {#if m.kind === 'logged'}
-                <rect x={cx - 5} y={H / 2 - 5} width="10" height="10" transform="rotate(45 {cx} {H / 2})" fill={ROLE_COLOR.logged} stroke="var(--color-surface)" stroke-width="2" opacity={dim ? 0.35 : 1} />
-              {:else if m.kind === 'ref'}
+              {#if m.kind === 'ref'}
                 <circle {cx} cy={H / 2} r="9" fill="none" stroke="var(--color-text)" stroke-width="2" opacity={dim ? 0.35 : 1} />
               {:else}
                 <circle {cx} cy={H / 2} r={m.role === 'a' || m.role === 'b' ? 6 : 4.5} fill={ROLE_COLOR[m.role as keyof typeof ROLE_COLOR]} stroke="var(--color-surface)" stroke-width="2" opacity={dim ? 0.35 : m.role === 'bench' ? 0.85 : 1} />
               {/if}
-              {#if Math.abs(m.pct) > R}<text class="clip" x={cx} y={H - 1} text-anchor="middle">{m.pct > 0 ? '▸' : '◂'}</text>{/if}
+              {#if Math.abs(m.v) > R}<text class="clip" x={cx} y={H - 1} text-anchor="middle">{m.v > 0 ? '▸' : '◂'}</text>{/if}
             {/each}
           </svg>
           {#if hm}
-            <div class="tip" role="status" style:left="{Math.min(Math.max(x(hm.pct), 80), width - 80)}px">
+            <div class="tip" role="status" style:left="{Math.min(Math.max(x(hm.v), 90), width - 90)}px">
               <span class="tip-day">{hm.label}{hm.run ? ` · ${ROLE_LABEL[hm.run.role]}` : ''}</span>
-              <span><b>{Math.round(hm.kcal)} kcal</b> · {fmtSignedPct(hm.pct)} vs median</span>
+              <span><b>{Math.round(hm.kcal)} kcal</b> · {fmtSignedKcal(hm.dk)} ({fmtSignedPct(hm.pct)}) vs median</span>
               {#if hm.run?.proteinG != null}<span>{Math.round(hm.run.proteinG)} g protein · {fmtLatency(hm.run.latencyMs)}</span>{/if}
             </div>
           {/if}
@@ -105,17 +126,17 @@
         <summary>All {l.runs.length} estimates{#if l.consensusKcal} · median of the models {Math.round(l.consensusKcal)} kcal{/if}</summary>
         <div class="table-wrap">
           <table>
-            <thead><tr><th scope="col">Model</th><th scope="col">kcal</th><th scope="col">vs median</th><th scope="col">Protein</th><th scope="col">Meals</th><th scope="col">Time</th></tr></thead>
+            <thead><tr><th scope="col">Model</th><th scope="col">kcal</th><th scope="col">vs median</th><th scope="col">%</th><th scope="col">Protein</th><th scope="col">Meals</th><th scope="col">Time</th></tr></thead>
             <tbody>
-              {#if l.logged}<tr class="logged-row"><th scope="row">Proposed to you (A + B combined)</th><td>{Math.round(l.logged.kcal)}</td><td>{fmtSignedPct(l.loggedDevPct)}</td><td>{Math.round(l.logged.proteinG)} g</td><td></td><td></td></tr>{/if}
-              {#if l.reference}<tr class="logged-row"><th scope="row">Your {l.reference.source}</th><td>{Math.round(l.reference.kcal)}</td><td>{l.consensusKcal ? fmtSignedPct(((l.reference.kcal - l.consensusKcal) / l.consensusKcal) * 100) : '—'}</td><td>{Math.round(l.reference.proteinG)} g</td><td></td><td></td></tr>{/if}
+              {#if l.logged}<tr class="logged-row"><th scope="row">Proposed to you (A + B combined)</th><td>{Math.round(l.logged.kcal)}</td><td>{l.consensusKcal ? fmtSignedKcal(l.logged.kcal - l.consensusKcal) : '—'}</td><td>{fmtSignedPct(l.loggedDevPct)}</td><td>{Math.round(l.logged.proteinG)} g</td><td></td><td></td></tr>{/if}
+              {#if l.reference}<tr class="logged-row"><th scope="row">Your {l.reference.source}</th><td>{Math.round(l.reference.kcal)}</td><td>{l.consensusKcal ? fmtSignedKcal(l.reference.kcal - l.consensusKcal) : '—'}</td><td>{l.consensusKcal ? fmtSignedPct(((l.reference.kcal - l.consensusKcal) / l.consensusKcal) * 100) : '—'}</td><td>{Math.round(l.reference.proteinG)} g</td><td></td><td></td></tr>{/if}
               {#each l.runs as r (r.model)}
                 <tr>
                   <th scope="row"><span class="dot" style:background={ROLE_COLOR[r.role]} aria-hidden="true"></span>{modelLabel(r.model)}{#if r.role === 'a' || r.role === 'b'}&nbsp;<small>({r.role.toUpperCase()})</small>{/if}</th>
                   {#if r.kcal == null}
-                    <td colspan="5" class="err">failed — {r.error}</td>
+                    <td colspan="6" class="err">failed — {r.error}</td>
                   {:else}
-                    <td>{Math.round(r.kcal)}</td><td>{fmtSignedPct(r.devPct)}</td><td>{r.proteinG == null ? '—' : `${Math.round(r.proteinG)} g`}</td><td>{r.mealCount ?? '—'}</td><td>{fmtLatency(r.latencyMs)}</td>
+                    <td>{Math.round(r.kcal)}</td><td>{fmtSignedKcal(r.devKcal)}</td><td>{fmtSignedPct(r.devPct)}</td><td>{r.proteinG == null ? '—' : `${Math.round(r.proteinG)} g`}</td><td>{r.mealCount ?? '—'}</td><td>{fmtLatency(r.latencyMs)}</td>
                   {/if}
                 </tr>
               {/each}
@@ -144,6 +165,7 @@
   .text { min-width: 0; flex: 1 1 12rem; overflow: hidden; color: var(--color-text); text-overflow: ellipsis; white-space: nowrap; }
   .meta { display: flex; gap: var(--space-2); }
   .spread, .outcome { padding: 1px 8px; border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-text-muted); font-size: var(--text-xs); white-space: nowrap; }
+  .spread small { color: var(--color-text-subtle); font-weight: var(--weight-regular, 400); }
   .spread.wide { border-color: var(--color-text-muted); color: var(--color-text); font-weight: var(--weight-semibold); }
   .outcome[data-outcome='corrected'] { color: var(--color-text); }
   .strip { position: relative; touch-action: pan-y; }

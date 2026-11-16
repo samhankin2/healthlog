@@ -1080,8 +1080,15 @@ AI_BENCH_MODELS=off    # disable
   — each model against the median of the *other* models (leave-one-out, needs
   ≥3 valid estimates). Consensus measures agreement, not truth; a correction
   outranks it.
+- Every gap is reported in both **kcal and %** (`devKcal`/`devPct`,
+  `looDevKcal`/`looDevPct`, `refDevKcal`/`refDevPct`; per model
+  `medianAbsKcal`, `biasKcal`, `totalKcal` — the signed sum over all meals).
+  % overstates small items (50% of a 50 kcal coffee is 25 kcal), so the client
+  defaults to kcal.
 - A meal "differed" when the panel's spread (max − min) exceeds 20% of the
-  panel median.
+  panel median **and** 100 kcal.
+- "Logged value" (A and B reconciled) is still returned in `models`, but the
+  client does not rank it: it is not an independent estimate.
 - The client shows this at `#/models` (linked from Insights and Settings).
 - **Backfill:** `cli.js bench backfill` (`scripts/hl bench-backfill`) asks the
   panel about earlier original analyses, using each one's stored `prompt_text`.

@@ -6,7 +6,7 @@
  * actually logged is ink, and the background panel is one neutral grey with
  * direct labels. That keeps the charts at three hues however many models run.
  */
-import type { BenchModel, BenchRole, BenchStats } from '../types'
+import type { BenchModel, BenchRole, BenchRun, BenchStats } from '../types'
 
 export type Yardstick = 'consensus' | 'corrected'
 
@@ -70,25 +70,62 @@ export function rollingMedian(values: number[], window: number): number[] {
 /** The models, without the "Logged value" pseudo-entry (that is just A and B reconciled). */
 export const realModels = (models: BenchModel[]): BenchModel[] => models.filter((m) => m.role !== 'logged')
 
+/* ---- kcal vs % ---------------------------------------------------- */
+
+/**
+ * kcal answers "how much does this gap matter to my day" (50% of a 50 kcal
+ * coffee is 25 kcal; 40% of a 1000 kcal dinner is 400). % answers "how wrong
+ * relative to the meal". Every chart can show either.
+ */
+export type Unit = 'kcal' | 'pct'
+
+export const fmtKcal = (v: number | null | undefined): string =>
+  v == null || !Number.isFinite(v) ? '—' : `${Math.round(v).toLocaleString()} kcal`
+
+export const fmtSignedKcal = (v: number | null | undefined): string =>
+  v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(Math.round(v)).toLocaleString()} kcal`
+
+export const fmtGap = (v: number | null | undefined, unit: Unit): string => (unit === 'kcal' ? fmtKcal(v) : fmtPct(v, 1))
+export const fmtLean = (v: number | null | undefined, unit: Unit): string => (unit === 'kcal' ? fmtSignedKcal(v) : fmtSignedPct(v))
+
+/** Typical (median absolute) gap of a model, in the chosen unit. */
+export const gapOf = (s: BenchStats, unit: Unit): number | null => (unit === 'kcal' ? s.medianAbsKcal : s.medianAbsPct)
+/** Typical signed lean of a model, in the chosen unit. */
+export const leanOf = (s: BenchStats, unit: Unit): number | null => (unit === 'kcal' ? s.biasKcal : s.biasPct)
+
+/** One run's gap from the yardstick, in the chosen unit. */
+export function runGap(r: BenchRun | undefined, y: Yardstick, unit: Unit): number | null {
+  if (!r) return null
+  if (y === 'consensus') return unit === 'kcal' ? r.looDevKcal : r.looDevPct
+  return unit === 'kcal' ? r.refDevKcal : r.refDevPct
+}
+
+/** Models ranked by typical gap (closest first). */
+export function rankModels(models: BenchModel[], y: Yardstick, unit: Unit): BenchModel[] {
+  return realModels(models)
+    .filter((m) => statsFor(m, y).n > 0)
+    .sort((p, q) => (gapOf(statsFor(p, y), unit) ?? 1e9) - (gapOf(statsFor(q, y), unit) ?? 1e9))
+}
+
 /**
  * Headline: how far A and B drift from the other models (or from the user's
- * own corrections). Agreement is not truth, so the wording never says "accurate".
+ * own corrections), in kcal and %. Agreement is not truth, so it never says "accurate".
  */
-export function verdict(models: BenchModel[], y: Yardstick): { tone: 'good' | 'ok' | 'poor' | 'none'; text: string } {
-  const ranked = realModels(models)
-    .filter((m) => statsFor(m, y).n > 0)
-    .sort((p, q) => (statsFor(p, y).medianAbsPct ?? 999) - (statsFor(q, y).medianAbsPct ?? 999))
+export function verdict(models: BenchModel[], y: Yardstick, unit: Unit): { tone: 'good' | 'ok' | 'poor' | 'none'; text: string } {
+  const ranked = rankModels(models, y, unit)
   const a = ranked.find((m) => m.role === 'a')
   const b = ranked.find((m) => m.role === 'b')
   const sa = a ? statsFor(a, y) : null
   const sb = b ? statsFor(b, y) : null
-  if (!sa || !sb || sa.n < 3 || sb.n < 3 || sa.medianAbsPct == null || sb.medianAbsPct == null) {
+  if (!a || !b || !sa || !sb || sa.n < 3 || sb.n < 3 || sa.medianAbsPct == null || sb.medianAbsPct == null) {
     return { tone: 'none', text: y === 'corrected' ? 'Not enough corrected meals yet to compare against your own numbers.' : 'Log a few more meals and the comparison fills in here.' }
   }
-  const worst = Math.max(sa.medianAbsPct, sb.medianAbsPct)
   const ref = y === 'consensus' ? 'the other models' : 'your corrections'
+  const both = (s: BenchStats): string => `${fmtKcal(s.medianAbsKcal)} (${fmtPct(s.medianAbsPct)})`
   const text =
-    `On a typical meal, ${modelLabel(a!.model)} (A) is ${fmtPct(sa.medianAbsPct)} from ${ref} and ${modelLabel(b!.model)} (B) is ${fmtPct(sb.medianAbsPct)}` +
-    ` — ranked ${ranked.indexOf(a!) + 1} and ${ranked.indexOf(b!) + 1} of ${ranked.length} for ${y === 'consensus' ? 'staying close to the group' : 'matching what you corrected to'}.`
-  return { tone: worst <= 8 ? 'good' : worst <= 15 ? 'ok' : 'poor', text }
+    `On a typical meal, ${modelLabel(a.model)} (A) is ${both(sa)} from ${ref} and ${modelLabel(b.model)} (B) is ${both(sb)}` +
+    ` — ranked ${ranked.indexOf(a) + 1} and ${ranked.indexOf(b) + 1} of ${ranked.length} for ${y === 'consensus' ? 'staying close to the group' : 'matching what you corrected to'}.`
+  // Tone follows calories: what matters is how much it moves the day's total.
+  const worst = Math.max(sa.medianAbsKcal ?? 0, sb.medianAbsKcal ?? 0)
+  return { tone: worst <= 40 ? 'good' : worst <= 80 ? 'ok' : 'poor', text }
 }

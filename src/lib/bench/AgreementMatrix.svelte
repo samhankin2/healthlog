@@ -1,23 +1,26 @@
 <script lang="ts">
   import type { BenchModel, ModelBenchPayload } from '../types'
-  import { ROLE_COLOR, fmtPct, modelLabel } from './bench'
+  import { ROLE_COLOR, fmtPct, modelLabel, type Unit } from './bench'
 
-  interface Props { pairs: ModelBenchPayload['pairs']; models: BenchModel[] }
-  let { pairs, models }: Props = $props()
+  interface Props { pairs: ModelBenchPayload['pairs']; models: BenchModel[]; unit: Unit }
+  let { pairs, models, unit }: Props = $props()
 
   // Order: A, B, then the panel by accuracy — same order as the leaderboard.
   const order = $derived(models.filter((m) => m.role !== 'logged').map((m) => m.model).filter((m) => pairs.models.includes(m)))
   const idx = (m: string): number => pairs.models.indexOf(m)
-  const CAP = 30 // a 30% gap is already "different meal"; deeper shades add nothing
-  const shade = (pct: number | null): string =>
-    pct == null ? 'transparent' : `color-mix(in oklab, var(--viz-run) ${Math.round(8 + (Math.min(pct, CAP) / CAP) * 62)}%, var(--color-surface))`
+  // Past this gap the pair is describing a different meal; deeper shades add nothing.
+  const CAP = $derived(unit === 'kcal' ? 200 : 30)
+  const valOf = (c: { pct: number | null; kcal: number | null } | undefined): number | null => (c ? (unit === 'kcal' ? c.kcal : c.pct) : null)
+  const fmtVal = (v: number | null): string => (v == null ? '—' : unit === 'kcal' ? `${Math.round(v)}` : fmtPct(v))
+  const shade = (v: number | null): string =>
+    v == null ? 'transparent' : `color-mix(in oklab, var(--viz-run) ${Math.round(8 + (Math.min(v, CAP) / CAP) * 62)}%, var(--color-surface))`
   const roleOf = (m: string): BenchModel['role'] => models.find((x) => x.model === m)?.role ?? 'bench'
   const short = (m: string): string => modelLabel(m).split(' ')[0]
 </script>
 
 <div class="matrix-wrap">
   <table class="matrix">
-    <caption class="sr-only">Typical gap between each pair of models, as a percentage of the larger estimate</caption>
+    <caption class="sr-only">Typical gap between each pair of models, {unit === 'kcal' ? 'in kcal' : 'as a percentage of the larger estimate'}</caption>
     <thead>
       <tr>
         <td></td>
@@ -33,7 +36,7 @@
             {#if row === col}
               <td class="self" aria-label="same model">·</td>
             {:else}
-              <td style:background={shade(c?.pct ?? null)} title="{modelLabel(row)} vs {modelLabel(col)}: typically {fmtPct(c?.pct, 1)} apart over {c?.n ?? 0} meals" class:strong={(c?.pct ?? 0) > CAP * 0.6}>{c?.n ? fmtPct(c.pct) : '—'}</td>
+              <td style:background={shade(valOf(c))} title="{modelLabel(row)} vs {modelLabel(col)}: typically {Math.round(c?.kcal ?? 0)} kcal ({fmtPct(c?.pct, 1)}) apart over {c?.n ?? 0} meals" class:strong={(valOf(c) ?? 0) > CAP * 0.6}>{c?.n ? fmtVal(valOf(c)) : '—'}</td>
             {/if}
           {/each}
         </tr>
@@ -42,7 +45,7 @@
   </table>
 </div>
 <div class="scale" aria-hidden="true">
-  <span>agree</span><span class="ramp"></span><span>{CAP}%+ apart</span>
+  <span>agree</span><span class="ramp"></span><span>{CAP}{unit === 'kcal' ? ' kcal' : '%'}+ apart</span>
 </div>
 
 <style>

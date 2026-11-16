@@ -4,11 +4,11 @@
   import SegmentedControl from '../lib/components/SegmentedControl.svelte'
   import StatTile from '../lib/components/StatTile.svelte'
   import AccuracyBars from '../lib/bench/AccuracyBars.svelte'
-  import BiasMap from '../lib/bench/BiasMap.svelte'
+  import LeanBars from '../lib/bench/LeanBars.svelte'
   import AgreementMatrix from '../lib/bench/AgreementMatrix.svelte'
   import DriftChart from '../lib/bench/DriftChart.svelte'
   import DisagreementStrips from '../lib/bench/DisagreementStrips.svelte'
-  import { ROLE_COLOR, fmtPct, fmtSignedPct, modelLabel, realModels, statsFor, verdict, type Yardstick } from '../lib/bench/bench'
+  import { ROLE_COLOR, fmtGap, fmtKcal, fmtPct, fmtSignedKcal, gapOf, modelLabel, rankModels, statsFor, verdict, type Unit, type Yardstick } from '../lib/bench/bench'
   import { api } from '../lib/api'
   import { navigate } from '../lib/state.svelte'
   import type { ModelBenchPayload } from '../lib/types'
@@ -21,11 +21,17 @@
     { value: '3650', label: 'All' },
   ]
 
-  function stored(): string {
-    try { return localStorage.getItem(RANGE_KEY) ?? '90' } catch { return '90' }
+  const UNIT_KEY = 'healthlog.models.unit'
+  function stored(key: string, fallback: string): string {
+    try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
   }
 
-  let range = $state(stored())
+  let range = $state(stored(RANGE_KEY, '90'))
+  let unit = $state<Unit>(stored(UNIT_KEY, 'kcal') === 'pct' ? 'pct' : 'kcal')
+  function setUnit(next: string): void {
+    unit = next === 'pct' ? 'pct' : 'kcal'
+    try { localStorage.setItem(UNIT_KEY, unit) } catch { /* private mode */ }
+  }
   let data = $state<ModelBenchPayload | null>(null)
   let loading = $state(true)
   let loadError = $state('')
@@ -52,13 +58,23 @@
     void load()
   }
 
-  const v = $derived(data ? verdict(data.models, yardstick) : null)
-  const ranked = $derived(data ? realModels(data.models).filter((m) => statsFor(m, yardstick).n > 0).sort((a, b) => (statsFor(a, yardstick).medianAbsPct ?? 999) - (statsFor(b, yardstick).medianAbsPct ?? 999)) : [])
+  const v = $derived(data ? verdict(data.models, yardstick, unit) : null)
+  const ranked = $derived(data ? rankModels(data.models, yardstick, unit) : [])
   const primary = (role: 'a' | 'b') => data?.models.find((m) => m.role === role) ?? null
-  const shownLogs = $derived(data ? (onlyDiffered ? data.logs.filter((l) => l.differed || l.outcome === 'corrected') : data.logs) : [])
+  // Big splits are listed biggest calorie gap first: those are the ones that move a day's total.
+  const shownLogs = $derived(
+    data
+      ? onlyDiffered
+        ? data.logs.filter((l) => l.differed || l.outcome === 'corrected').sort((p, q) => (q.spreadKcal ?? 0) - (p.spreadKcal ?? 0))
+        : data.logs
+      : [],
+  )
   const refWord = $derived(yardstick === 'consensus' ? 'the other models' : 'your corrections')
 
-  /** Plain-English notes on A and B: which way they lean, and who sits closest to the group. */
+  /**
+   * Plain-English notes on A and B: which way they lean, and what that adds up
+   * to in calories over every meal — the number that matters for a diary.
+   */
   const notes = $derived.by(() => {
     if (!data || !ranked.length) return []
     const out: string[] = []
@@ -66,13 +82,16 @@
       const m = primary(role)
       if (!m) continue
       const s = statsFor(m, yardstick)
-      if (!s.n || s.biasPct == null) continue
-      out.push(Math.abs(s.biasPct) >= 5
-        ? `${modelLabel(m.model)} (${role.toUpperCase()}) tends to come in ${fmtSignedPct(s.biasPct)} ${s.biasPct < 0 ? 'lower' : 'higher'} than ${refWord}.`
-        : `${modelLabel(m.model)} (${role.toUpperCase()}) has no real lean either way against ${refWord}.`)
+      if (!s.n || s.biasKcal == null || s.totalKcal == null) continue
+      const name = `${modelLabel(m.model)} (${role.toUpperCase()})`
+      if (Math.abs(s.meanKcal ?? 0) < 15) {
+        out.push(`${name} has no real lean against ${refWord}: over ${s.n} meals it nets out at ${fmtSignedKcal(s.totalKcal)}.`)
+      } else {
+        out.push(`${name} would have logged ${fmtKcal(Math.abs(s.totalKcal))} ${s.totalKcal < 0 ? 'less' : 'more'} than ${refWord} over ${s.n} meals — about ${fmtKcal(Math.abs(s.meanKcal ?? 0))} a meal.`)
+      }
     }
     const best = ranked[0]
-    if (best && best.role === 'bench') out.push(`Closest to ${refWord} so far: ${modelLabel(best.model)} (${fmtPct(statsFor(best, yardstick).medianAbsPct, 1)} typical drift).`)
+    if (best && best.role === 'bench') out.push(`Closest to ${refWord} so far: ${modelLabel(best.model)} (${fmtGap(gapOf(statsFor(best, yardstick), unit), unit)} typical drift).`)
     return out
   })
 </script>
@@ -112,19 +131,22 @@
       </section>
 
       <div class="tiles">
-        <StatTile label="A vs B" value={fmtPct(data.totals.medianAbPct, 1)} sublabel="typical gap between your two models" />
-        <StatTile label="Spread of all 7" value={fmtPct(data.totals.medianSpreadPct)} sublabel="highest minus lowest, typical meal" />
-        <StatTile label="Big splits" value={data.totals.differed} sublabel="of {data.totals.logs} meals spread over {data.config.differPct}%" />
+        <StatTile label="A vs B" value={unit === 'kcal' ? fmtKcal(data.totals.medianAbKcal) : fmtPct(data.totals.medianAbPct, 1)} sublabel="typical gap between your two models ({unit === 'kcal' ? fmtPct(data.totals.medianAbPct) : fmtKcal(data.totals.medianAbKcal)})" />
+        <StatTile label="Spread of all 7" value={unit === 'kcal' ? fmtKcal(data.totals.medianSpreadKcal) : fmtPct(data.totals.medianSpreadPct)} sublabel="highest minus lowest on a typical meal" />
+        <StatTile label="Big splits" value={data.totals.differed} sublabel="of {data.totals.logs} meals: over {data.config.differKcal} kcal and {data.config.differPct}% apart" />
         <StatTile label="You corrected" value={data.totals.corrected} sublabel="meals where you changed the numbers" />
       </div>
 
       <div class="controls">
-        <SegmentedControl
-          ariaLabel="Compare each model against"
-          options={[{ value: 'consensus', label: 'vs the other models' }, { value: 'corrected', label: `vs your corrections (${data.totals.corrected})` }]}
-          value={yardstick}
-          onchange={(next) => { if (next === 'consensus' || data?.totals.corrected) yardstick = next as Yardstick }}
-        />
+        <div class="switches">
+          <SegmentedControl
+            ariaLabel="Compare each model against"
+            options={[{ value: 'consensus', label: 'vs the other models' }, { value: 'corrected', label: `vs your corrections (${data.totals.corrected})` }]}
+            value={yardstick}
+            onchange={(next) => { if (next === 'consensus' || data?.totals.corrected) yardstick = next as Yardstick }}
+          />
+          <SegmentedControl ariaLabel="Show gaps in" options={[{ value: 'kcal', label: 'kcal' }, { value: 'pct', label: '%' }]} value={unit} onchange={setUnit} />
+        </div>
         <ul class="legend" aria-label="Legend">
           <li><span class="key" style:background={ROLE_COLOR.a} aria-hidden="true"></span>A · {modelLabel(data.config.modelA)}</li>
           <li><span class="key" style:background={ROLE_COLOR.b} aria-hidden="true"></span>B · {modelLabel(data.config.modelB)}</li>
@@ -135,29 +157,30 @@
       <p class="caveat">
         {#if yardstick === 'consensus'}
           Each model is compared with the median of the <i>other six</i> on the same meal, so it never counts towards its own score.
+          {unit === 'kcal' ? 'Gaps in kcal show what a miss does to your day: 50% off a coffee is small, 40% off a big dinner is not.' : 'Gaps in % are relative to the meal, so small items can look dramatic — switch to kcal for what it costs your day.'}
         {:else}
           Only meals where you changed the numbers{data.totals.corrected < 5 ? ` — just ${data.totals.corrected} so far, so treat this as early` : ''}. Your corrected total is the reference.
         {/if}
       </p>
 
       <section class="card pad" aria-labelledby="drift-title">
-        <div class="chart-head"><h2 id="drift-title">A and B, meal by meal</h2><span class="sub">% from {yardstick === 'consensus' ? 'the median of the other six models' : 'what you corrected to'} · grey bar = where the other five landed · lines = last-7 median · band = ±10%</span></div>
-        <DriftChart logs={data.logs} {yardstick} />
+        <div class="chart-head"><h2 id="drift-title">A and B, meal by meal</h2><span class="sub">{unit === 'kcal' ? 'kcal' : '%'} from {yardstick === 'consensus' ? 'the median of the other six models' : 'what you corrected to'} · grey bar = where the other five landed · lines = last-7 median · band = ±{unit === 'kcal' ? '100 kcal' : '10%'}</span></div>
+        <DriftChart logs={data.logs} {yardstick} {unit} />
       </section>
 
       <section class="card pad" aria-labelledby="board-title">
-        <div class="chart-head"><h2 id="board-title">Typical drift, by model</h2><span class="sub">median % from {refWord} · lower means closer</span></div>
-        <AccuracyBars models={data.models} {yardstick} />
+        <div class="chart-head"><h2 id="board-title">Typical drift, by model</h2><span class="sub">median {unit === 'kcal' ? 'kcal' : '%'} from {refWord} · lower means closer</span></div>
+        <AccuracyBars models={data.models} {yardstick} {unit} />
       </section>
 
       <div class="grid-2">
         <section class="card pad" aria-labelledby="bias-title">
-          <div class="chart-head"><h2 id="bias-title">Which way they lean</h2><span class="sub">left comes in lower than {refWord}, right higher; the box is within ±5% lean and 8% drift</span></div>
-          <BiasMap models={data.models} {yardstick} />
+          <div class="chart-head"><h2 id="bias-title">Which way they lean</h2><span class="sub">typical meal vs {refWord}{unit === 'kcal' ? '; right column = what it adds up to over all meals' : ''}</span></div>
+          <LeanBars models={data.models} {yardstick} {unit} />
         </section>
         <section class="card pad" aria-labelledby="pairs-title">
-          <div class="chart-head"><h2 id="pairs-title">Who agrees with whom</h2><span class="sub">typical gap between each pair</span></div>
-          <AgreementMatrix pairs={data.pairs} models={data.models} />
+          <div class="chart-head"><h2 id="pairs-title">Who agrees with whom</h2><span class="sub">typical gap between each pair{unit === 'kcal' ? ', kcal' : ''}</span></div>
+          <AgreementMatrix pairs={data.pairs} models={data.models} {unit} />
         </section>
       </div>
 
@@ -166,8 +189,8 @@
           <h2 id="split-title">Every meal, every model</h2>
           <SegmentedControl ariaLabel="Which meals" options={[{ value: 'diff', label: 'Big splits & corrections' }, { value: 'all', label: `All ${data.logs.length}` }]} value={onlyDiffered ? 'diff' : 'all'} onchange={(next) => (onlyDiffered = next === 'diff')} />
         </div>
-        <p class="sub">One row per meal. Each dot is one model’s estimate, placed by how far it is from the median of all seven. Open a row for the numbers.</p>
-        <DisagreementStrips logs={shownLogs} />
+        <p class="sub">One row per meal{onlyDiffered ? ', biggest calorie gap first' : ''}. Each dot is one model’s estimate, placed by how far it is from the median of all seven{unit === 'kcal' ? ' — every row on the same kcal scale, so big meals with big gaps stand out' : ''}. Open a row for the numbers.</p>
+        <DisagreementStrips logs={shownLogs} {unit} />
       </section>
 
       <p class="method">
@@ -197,6 +220,8 @@
   .verdict ul { margin: 0; padding-left: 1.1rem; color: var(--color-text-muted); font-size: var(--text-sm); }
   .tiles { display: grid; gap: var(--space-3); grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .controls { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+  .switches { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .switches > :global(.segmented-control) { width: auto; flex: 0 0 auto; }
   .legend { display: flex; margin: 0; padding: 0; gap: var(--space-2) var(--space-4); flex-wrap: wrap; list-style: none; color: var(--color-text-muted); font-size: var(--text-xs); }
   .legend li { display: flex; align-items: center; gap: 6px; }
   .key { width: 10px; height: 10px; border-radius: 50%; }

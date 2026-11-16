@@ -137,6 +137,15 @@ async function run() {
     // Summary.
     ok('totals', bench.totals.logs === 3 && bench.totals.corrected === 2 && bench.totals.accepted === 1, JSON.stringify(bench.totals))
     ok('totals: typical spread and A-B gap', typeof bench.totals.medianSpreadPct === 'number' && typeof bench.totals.medianAbPct === 'number', JSON.stringify(bench.totals))
+    ok('totals: kcal spread and A-B gap', typeof bench.totals.medianSpreadKcal === 'number' && typeof bench.totals.medianAbKcal === 'number')
+    const anyLog = bench.logs.find((l) => l.consensusKcal)
+    ok('runs carry kcal gaps', anyLog.runs.every((x) => typeof x.devKcal === 'number' && typeof x.looDevKcal === 'number'))
+    ok('kcal gap = kcal - median', anyLog.runs.every((x) => Math.abs(x.devKcal - (x.kcal - anyLog.consensusKcal)) < 0.2))
+    ok('log carries spreadKcal', typeof anyLog.spreadKcal === 'number')
+    ok('a split needs a kcal gap too', bench.logs.every((l) => !l.differed || l.spreadKcal >= bench.config.differKcal))
+    const aStats = bench.models.find((m) => m.role === 'a').consensus
+    ok('model stats in kcal', typeof aStats.medianAbsKcal === 'number' && typeof aStats.totalKcal === 'number' && typeof aStats.biasKcal === 'number')
+    ok('pair cells carry kcal', typeof bench.pairs.cells[0][1].kcal === 'number')
     const names = bench.models.map((m) => m.model)
     ok('summary has 7 models + logged', bench.models.length === 8 && names.includes('Logged value'), names.join(','))
     ok('summary order: logged, a, b first', bench.models[0].role === 'logged' && bench.models[1].role === 'a' && bench.models[2].role === 'b')

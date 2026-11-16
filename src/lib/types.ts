@@ -657,13 +657,16 @@ export interface BenchRun {
   confidence: number | null
   latencyMs: number | null
   error: string | null
-  /** % from the whole panel's median. */
+  /** % / kcal from the whole panel's median. */
   devPct: number | null
-  /** % from the median of the other models (what the score uses). */
+  devKcal: number | null
+  /** % / kcal from the median of the other models (what the score uses). */
   looDevPct: number | null
+  looDevKcal: number | null
   looProteinDiffG: number | null
-  /** % from the user's corrected total, when there is one. */
+  /** % / kcal from the user's corrected total, when there is one. */
   refDevPct: number | null
+  refDevKcal: number | null
 }
 
 export interface BenchLog {
@@ -676,7 +679,9 @@ export interface BenchLog {
   loggedProteinDiffG: number | null
   consensusKcal: number | null
   spreadPct: number | null
+  spreadKcal: number | null
   abPct: number | null
+  abKcal: number | null
   differed: boolean
   outcome: 'unsaved' | 'accepted' | 'corrected'
   reference: { kcal: number; proteinG: number; source: 'chat correction' | 'edited meal' } | null
@@ -689,6 +694,12 @@ export interface BenchStats {
   biasPct: number | null
   within10: number | null
   within20: number | null
+  medianAbsKcal: number | null
+  biasKcal: number | null
+  meanKcal: number | null
+  /** Signed sum over every meal counted: kcal more (+) or fewer (−) than the yardstick. */
+  totalKcal: number | null
+  within100Kcal: number | null
 }
 
 export interface BenchModel {
@@ -705,10 +716,13 @@ export interface BenchModel {
 }
 
 export interface ModelBenchPayload {
-  config: { enabled: boolean; paused: boolean; modelA: string; modelB: string; bench: string[]; differPct: number }
+  config: { enabled: boolean; paused: boolean; modelA: string; modelB: string; bench: string[]; differPct: number; differKcal: number }
   days: number
-  totals: { logs: number; benchmarked: number; differed: number; corrected: number; accepted: number; medianSpreadPct: number | null; medianAbPct: number | null }
+  totals: {
+    logs: number; benchmarked: number; differed: number; corrected: number; accepted: number
+    medianSpreadPct: number | null; medianAbPct: number | null; medianSpreadKcal: number | null; medianAbKcal: number | null
+  }
   models: BenchModel[]
-  pairs: { models: string[]; cells: { pct: number | null; n: number }[][] }
+  pairs: { models: string[]; cells: { pct: number | null; kcal: number | null; n: number }[][] }
   logs: BenchLog[]
 }

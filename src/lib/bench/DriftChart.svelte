@@ -1,22 +1,27 @@
 <script lang="ts">
   import type { BenchLog, BenchRun } from '../types'
   import { linear, linePath, niceTicks } from '../viz/scale'
-  import { ROLE_COLOR, fmtSignedPct, modelLabel, rollingMedian, type Yardstick } from './bench'
+  import { ROLE_COLOR, fmtLean, fmtSignedKcal, fmtSignedPct, modelLabel, rollingMedian, runGap, type Unit, type Yardstick } from './bench'
 
   /**
    * Meal by meal: how far A and B each sit from the other models (or from the
    * user's correction), drawn over the range the five background models span
    * on the same yardstick. The lines are 7-meal rolling medians.
    */
-  interface Props { logs: BenchLog[]; yardstick: Yardstick }
-  let { logs, yardstick }: Props = $props()
+  interface Props { logs: BenchLog[]; yardstick: Yardstick; unit: Unit }
+  let { logs, yardstick, unit }: Props = $props()
 
   let width = $state(0)
   let hover = $state<number | null>(null)
   const height = 240
   const PAD = { top: 12, right: 44, bottom: 22, left: 8 }
 
-  const devOf = (r: BenchRun | undefined): number | null => (r ? (yardstick === 'consensus' ? r.looDevPct : r.refDevPct) : null)
+  const devOf = (r: BenchRun | undefined): number | null => runGap(r, yardstick, unit)
+  // The shaded "close enough" band: ±10% of the meal, or ±100 kcal.
+  const BAND = $derived(unit === 'kcal' ? 100 : 10)
+  const fmtTick = (t: number): string => (unit === 'kcal' ? `${t > 0 ? '+' : ''}${t}` : `${t > 0 ? '+' : ''}${t}%`)
+  const both = (r: BenchRun | undefined): string =>
+    r ? (yardstick === 'consensus' ? `${fmtSignedKcal(r.looDevKcal)} · ${fmtSignedPct(r.looDevPct)}` : `${fmtSignedKcal(r.refDevKcal)} · ${fmtSignedPct(r.refDevPct)}`) : '—'
 
   // Oldest → newest; a meal needs both A and B on the chosen yardstick.
   const pts = $derived(
@@ -32,7 +37,12 @@
   )
   const trendA = $derived(rollingMedian(pts.map((p) => p.va), 7))
   const trendB = $derived(rollingMedian(pts.map((p) => p.vb), 7))
-  const lim = $derived(Math.min(80, Math.max(20, ...pts.flatMap((p) => [Math.abs(p.va), Math.abs(p.vb), Math.abs(p.lo ?? 0), Math.abs(p.hi ?? 0)]))))
+  const lim = $derived.by(() => {
+    const vals = pts.flatMap((p) => [Math.abs(p.va), Math.abs(p.vb), Math.abs(p.lo ?? 0), Math.abs(p.hi ?? 0)]).sort((a, b) => a - b)
+    // Scale to the 95th percentile so one wild estimate doesn't flatten the rest (it is pinned to the edge).
+    const p95 = vals[Math.floor(vals.length * 0.95)] ?? 0
+    return unit === 'kcal' ? Math.min(800, Math.max(150, p95)) : Math.min(80, Math.max(20, p95))
+  })
   const yt = $derived(niceTicks(-lim, lim, 4))
   const y = $derived(linear(yt.domain, [height - PAD.bottom, PAD.top]))
   const x = $derived(linear([0, Math.max(1, pts.length - 1)], [PAD.left + 6, Math.max(PAD.left + 7, width - PAD.right - 6)]))
@@ -58,11 +68,11 @@
 
 <div class="viz" bind:clientWidth={width} style:height="{height}px">
   {#if width > 0 && pts.length}
-    <svg {width} {height} role="slider" tabindex="0" aria-label="Model A and model B against {ref}, meal by meal" aria-valuemin={0} aria-valuemax={pts.length - 1} aria-valuenow={hover ?? pts.length - 1} aria-valuetext={hp ? `${fmtDate(hp.l.createdAt)} ${hp.l.text}: A ${fmtSignedPct(hp.va)}, B ${fmtSignedPct(hp.vb)}` : `Recent trend: A ${fmtSignedPct(trendA[trendA.length - 1])}, B ${fmtSignedPct(trendB[trendB.length - 1])}`} onpointermove={onmove} onpointerleave={() => (hover = null)} onkeydown={onkey} onblur={() => (hover = null)}>
-      <rect class="band" x={PAD.left} y={y(10)} width={width - PAD.left - PAD.right} height={y(-10) - y(10)} />
+    <svg {width} {height} role="slider" tabindex="0" aria-label="Model A and model B against {ref}, meal by meal" aria-valuemin={0} aria-valuemax={pts.length - 1} aria-valuenow={hover ?? pts.length - 1} aria-valuetext={hp ? `${fmtDate(hp.l.createdAt)} ${hp.l.text}: A ${fmtLean(hp.va, unit)}, B ${fmtLean(hp.vb, unit)}` : `Recent trend: A ${fmtLean(trendA[trendA.length - 1], unit)}, B ${fmtLean(trendB[trendB.length - 1], unit)}`} onpointermove={onmove} onpointerleave={() => (hover = null)} onkeydown={onkey} onblur={() => (hover = null)}>
+      <rect class="band" x={PAD.left} y={y(BAND)} width={width - PAD.left - PAD.right} height={y(-BAND) - y(BAND)} />
       {#each yt.ticks as t (t)}
         <line class="grid" class:zero={t === 0} x1={PAD.left} x2={width - PAD.right} y1={y(t)} y2={y(t)} />
-        <text class="tick" x={width - PAD.right + 6} y={y(t)} dy="0.32em">{t > 0 ? '+' : ''}{t}%</text>
+        <text class="tick" x={width - PAD.right + 6} y={y(t)} dy="0.32em">{fmtTick(t)}</text>
       {/each}
       <text class="tick" x={PAD.left} y={height - 4}>{fmtDate(pts[0].l.createdAt)}</text>
       <text class="tick" x={width - PAD.right} y={height - 4} text-anchor="end">{fmtDate(pts[pts.length - 1].l.createdAt)}</text>
@@ -85,9 +95,10 @@
     {#if hp}
       <div class="tip" role="status" style:left="{Math.min(Math.max(x(hover ?? 0), 100), width - 100)}px">
         <span class="tip-day">{fmtDate(hp.l.createdAt)} · {hp.l.text.slice(0, 40)}{hp.l.text.length > 40 ? '…' : ''}</span>
-        <span><i class="dot" style:background={ROLE_COLOR.a}></i>A {modelLabel(hp.a?.model ?? '')} <b>{Math.round(hp.a?.kcal ?? 0)} kcal · {fmtSignedPct(hp.va)}</b></span>
-        <span><i class="dot" style:background={ROLE_COLOR.b}></i>B {modelLabel(hp.b?.model ?? '')} <b>{Math.round(hp.b?.kcal ?? 0)} kcal · {fmtSignedPct(hp.vb)}</b></span>
-        {#if hp.lo != null && hp.hi != null}<span><i class="dot" style:background={ROLE_COLOR.bench}></i>Other five: {fmtSignedPct(hp.lo)} to {fmtSignedPct(hp.hi)}</span>{/if}
+        <span><i class="dot" style:background={ROLE_COLOR.a}></i>A {modelLabel(hp.a?.model ?? '')}: {Math.round(hp.a?.kcal ?? 0)} kcal <b>{both(hp.a)}</b></span>
+        <span><i class="dot" style:background={ROLE_COLOR.b}></i>B {modelLabel(hp.b?.model ?? '')}: {Math.round(hp.b?.kcal ?? 0)} kcal <b>{both(hp.b)}</b></span>
+        {#if hp.lo != null && hp.hi != null}<span><i class="dot" style:background={ROLE_COLOR.bench}></i>Other five: {fmtLean(hp.lo, unit)} to {fmtLean(hp.hi, unit)}</span>{/if}
+        {#if hp.l.consensusKcal}<span>Median of all 7: {Math.round(hp.l.consensusKcal)} kcal</span>{/if}
         {#if yardstick === 'corrected' && hp.l.reference}<span>Your {hp.l.reference.source}: <b>{Math.round(hp.l.reference.kcal)} kcal</b></span>{/if}
       </div>
     {/if}

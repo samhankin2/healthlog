@@ -32,6 +32,8 @@ const PAUSE_MS = 60 * 60 * 1000
 const LIMIT_RE = /HTTP (402|429)\b/
 /** A panel estimate this far apart (spread / consensus) counts as a disagreement. */
 export const DIFFER_PCT = 20
+/** …and only if the models are also this many kcal apart (a ratio alone overstates small items). */
+export const DIFFER_KCAL = 100
 /** Saved total differing from the proposed total by more than this is a user correction. */
 const EDIT_TOLERANCE = { abs: 10, pct: 0.03 }
 
@@ -367,20 +369,27 @@ export function buildBench(db, userId, { days = 90, now = Date.now() } = {}) {
     const valid = runs.filter((r) => r.kcal != null && r.kcal > 0)
     const consensus = valid.length >= 3 ? median(valid.map((r) => r.kcal)) : null
     const consensusProtein = valid.length >= 3 ? median(valid.map((r) => r.proteinG)) : null
+    // Every gap is kept both ways: % says how wrong relative to the meal,
+    // kcal says how much it actually matters to the day's total.
     for (const r of runs) {
       r.devPct = r.kcal != null && consensus ? r1(pct(r.kcal, consensus)) : null
+      r.devKcal = r.kcal != null && consensus ? r1(r.kcal - consensus) : null
       const others = valid.filter((o) => o !== r)
       const loo = r.kcal != null && others.length >= 2 ? median(others.map((o) => o.kcal)) : null
       r.looDevPct = loo ? r1(pct(r.kcal, loo)) : null
+      r.looDevKcal = loo ? r1(r.kcal - loo) : null
       const looP = r.proteinG != null && others.length >= 2 ? median(others.map((o) => o.proteinG)) : null
       r.looProteinDiffG = looP != null ? r1(r.proteinG - looP) : null
       r.refDevPct = reference && r.kcal != null ? r1(pct(r.kcal, reference.kcal)) : null
+      r.refDevKcal = reference && r.kcal != null ? r1(r.kcal - reference.kcal) : null
     }
     const kcals = valid.map((r) => r.kcal)
-    const spreadPct = consensus && kcals.length >= 2 ? r1(((Math.max(...kcals) - Math.min(...kcals)) / consensus) * 100) : null
+    const spreadKcal = consensus && kcals.length >= 2 ? r1(Math.max(...kcals) - Math.min(...kcals)) : null
+    const spreadPct = spreadKcal != null ? r1((spreadKcal / consensus) * 100) : null
     const runA = runs.find((r) => r.role === 'a')
     const runB = runs.find((r) => r.role === 'b')
-    const abPct = runA?.kcal && runB?.kcal ? r1((Math.abs(runA.kcal - runB.kcal) / Math.max(runA.kcal, runB.kcal)) * 100) : null
+    const abKcal = runA?.kcal && runB?.kcal ? r1(Math.abs(runA.kcal - runB.kcal)) : null
+    const abPct = abKcal != null ? r1((abKcal / Math.max(runA.kcal, runB.kcal)) * 100) : null
 
     logs.push({
       id: a.id,
@@ -392,8 +401,11 @@ export function buildBench(db, userId, { days = 90, now = Date.now() } = {}) {
       loggedProteinDiffG: proposed && consensusProtein != null ? r1(proposed.protein_g - consensusProtein) : null,
       consensusKcal: r1(consensus),
       spreadPct,
+      spreadKcal,
       abPct,
-      differed: spreadPct != null && spreadPct > DIFFER_PCT,
+      abKcal,
+      // A split has to matter in calories, not just in ratio: 50% of a 50 kcal coffee is not a split.
+      differed: spreadPct != null && spreadPct > DIFFER_PCT && spreadKcal >= DIFFER_KCAL,
       outcome,
       reference,
       runs: runs.sort((x, y) => order(x.role) - order(y.role) || x.model.localeCompare(y.model)),
@@ -402,7 +414,7 @@ export function buildBench(db, userId, { days = 90, now = Date.now() } = {}) {
 
   const models = summarise(logs)
   return {
-    config: { enabled: cfg.enabled, paused: benchPaused(), modelA: cfg.modelA, modelB: cfg.modelB, bench: cfg.models, differPct: DIFFER_PCT },
+    config: { enabled: cfg.enabled, paused: benchPaused(), modelA: cfg.modelA, modelB: cfg.modelB, bench: cfg.models, differPct: DIFFER_PCT, differKcal: DIFFER_KCAL },
     days,
     totals: {
       logs: logs.length,
@@ -413,6 +425,8 @@ export function buildBench(db, userId, { days = 90, now = Date.now() } = {}) {
       // How far apart the models are on a typical meal.
       medianSpreadPct: r1(median(logs.map((l) => l.spreadPct).filter((x) => x != null))),
       medianAbPct: r1(median(logs.map((l) => l.abPct).filter((x) => x != null))),
+      medianSpreadKcal: r1(median(logs.map((l) => l.spreadKcal).filter((x) => x != null))),
+      medianAbKcal: r1(median(logs.map((l) => l.abKcal).filter((x) => x != null))),
     },
     models,
     pairs: pairMatrix(logs, models.filter((m) => m.role !== 'logged').map((m) => m.model)),
@@ -423,15 +437,29 @@ export function buildBench(db, userId, { days = 90, now = Date.now() } = {}) {
 const ROLE_ORDER = { logged: 0, a: 1, b: 2, bench: 3, other: 4 }
 const order = (role) => ROLE_ORDER[role] ?? 9
 
-function stats(devs) {
-  const v = devs.filter((d) => d != null && Number.isFinite(d))
-  if (!v.length) return { n: 0, medianAbsPct: null, biasPct: null, within10: null, within20: null }
+/**
+ * Summary of one model's gaps. `pcts` and `kcals` are parallel (same runs).
+ * `totalKcal` is the signed sum: how many kcal more (or fewer) this model
+ * would have put in the diary than the yardstick, over every meal counted.
+ */
+function stats(pcts, kcals = []) {
+  const v = pcts.filter((d) => d != null && Number.isFinite(d))
+  const k = kcals.filter((d) => d != null && Number.isFinite(d))
+  const kcalPart = {
+    medianAbsKcal: k.length ? r1(median(k.map(Math.abs))) : null,
+    biasKcal: k.length ? r1(median(k)) : null,
+    meanKcal: k.length ? r1(k.reduce((s, x) => s + x, 0) / k.length) : null,
+    totalKcal: k.length ? Math.round(k.reduce((s, x) => s + x, 0)) : null,
+    within100Kcal: k.length ? r1((k.filter((d) => Math.abs(d) <= 100).length / k.length) * 100) : null,
+  }
+  if (!v.length) return { n: 0, medianAbsPct: null, biasPct: null, within10: null, within20: null, ...kcalPart }
   return {
     n: v.length,
     medianAbsPct: r1(median(v.map(Math.abs))),
     biasPct: r1(median(v)),
     within10: r1((v.filter((d) => Math.abs(d) <= 10).length / v.length) * 100),
     within20: r1((v.filter((d) => Math.abs(d) <= 20).length / v.length) * 100),
+    ...kcalPart,
   }
 }
 
@@ -454,8 +482,8 @@ function summarise(logs) {
       failures,
       failRate: r1((failures / runs.length) * 100),
       medianLatencyMs: lat.length ? Math.round(median(lat)) : null,
-      consensus: stats(runs.map((r) => r.looDevPct)),
-      corrected: stats(runs.map((r) => r.refDevPct)),
+      consensus: stats(runs.map((r) => r.looDevPct), runs.map((r) => r.looDevKcal)),
+      corrected: stats(runs.map((r) => r.refDevPct), runs.map((r) => r.refDevKcal)),
       proteinMedianAbsG: r1(median(runs.map((r) => r.looProteinDiffG).filter((x) => x != null).map(Math.abs))),
     }
   })
@@ -468,8 +496,8 @@ function summarise(logs) {
     failures: 0,
     failRate: 0,
     medianLatencyMs: null,
-    consensus: stats(withLogged.map((l) => l.loggedDevPct)),
-    corrected: stats(withLogged.map((l) => l.loggedRefDevPct)),
+    consensus: stats(withLogged.map((l) => l.loggedDevPct), withLogged.map((l) => (l.loggedDevPct != null && l.consensusKcal ? r1(l.logged.kcal - l.consensusKcal) : null))),
+    corrected: stats(withLogged.map((l) => l.loggedRefDevPct), withLogged.map((l) => (l.reference ? r1(l.logged.kcal - l.reference.kcal) : null))),
     proteinMedianAbsG: r1(median(withLogged.map((l) => l.loggedProteinDiffG).filter((x) => x != null).map(Math.abs))),
   })
   return out.sort((x, y) => order(x.role) - order(y.role) || (x.consensus.medianAbsPct ?? 999) - (y.consensus.medianAbsPct ?? 999))
@@ -479,14 +507,18 @@ function summarise(logs) {
 function pairMatrix(logs, models) {
   const cells = models.map((ma) =>
     models.map((mb) => {
-      if (ma === mb) return { pct: 0, n: 0 }
+      if (ma === mb) return { pct: 0, kcal: 0, n: 0 }
       const gaps = []
+      const kgaps = []
       for (const l of logs) {
         const ka = l.runs.find((r) => r.model === ma)?.kcal
         const kb = l.runs.find((r) => r.model === mb)?.kcal
-        if (ka > 0 && kb > 0) gaps.push((Math.abs(ka - kb) / Math.max(ka, kb)) * 100)
+        if (ka > 0 && kb > 0) {
+          gaps.push((Math.abs(ka - kb) / Math.max(ka, kb)) * 100)
+          kgaps.push(Math.abs(ka - kb))
+        }
       }
-      return { pct: r1(median(gaps)), n: gaps.length }
+      return { pct: r1(median(gaps)), kcal: r1(median(kgaps)), n: gaps.length }
     }),
   )
   return { models, cells }
