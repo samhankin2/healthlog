@@ -707,7 +707,7 @@ export interface BenchModel {
 export interface ModelBenchPayload {
   config: { enabled: boolean; paused: boolean; modelA: string; modelB: string; bench: string[]; differPct: number }
   days: number
-  totals: { logs: number; benchmarked: number; differed: number; corrected: number; accepted: number }
+  totals: { logs: number; benchmarked: number; differed: number; corrected: number; accepted: number; medianSpreadPct: number | null; medianAbPct: number | null }
   models: BenchModel[]
   pairs: { models: string[]; cells: { pct: number | null; n: number }[][] }
   logs: BenchLog[]

@@ -188,7 +188,7 @@
 
   <section class="metric-card settings-card" aria-labelledby="ai-models-title">
     <div class="metric-card-header">
-      <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="sparkles" size={20} /></span><h2 class="metric-card-title" id="ai-models-title">AI model accuracy</h2></div>
+      <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="sparkles" size={20} /></span><h2 class="metric-card-title" id="ai-models-title">AI model comparison</h2></div>
       <button class="button button--secondary compact-button" type="button" onclick={() => navigate('models')}>Open <Icon name="chevron-right" size={17} /></button>
     </div>
     <div class="metric-card-content">

@@ -25,7 +25,6 @@
       if (r.kcal == null || r.devPct == null) continue
       out.push({ kind: 'run', label: modelLabel(r.model), role: r.role, pct: r.devPct, kcal: r.kcal, run: r })
     }
-    if (l.logged && l.loggedDevPct != null) out.push({ kind: 'logged', label: 'Logged', role: 'logged', pct: l.loggedDevPct, kcal: l.logged.kcal })
     if (l.reference) out.push({ kind: 'ref', label: `Your ${l.reference.source}`, role: 'logged', pct: ((l.reference.kcal - c) / c) * 100, kcal: l.reference.kcal })
     return out
   }
@@ -61,7 +60,7 @@
 
 <div class="strips" bind:clientWidth={width}>
   <div class="axis" aria-hidden="true">
-    {#each TICKS.filter((t) => width >= 520 || Math.abs(t) !== 10) as t (t)}<span style:left="{x(t)}px">{t === 0 ? (width >= 520 ? 'panel median' : 'median') : `${t > 0 ? '+' : '−'}${Math.abs(t)}%`}</span>{/each}
+    {#each TICKS.filter((t) => width >= 520 || Math.abs(t) !== 10) as t (t)}<span style:left="{x(t)}px">{t === 0 ? (width >= 520 ? 'median of all 7' : 'median') : `${t > 0 ? '+' : '−'}${Math.abs(t)}%`}</span>{/each}
   </div>
   {#each logs.slice(0, shown) as l (l.id)}
     {@const ms = marks(l)}
@@ -77,7 +76,7 @@
       </header>
       {#if width > 0 && ms.length}
         <div class="strip">
-          <svg width={width} height={H} role="slider" tabindex="0" aria-label="Estimates for {l.text || 'this meal'}, relative to the panel median. Arrow keys step through them." aria-valuemin={0} aria-valuemax={ms.length - 1} aria-valuenow={hm ? hover?.i ?? 0 : 0} aria-valuetext={hm ? `${hm.label}: ${Math.round(hm.kcal)} kcal, ${fmtSignedPct(hm.pct)}` : `Panel median ${Math.round(l.consensusKcal ?? 0)} kcal`} onpointermove={(e) => onmove(e, l, ms)} onpointerleave={() => (hover = null)} onkeydown={(e) => onkey(e, l, ms)} onblur={() => (hover = null)}>
+          <svg width={width} height={H} role="slider" tabindex="0" aria-label="Estimates for {l.text || 'this meal'}, relative to the median of all the models. Arrow keys step through them." aria-valuemin={0} aria-valuemax={ms.length - 1} aria-valuenow={hm ? hover?.i ?? 0 : 0} aria-valuetext={hm ? `${hm.label}: ${Math.round(hm.kcal)} kcal, ${fmtSignedPct(hm.pct)}` : `Median of the models ${Math.round(l.consensusKcal ?? 0)} kcal`} onpointermove={(e) => onmove(e, l, ms)} onpointerleave={() => (hover = null)} onkeydown={(e) => onkey(e, l, ms)} onblur={() => (hover = null)}>
             <rect class="band" x={x(-10)} y="4" width={x(10) - x(-10)} height={H - 8} rx="4" />
             {#each TICKS as t (t)}<line class="grid" class:zero={t === 0} x1={x(t)} x2={x(t)} y1="2" y2={H - 2} />{/each}
             {#each ms as m, i (i)}
@@ -96,19 +95,19 @@
           {#if hm}
             <div class="tip" role="status" style:left="{Math.min(Math.max(x(hm.pct), 80), width - 80)}px">
               <span class="tip-day">{hm.label}{hm.run ? ` · ${ROLE_LABEL[hm.run.role]}` : ''}</span>
-              <span><b>{Math.round(hm.kcal)} kcal</b> · {fmtSignedPct(hm.pct)} vs panel</span>
+              <span><b>{Math.round(hm.kcal)} kcal</b> · {fmtSignedPct(hm.pct)} vs median</span>
               {#if hm.run?.proteinG != null}<span>{Math.round(hm.run.proteinG)} g protein · {fmtLatency(hm.run.latencyMs)}</span>{/if}
             </div>
           {/if}
         </div>
       {/if}
       <details>
-        <summary>All {l.runs.length} estimates{#if l.consensusKcal} · panel median {Math.round(l.consensusKcal)} kcal{/if}</summary>
+        <summary>All {l.runs.length} estimates{#if l.consensusKcal} · median of the models {Math.round(l.consensusKcal)} kcal{/if}</summary>
         <div class="table-wrap">
           <table>
-            <thead><tr><th scope="col">Model</th><th scope="col">kcal</th><th scope="col">vs panel</th><th scope="col">Protein</th><th scope="col">Meals</th><th scope="col">Time</th></tr></thead>
+            <thead><tr><th scope="col">Model</th><th scope="col">kcal</th><th scope="col">vs median</th><th scope="col">Protein</th><th scope="col">Meals</th><th scope="col">Time</th></tr></thead>
             <tbody>
-              {#if l.logged}<tr class="logged-row"><th scope="row">Logged</th><td>{Math.round(l.logged.kcal)}</td><td>{fmtSignedPct(l.loggedDevPct)}</td><td>{Math.round(l.logged.proteinG)} g</td><td></td><td></td></tr>{/if}
+              {#if l.logged}<tr class="logged-row"><th scope="row">Proposed to you (A + B combined)</th><td>{Math.round(l.logged.kcal)}</td><td>{fmtSignedPct(l.loggedDevPct)}</td><td>{Math.round(l.logged.proteinG)} g</td><td></td><td></td></tr>{/if}
               {#if l.reference}<tr class="logged-row"><th scope="row">Your {l.reference.source}</th><td>{Math.round(l.reference.kcal)}</td><td>{l.consensusKcal ? fmtSignedPct(((l.reference.kcal - l.consensusKcal) / l.consensusKcal) * 100) : '—'}</td><td>{Math.round(l.reference.proteinG)} g</td><td></td><td></td></tr>{/if}
               {#each l.runs as r (r.model)}
                 <tr>

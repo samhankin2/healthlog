@@ -136,6 +136,7 @@ async function run() {
 
     // Summary.
     ok('totals', bench.totals.logs === 3 && bench.totals.corrected === 2 && bench.totals.accepted === 1, JSON.stringify(bench.totals))
+    ok('totals: typical spread and A-B gap', typeof bench.totals.medianSpreadPct === 'number' && typeof bench.totals.medianAbPct === 'number', JSON.stringify(bench.totals))
     const names = bench.models.map((m) => m.model)
     ok('summary has 7 models + logged', bench.models.length === 8 && names.includes('Logged value'), names.join(','))
     ok('summary order: logged, a, b first', bench.models[0].role === 'logged' && bench.models[1].role === 'a' && bench.models[2].role === 'b')

@@ -51,7 +51,7 @@
     insights: 'Insights',
     advanced: 'Advanced insights',
     lifting: 'Lifting',
-    models: 'AI model accuracy',
+    models: 'AI model comparison',
   }
 
   let booting = $state(isAuthenticated())

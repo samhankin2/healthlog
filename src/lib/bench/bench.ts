@@ -67,19 +67,28 @@ export function rollingMedian(values: number[], window: number): number[] {
   })
 }
 
-/** One-sentence answer to "are the two I use accurate enough?". */
+/** The models, without the "Logged value" pseudo-entry (that is just A and B reconciled). */
+export const realModels = (models: BenchModel[]): BenchModel[] => models.filter((m) => m.role !== 'logged')
+
+/**
+ * Headline: how far A and B drift from the other models (or from the user's
+ * own corrections). Agreement is not truth, so the wording never says "accurate".
+ */
 export function verdict(models: BenchModel[], y: Yardstick): { tone: 'good' | 'ok' | 'poor' | 'none'; text: string } {
-  const logged = models.find((m) => m.role === 'logged')
-  const s = logged ? statsFor(logged, y) : null
-  if (!s || s.n < 3 || s.medianAbsPct == null) {
-    return { tone: 'none', text: y === 'corrected' ? 'Not enough corrected meals yet — the panel comparison fills in faster.' : 'Log a few more meals and the comparison fills in here.' }
+  const ranked = realModels(models)
+    .filter((m) => statsFor(m, y).n > 0)
+    .sort((p, q) => (statsFor(p, y).medianAbsPct ?? 999) - (statsFor(q, y).medianAbsPct ?? 999))
+  const a = ranked.find((m) => m.role === 'a')
+  const b = ranked.find((m) => m.role === 'b')
+  const sa = a ? statsFor(a, y) : null
+  const sb = b ? statsFor(b, y) : null
+  if (!sa || !sb || sa.n < 3 || sb.n < 3 || sa.medianAbsPct == null || sb.medianAbsPct == null) {
+    return { tone: 'none', text: y === 'corrected' ? 'Not enough corrected meals yet to compare against your own numbers.' : 'Log a few more meals and the comparison fills in here.' }
   }
-  const ref = y === 'consensus' ? 'the seven-model consensus' : 'your corrected numbers'
-  if (s.medianAbsPct <= 8 && (s.within10 ?? 0) >= 65) {
-    return { tone: 'good', text: `Accurate enough. What HealthLog logs is typically ${fmtPct(s.medianAbsPct)} from ${ref}, and within 10% on ${fmtPct(s.within10)} of meals.` }
-  }
-  if (s.medianAbsPct <= 15) {
-    return { tone: 'ok', text: `Mostly fine. Logged values are typically ${fmtPct(s.medianAbsPct)} from ${ref}; within 10% on ${fmtPct(s.within10)} of meals. Check the meals below where they split.` }
-  }
-  return { tone: 'poor', text: `Worth a look. Logged values are typically ${fmtPct(s.medianAbsPct)} from ${ref} — only ${fmtPct(s.within10)} land within 10%.` }
+  const worst = Math.max(sa.medianAbsPct, sb.medianAbsPct)
+  const ref = y === 'consensus' ? 'the other models' : 'your corrections'
+  const text =
+    `On a typical meal, ${modelLabel(a!.model)} (A) is ${fmtPct(sa.medianAbsPct)} from ${ref} and ${modelLabel(b!.model)} (B) is ${fmtPct(sb.medianAbsPct)}` +
+    ` — ranked ${ranked.indexOf(a!) + 1} and ${ranked.indexOf(b!) + 1} of ${ranked.length} for ${y === 'consensus' ? 'staying close to the group' : 'matching what you corrected to'}.`
+  return { tone: worst <= 8 ? 'good' : worst <= 15 ? 'ok' : 'poor', text }
 }

@@ -410,6 +410,9 @@ export function buildBench(db, userId, { days = 90, now = Date.now() } = {}) {
       differed: logs.filter((l) => l.differed).length,
       corrected: logs.filter((l) => l.outcome === 'corrected').length,
       accepted: logs.filter((l) => l.outcome === 'accepted').length,
+      // How far apart the models are on a typical meal.
+      medianSpreadPct: r1(median(logs.map((l) => l.spreadPct).filter((x) => x != null))),
+      medianAbPct: r1(median(logs.map((l) => l.abPct).filter((x) => x != null))),
     },
     models,
     pairs: pairMatrix(logs, models.filter((m) => m.role !== 'logged').map((m) => m.model)),

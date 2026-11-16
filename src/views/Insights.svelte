@@ -330,7 +330,7 @@
     </button>
     <button class="adv-link" type="button" onclick={() => navigate('models')}>
       <span class="adv-icon" aria-hidden="true"><Icon name="target" size={20} /></span>
-      <span class="adv-copy"><b>AI model accuracy</b><span>How the two calorie models compare with five others — and every meal where they disagreed.</span></span>
+      <span class="adv-copy"><b>AI model comparison</b><span>How far your two calorie models drift from five others, meal by meal.</span></span>
       <Icon name="chevron-right" size={20} />
     </button>
 
