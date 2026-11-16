@@ -16,6 +16,7 @@ import { chatMessagePayload } from '../lib/shape.js'
 import { analysisPayload, runAnalysis, userTextFromPrompt } from '../ai.js'
 import { findMeal, insertMeal } from '../lib/meals.js'
 import { chatByUser } from '../lib/ratelimit.js'
+import { recordPrimaryRuns, startBench } from '../lib/modelBench.js'
 
 /** In-memory idempotency cache: `${userId}|${key}` → {at, body}. */
 const replyCache = new Map()
@@ -253,8 +254,8 @@ export function registerChatRoutes(router) {
 
     db.prepare(
       `INSERT INTO analyses (id, user_id, meal_id, prompt_text, model_a, model_b, result_a, result_b,
-                             reconciled, comparison, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                             reconciled, comparison, error, revises_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       analysisId,
       user.id,
@@ -267,7 +268,9 @@ export function registerChatRoutes(router) {
       JSON.stringify(result.reconciled),
       result.comparison,
       result.error,
+      previous ? String(reviseId) : null,
     )
+    recordPrimaryRuns(db, analysisId, user.id, result)
 
     const analysisRow = db.prepare('SELECT * FROM analyses WHERE id = ?').get(analysisId)
 
@@ -286,5 +289,10 @@ export function registerChatRoutes(router) {
     }
     if (cacheKey) cacheSet(cacheKey, payload)
     sendJson(res, 200, payload)
+
+    // Background only: the benchmark panel sees the same prompt, after the reply
+    // has gone. Corrections are skipped — they carry the earlier answer, and they
+    // are what the original analysis is scored against.
+    if (!previous) startBench(db, { analysisId, userId: user.id, promptText: result.promptText, userMessage: analysisMessage })
   })
 }

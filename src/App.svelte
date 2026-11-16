@@ -7,6 +7,7 @@
   import type { Route, User } from './lib/types'
   import type { IconName } from './lib/icons'
   import { showToast } from './lib/toast.svelte'
+  import { loadSharing, resetSharing } from './lib/sharing.svelte'
   import Button from './lib/components/Button.svelte'
   import EmptyState from './lib/components/EmptyState.svelte'
   import Icon from './lib/components/Icon.svelte'
@@ -22,6 +23,7 @@
   import Insights from './views/Insights.svelte'
   import AdvancedInsights from './views/AdvancedInsights.svelte'
   import Lifting from './views/Lifting.svelte'
+  import Models from './views/Models.svelte'
 
   // `railOnly` tabs appear in the desktop side rail but not the mobile bottom
   // bar, which holds six buttons at most. Lifting is in the bar because it is
@@ -49,6 +51,7 @@
     insights: 'Insights',
     advanced: 'Advanced insights',
     lifting: 'Lifting',
+    models: 'AI model accuracy',
   }
 
   let booting = $state(isAuthenticated())
@@ -107,6 +110,22 @@
     else booting = false
   })
 
+  // Meals a partner shared: fetched once signed in, and again each time the
+  // app comes back to the foreground, so they appear as soon as it is opened.
+  const signedInId = $derived(app.loaded ? (app.user?.id ?? null) : null)
+  $effect(() => {
+    if (!signedInId) {
+      resetSharing()
+      return
+    }
+    void loadSharing()
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void loadSharing()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  })
+
   $effect(() => {
     document.title = app.user ? `${TITLES[current]} · HealthLog` : 'Sign in · HealthLog'
   })
@@ -129,7 +148,7 @@
         class="tab-button"
         type="button"
         data-tab={tab.id}
-        aria-current={current === tab.id || (tab.id === 'insights' && current === 'advanced') ? 'page' : 'false'}
+        aria-current={current === tab.id || (tab.id === 'insights' && (current === 'advanced' || current === 'models')) ? 'page' : 'false'}
         onclick={() => navigate(tab.id)}
       >
         <Icon name={tab.icon} size={22} />
@@ -211,6 +230,8 @@
           <AdvancedInsights />
         {:else if current === 'lifting'}
           <Lifting />
+        {:else if current === 'models'}
+          <Models />
         {/if}
       </main>
     </div>

@@ -16,11 +16,13 @@ await build({
   root: ROOT, configFile: false, logLevel: 'silent',
   build: {
     outDir: out, emptyOutDir: true, minify: false,
-    lib: { entry: { lifting: path.join(ROOT, 'src/lib/lifting.ts'), progression: path.join(ROOT, 'src/lib/progression.ts') }, formats: ['es'] },
+    lib: { entry: { lifting: path.join(ROOT, 'src/lib/lifting.ts'), progression: path.join(ROOT, 'src/lib/progression.ts'), fatigue: path.join(ROOT, 'src/lib/fatigue.ts'), sides: path.join(ROOT, 'src/lib/sides.ts') }, formats: ['es'] },
   },
 })
 const L = await import(pathToFileURL(path.join(out, 'lifting.js')).href)
 const P = await import(pathToFileURL(path.join(out, 'progression.js')).href)
+const F = await import(pathToFileURL(path.join(out, 'fatigue.js')).href)
+const S = await import(pathToFileURL(path.join(out, 'sides.js')).href)
 
 let pass = 0
 let fail = 0
@@ -31,7 +33,9 @@ const ok = (name, cond, detail = '') => {
 /* ---------- fixtures ---------- */
 const day0 = '2026-09-01'
 const shift = (d, n) => { const t = new Date(`${d}T00:00:00Z`); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10) }
-const ex = (over = {}) => ({ id: 'ex1', name: 'Bench press', muscle: 'chest', equipment: 'barbell', incrementKg: null, repMin: null, repMax: null, archived: false, ...over })
+// Most cases pin 5–8 so they test the rules, not the defaults; `auto` clears it.
+const ex = (over = {}) => ({ id: 'ex1', name: 'Bench press', muscle: 'chest', equipment: 'barbell', incrementKg: null, repMin: 5, repMax: 8, archived: false, ...over })
+const auto = { repMin: null, repMax: null }
 let n = 0
 /** sessions: [[weight, [reps...], rpe?|'F'], ...] one per session, 3 days apart. */
 function history(e, sessions, gap = 3) {
@@ -53,19 +57,19 @@ function plan(e, sessions, { gap = 3, bw = noBw, todayGap } = {}) {
 const show = (t) => (t ? `${t.kind}: ${P.fmtPlan(t, { equipment: 'barbell' })} — ${t.note}` : 'null')
 
 /* ---------- ranges ---------- */
-ok('range: barbell compound 5–8', JSON.stringify(P.defaultRange(ex())) === '{"lo":5,"hi":8}')
-ok('range: lateral raise is isolation 10–15', P.defaultRange(ex({ name: 'Lateral raise', muscle: 'shoulders', equipment: 'dumbbell' })).lo === 10)
-ok('range: dumbbell press 8–12', P.defaultRange(ex({ name: 'Dumbbell bench press', equipment: 'dumbbell' })).lo === 8)
+ok('range: default 6–12 for a barbell lift', JSON.stringify(P.defaultRange(ex())) === '{"lo":6,"hi":12}')
+ok('range: default 6–12 for curls and core too', ['Dumbbell curl', 'Hanging leg raise', 'Dumbbell bench press'].every((name) => JSON.stringify(P.defaultRange(ex({ name, equipment: 'dumbbell' }))) === '{"lo":6,"hi":12}'))
+ok('range: lateral raises 6–15', ['Lateral raise', 'Cable lateral raise'].every((name) => JSON.stringify(P.defaultRange(ex({ name, muscle: 'shoulders', equipment: 'dumbbell' }))) === '{"lo":6,"hi":15}'))
 ok('range: user setting wins', plan(ex({ repMin: 3, repMax: 5 }), [[100, [5, 5, 5]]]).range.hi === 5)
 {
-  // Someone doing 5×5 on a dumbbell lift (default 8–12) gets a range that fits.
-  const t = plan(ex({ name: 'Dumbbell row', muscle: 'back', equipment: 'dumbbell' }), [[40, [5, 5, 5]], [40, [5, 5, 5]], [40, [5, 5, 5]]])
-  ok('range: adapts to habitual 5s', t.range.lo === 5, JSON.stringify(t.range))
+  // Someone doing triples (default 6–12) gets a range that fits.
+  const t = plan(ex({ name: 'Dumbbell row', muscle: 'back', equipment: 'dumbbell', ...auto }), [[40, [3, 3, 3]], [40, [3, 3, 3]], [40, [3, 3, 3]]])
+  ok('range: adapts to habitual 3s', t.range.lo === 3, JSON.stringify(t.range))
 }
 {
   // Climbing reps inside the range must not drag the range upward.
-  const t = plan(ex(), [[80, [6, 6, 6]], [80, [7, 7, 6]], [80, [8, 8, 7]], [80, [8, 8, 8]]])
-  ok('range: no upward drift', t.range.lo === 5 && t.range.hi === 8, JSON.stringify(t.range))
+  const t = plan(ex(auto), [[80, [8, 8, 8]], [80, [10, 9, 9]], [80, [12, 11, 11]], [80, [13, 12, 12]]])
+  ok('range: no upward drift', t.range.lo === 6 && t.range.hi === 12, JSON.stringify(t.range))
 }
 
 /* ---------- add reps ---------- */
@@ -97,10 +101,10 @@ ok('range: user setting wins', plan(ex({ repMin: 3, repMax: 5 }), [[100, [5, 5, 
   ok('load: bigger jump stays inside the range', Math.min(...t.reps) >= 5, show(t))
 }
 {
-  // 10 kg dumbbell lateral raise, 2 kg step = +20 %: 15 reps predict far fewer at 12.
-  const lat = ex({ name: 'Lateral raise', muscle: 'shoulders', equipment: 'dumbbell' })
+  // 10 kg dumbbell lateral raise, 2 kg step = +20 %: 15 reps predict about 7 at 12, inside 6–15.
+  const lat = ex({ name: 'Lateral raise', muscle: 'shoulders', equipment: 'dumbbell', ...auto })
   const t = plan(lat, [[10, [15, 15, 15]]])
-  ok('load: big relative step on a light dumbbell is flagged', t.kind === 'load' ? /big step|fewer/i.test(t.note + t.why.join(' ')) : /big jump/i.test(t.note), show(t))
+  ok('load: a dumbbell step that stays in a 6–15 range is taken', t.kind === 'load' && t.weightKg === 12 && t.reps[0] >= 6 && t.reps[0] <= 8, show(t))
 }
 {
   const t = plan(ex(), [[[100, [5]], [85, [8, 8]]], [[100, [8]], [85, [8, 8]]]])
@@ -149,7 +153,7 @@ ok('range: user setting wins', plan(ex({ repMin: 3, repMax: 5 }), [[100, [5, 5, 
 
 /* ---------- bodyweight ---------- */
 {
-  const pu = ex({ name: 'Pull-up', muscle: 'back', equipment: 'bodyweight' })
+  const pu = ex({ name: 'Pull-up', muscle: 'back', equipment: 'bodyweight', ...auto })
   const t = plan(pu, [[0, [8, 7, 6]]])
   ok('bodyweight: no weigh-ins → reps progression', t.kind === 'reps' && t.weightKg === 0 && t.reps.join() === '8,7,7', show(t))
   const t2 = plan(pu, [[0, [12, 12, 12]]])
@@ -182,6 +186,93 @@ ok('range: user setting wins', plan(ex({ repMin: 3, repMax: 5 }), [[100, [5, 5, 
   const mk = (name, status) => ({ exercise: ex({ name }), status, lastDay: '2026-09-28', sessions: [1, 2, 3, 4] })
   ok('deload: 3 of 5 stuck → suggest', P.deloadAdvice([mk('a', 'stalled'), mk('b', 'regressing'), mk('c', 'stalled'), mk('d', 'progressing'), mk('e', 'steady')], today)?.stuck.length === 3)
   ok('deload: 1 of 5 stuck → no', P.deloadAdvice([mk('a', 'stalled'), mk('b', 'progressing'), mk('c', 'steady'), mk('d', 'progressing'), mk('e', 'steady')], today) === null)
+}
+
+/* ---------- exercise order (fatigue) ---------- */
+{
+  const bench = ex({ id: 'bench', name: 'Bench press' })
+  const ohp = ex({ id: 'ohp', name: 'Overhead press', muscle: 'shoulders' })
+  const squat = ex({ id: 'sq', name: 'Back squat', muscle: 'quads' })
+  const exMap = new Map([bench, ohp, squat].map((e) => [e.id, e]))
+  ok('fatigue: bench tires overhead press', F.overlap(bench, ohp) > 0.4 && F.overlap(bench, ohp) < 0.7, String(F.overlap(bench, ohp)))
+  ok('fatigue: squat does not tire bench', F.overlap(squat, bench) === 0)
+
+  const t0 = Date.parse('2026-09-01T18:00:00Z')
+  const at = (min) => new Date(t0 + min * 60000).toISOString()
+  let k = 0
+  const sets = (exId, w, reps, startMin) => reps.map((r, i) => ({ id: `f${k++}`, exerciseId: exId, weightKg: w, reps: r, rpe: null, kind: 'working', doneAt: at(startMin + i * 3) }))
+  /** One workout: [first, second] lifts, stored in display order (OHP block first) whatever was lifted first. */
+  const workout = (i, first, ohpReps, benchReps) => {
+    const benchSets = sets('bench', 80, benchReps, first === 'bench' ? 0 : 15)
+    const ohpSets = sets('ohp', 50, ohpReps, first === 'ohp' ? 0 : 15)
+    return { id: `fw${i}`, day: shift(day0, i * 3), name: null, notes: null, startedAt: null, endedAt: null, sets: [...ohpSets, ...benchSets] }
+  }
+  {
+    const w = workout(0, 'bench', [6, 6, 6], [8, 8, 8])
+    ok('fatigue: order comes from log times, not storage order', F.fatigueBefore(w, 'ohp', exMap).score > 1 && F.fatigueBefore(w, 'bench', exMap).score === 0, JSON.stringify([F.fatigueBefore(w, 'ohp', exMap), F.fatigueBefore(w, 'bench', exMap)]))
+    ok('fatigue: names what came before', F.fatigueBefore(w, 'ohp', exMap).after[0]?.name === 'Bench press')
+  }
+
+  // Overhead press alternating first / after 3 sets of bench (about a rep lower), improving underneath.
+  const alt = [
+    workout(0, 'ohp', [6, 6, 6], [6, 6, 6]), workout(1, 'bench', [5, 5, 5], [8, 8, 8]),
+    workout(2, 'ohp', [7, 6, 6], [6, 6, 6]), workout(3, 'bench', [5, 6, 5], [8, 8, 8]),
+    workout(4, 'ohp', [8, 7, 7], [6, 6, 6]), workout(5, 'bench', [6, 6, 6], [8, 8, 8]),
+  ]
+  const withOrder = L.exerciseStats(ohp, alt, noBw, shift(day0, 18), exMap)
+  const blind = L.exerciseStats(ohp, alt, noBw, shift(day0, 18))
+  ok('fatigue: alternating order is not a stall', withOrder.status !== 'stalled' && withOrder.status !== 'regressing', `${withOrder.status} (blind: ${blind.status})`)
+  ok('fatigue: lower set after bench is not an off day', withOrder.next.kind !== 'repeat' && withOrder.next.kind !== 'reset', show(withOrder.next))
+  ok('fatigue: without the order, the same log looks like an off day', blind.next.kind === 'repeat', show(blind.next))
+  const prior = withOrder.sessions
+  const fresh = P.planNext(ohp, prior, 'e1rm', noBw, shift(day0, 18), F.NO_FATIGUE)
+  ok('fatigue: fresh after a tired session expects more', fresh.context && fresh.context.pct > 0 && fresh.sets[0].reps >= 7, show(fresh))
+  const tiredNow = F.fatigueBefore(workout(9, 'bench', [], [8, 8, 8, 8]), 'ohp', exMap, t0 + 15 * 60000)
+  const same = P.planNext(ohp, prior, 'e1rm', noBw, shift(day0, 18), tiredNow)
+  ok('fatigue: same order as last time → no shift', same.context === null || Math.abs(same.context.pct) < 3, show(same))
+  // Last session fresh, today after bench: fewer reps than a fresh plan.
+  const lastFresh = L.exerciseStats(ohp, alt.slice(0, 5), noBw, shift(day0, 15), exMap).sessions
+  const freshPlan = P.planNext(ohp, lastFresh, 'e1rm', noBw, shift(day0, 15), F.NO_FATIGUE)
+  const afterPlan = P.planNext(ohp, lastFresh, 'e1rm', noBw, shift(day0, 15), tiredNow)
+  const sum = (t) => t.sets.reduce((a, s) => a + s.reps * s.weightKg, 0)
+  ok('fatigue: after bench, the plan is lighter than fresh', sum(afterPlan) < sum(freshPlan) && afterPlan.context?.pct < 0 && afterPlan.note.includes('Bench press'), `${show(freshPlan)} vs ${show(afterPlan)}`)
+  ok('fatigue: and says why', afterPlan.why.some((l) => l.includes('Bench press') && l.includes('%')))
+}
+
+{
+  // Same jump on a 10–15 range: 7 reps is well under it, so it is flagged.
+  const t = plan(ex({ name: 'Lateral raise', muscle: 'shoulders', equipment: 'dumbbell', repMin: 10, repMax: 15 }), [[10, [15, 15, 15]]])
+  ok('load: big relative step on a light dumbbell is flagged', t.kind === 'load' ? /big step|fewer/i.test(t.note + t.why.join(' ')) : /big jump/i.test(t.note), show(t))
+}
+
+/* ---------- one side at a time ---------- */
+{
+  const lat = ex({ id: 'lat', name: 'Lateral raise', muscle: 'shoulders', equipment: 'dumbbell', perSide: true, ...auto })
+  const ohp = ex({ id: 'ohp', name: 'Overhead press', muscle: 'shoulders' })
+  const t0 = Date.parse('2026-11-15T03:17:00Z')
+  let k = 0
+  // How it is really logged: each arm its own entry, ~45 s apart, then rest.
+  const side = (w, reps, min) => ({ id: `p${k++}`, exerciseId: 'lat', weightKg: w, reps, rpe: null, kind: 'working', doneAt: new Date(t0 + min * 60000).toISOString() })
+  const wk = (i, pairs) => ({ id: `pw${i}`, day: shift(day0, i * 3), name: null, notes: null, startedAt: null, endedAt: null,
+    sets: pairs.flatMap(([a, b], j) => [side(5, a, j * 2.5), side(5, b, j * 2.5 + 0.75)]) })
+  const w = wk(0, [[9, 8], [8, 9], [7, 6]])
+  const exMap = new Map([lat, ohp].map((e) => [e.id, e]))
+  ok('sides: three pairs are three sets', S.hardSetCount(w, exMap) === 3 && S.mergeSides(w.sets, true).map((s) => s.reps).join() === '8,8,6', String(S.hardSetCount(w, exMap)))
+  ok('sides: without the setting, six sets', S.hardSetCount(w, new Map([['lat', { ...lat, perSide: false }]])) === 6)
+  ok('sides: different weights do not pair', S.mergeSides([side(5, 8, 0), side(6, 8, 1)], true).length === 2)
+  const st = L.exerciseStats(lat, [wk(0, [[9, 8], [8, 9], [7, 6]])], noBw, shift(day0, 3), exMap)
+  ok('sides: plan has one entry per set, on the weaker arm', st.next.sets.length === 3 && st.next.sets.map((s) => s.reps).join() === '8,8,7', show(st.next))
+  ok('sides: plan reads "each side"', P.fmtPlan(st.next, lat).endsWith('each side'), P.fmtPlan(st.next, lat))
+  const mid = P.nextSet(lat, st.next, [side(5, 9, 0)], st.next.range)
+  ok('sides: after the first arm, the other arm matches it', mid.weightKg === 5 && mid.reps === 9 && /other side/i.test(mid.note), JSON.stringify(mid))
+  const second = P.nextSet(lat, st.next, [side(5, 9, 0), side(5, 9, 1)], st.next.range)
+  ok('sides: after a full pair, the plan moves to set 2', second.reps === st.next.sets[1].reps && second.note === null, JSON.stringify(second))
+  // Fatigue: three pairs of laterals before overhead press count as three sets, not six.
+  const press = { id: 'pp', exerciseId: 'ohp', weightKg: 50, reps: 6, rpe: null, kind: 'working', doneAt: new Date(t0 + 8 * 60000).toISOString() }
+  const both = { ...w, sets: [...w.sets, press] }
+  const paired = F.fatigueBefore(both, 'ohp', exMap).score
+  const unpaired = F.fatigueBefore(both, 'ohp', new Map([['lat', { ...lat, perSide: false }], ['ohp', ohp]])).score
+  ok('sides: a pair tires the next lift like one set', Math.abs(paired * 2 - unpaired) < 0.05, `${paired} vs ${unpaired}`)
 }
 
 /* ---------- every plan explains itself ---------- */

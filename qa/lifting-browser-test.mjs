@@ -79,6 +79,8 @@ try {
   ok('setup: registered', Boolean(token))
   const lib = await json('GET', '/api/lifting', token)
   const bench = lib.exercises.find((e) => e.name === 'Bench press')
+  // Pin 5–8 (the default is 6–12) so 8s are the top of the range and the plan adds weight.
+  await json('PUT', `/api/lifting/exercises/${bench.id}`, token, { repMin: 5, repMax: 8 })
   // Two earlier sessions so the logger has a "last time" and a target.
   const day = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toLocaleDateString('en-CA') }
   for (const [n, w] of [[10, 75], [3, 80]]) {

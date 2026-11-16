@@ -24,6 +24,10 @@
  *   Factors are split at the median (or a stated threshold) and compared as a
  *   difference in mean form, with a bootstrap 90 % range. This is correlation
  *   only, and every factor needs at least 5 sessions on each side.
+ * - Exercise order: the same session form, split by the lift's pre-fatigue
+ *   (fatigue.ts) into done fresh vs done after related lifts, with a bootstrap
+ *   90 % range; and an ordinary least-squares slope of form on the score, to
+ *   check the planner's assumed cost per unit against your own log.
  * - Rest: the time between consecutive working sets of one exercise (from the
  *   log times, so it includes doing the set) vs the share of reps kept on the
  *   next set at the same weight.
@@ -31,6 +35,8 @@
 import type { Exercise, InsightsPayload, Muscle, Routine, Workout } from './types'
 import { dayNum, isNum, shiftDay, weekStart } from './insights'
 import { MUSCLES, isHard, sortWorkouts, type BodyweightAt, type ExerciseStats } from './lifting'
+import { FATIGUE_PER_UNIT, FRESH_BELOW, TIRED_FROM } from './fatigue'
+import { countedSets, sideGroups } from './sides'
 
 /* ------------------------------------------------------------------ */
 /* small statistics                                                    */
@@ -408,6 +414,107 @@ export function factorReport(forms: SessionForm[], workouts: Workout[], data: In
 }
 
 /* ------------------------------------------------------------------ */
+/* exercise order                                                      */
+/* ------------------------------------------------------------------ */
+
+export interface OrderLift {
+  exercise: Exercise
+  nFresh: number
+  nTired: number
+  /** Mean form after related lifts − mean form fresh, percentage points; null below 2 a side. */
+  diff: number | null
+  /** What it usually comes after when it isn't first. */
+  usualAfter: string | null
+}
+
+export interface OrderReport {
+  /** Lift-sessions with a form value (lifts with 5+ sessions). */
+  points: number
+  nFresh: number
+  nTired: number
+  /** Mean form after related lifts − mean form fresh, percentage points, with a 90 % range. */
+  diff: number | null
+  ci: [number, number] | null
+  clear: boolean
+  /** Measured change in form per unit of pre-fatigue (%), and what the planner assumes. */
+  perUnit: number | null
+  perUnitCi: [number, number] | null
+  assumed: number
+  lifts: OrderLift[]
+  /** Lifts done fresh some days and after related lifts on others, in their last 8 sessions. */
+  varies: Exercise[]
+}
+
+/**
+ * How much doing a lift after related lifts costs you, from your own log.
+ * Form is the same as for factors (each session's best vs the lift's local
+ * trend, leaving the session out). Fresh = pre-fatigue under FRESH_BELOW,
+ * after related lifts = TIRED_FROM or more. Needs 5 sessions on each side for
+ * the overall difference, and 10 sessions with a spread of scores for the rate.
+ */
+export function orderReport(stats: ExerciseStats[]): OrderReport {
+  const pts: { f: number; r: number }[] = []
+  const lifts: OrderLift[] = []
+  const varies: Exercise[] = []
+  for (const st of stats) {
+    const recent = st.sessions.slice(-8)
+    if (recent.filter((s) => s.fatigue < FRESH_BELOW).length >= 2 && recent.filter((s) => s.fatigue >= TIRED_FROM).length >= 2) varies.push(st.exercise)
+    const ss = st.sessions.filter((s) => isNum(s.best))
+    if (ss.length < 5) continue
+    const xs = ss.map((s) => dayNum(s.day))
+    const ys = ss.map((s) => s.best as number)
+    const fresh: number[] = []
+    const tired: number[] = []
+    const afterCount = new Map<string, number>()
+    ss.forEach((s, i) => {
+      const exp = localFit(xs, ys, xs[i], 56, i)
+      if (!isNum(exp) || exp <= 0) return
+      const r = Math.max(-25, Math.min(25, (ys[i] / exp - 1) * 100))
+      pts.push({ f: s.fatigue, r })
+      if (s.fatigue < FRESH_BELOW) fresh.push(r)
+      else if (s.fatigue >= TIRED_FROM) {
+        tired.push(r)
+        const top = s.after[0]?.name
+        if (top) afterCount.set(top, (afterCount.get(top) ?? 0) + 1)
+      }
+    })
+    if (!fresh.length && !tired.length) continue
+    const usual = [...afterCount].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+    lifts.push({ exercise: st.exercise, nFresh: fresh.length, nTired: tired.length, diff: fresh.length >= 2 && tired.length >= 2 ? meanOf(tired) - meanOf(fresh) : null, usualAfter: usual })
+  }
+  lifts.sort((a, b) => (a.diff === null ? 1 : 0) - (b.diff === null ? 1 : 0) || b.nFresh + b.nTired - (a.nFresh + a.nTired))
+
+  const fr = pts.filter((p) => p.f < FRESH_BELOW).map((p) => p.r)
+  const ti = pts.filter((p) => p.f >= TIRED_FROM).map((p) => p.r)
+  let diff: number | null = null
+  let ci: [number, number] | null = null
+  if (fr.length >= MIN_GROUP && ti.length >= MIN_GROUP) {
+    diff = meanOf(ti) - meanOf(fr)
+    const r = rng(7919)
+    const boots: number[] = []
+    for (let k = 0; k < 400; k++) {
+      const a = Array.from({ length: ti.length }, () => ti[Math.floor(r() * ti.length)])
+      const b = Array.from({ length: fr.length }, () => fr[Math.floor(r() * fr.length)])
+      boots.push(meanOf(a) - meanOf(b))
+    }
+    ci = [quantile(boots, 0.05), quantile(boots, 0.95)]
+  }
+  let perUnit: number | null = null
+  let perUnitCi: [number, number] | null = null
+  if (pts.length >= 10 && ti.length >= MIN_GROUP && fr.length >= 3) {
+    const fit = ols(pts.map((p) => p.f), pts.map((p) => p.r))
+    if (fit) {
+      perUnit = fit.slope
+      perUnitCi = bootstrap(pts.length, (idx) => ols(idx.map((i) => pts[i].f), idx.map((i) => pts[i].r))?.slope ?? null, 104729)
+    }
+  }
+  return {
+    points: pts.length, nFresh: fr.length, nTired: ti.length, diff, ci, clear: Boolean(ci && (ci[0] > 0 || ci[1] < 0)),
+    perUnit, perUnitCi, assumed: -FATIGUE_PER_UNIT * 100, lifts, varies,
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* rest between sets                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -423,9 +530,11 @@ export function restReport(workouts: Workout[], exMap: Map<string, Exercise>): R
     const byEx = new Map<string, typeof w.sets>()
     for (const s of w.sets) if ((s.kind === 'working' || s.kind === 'failure') && s.doneAt) byEx.set(s.exerciseId, [...(byEx.get(s.exerciseId) ?? []), s])
     for (const [exId, sets] of byEx) {
-      const sorted = [...sets].sort((a, b) => (a.doneAt! < b.doneAt! ? -1 : 1))
+      // One side at a time: rest runs from the second arm of one pair to the first arm of the next.
+      const groups = sideGroups([...sets].sort((a, b) => (a.doneAt! < b.doneAt! ? -1 : 1)), exMap.get(exId)?.perSide)
+      const sorted = groups.map((g) => g.set)
       for (let i = 1; i < sorted.length; i++) {
-        const rest = (Date.parse(sorted[i].doneAt!) - Date.parse(sorted[i - 1].doneAt!)) / 1000
+        const rest = (Date.parse(groups[i].sets[0].doneAt!) - Date.parse(groups[i - 1].sets[groups[i - 1].sets.length - 1].doneAt!)) / 1000
         if (!(rest >= 20 && rest <= 900)) continue
         perLift.set(exId, [...(perLift.get(exId) ?? []), rest])
         if (Math.abs(sorted[i].weightKg - sorted[i - 1].weightKg) < 1e-6 && sorted[i - 1].reps > 0) kept.push({ rest, ratio: sorted[i].reps / sorted[i - 1].reps })
@@ -453,7 +562,7 @@ export interface Consistency {
   calendar: { day: string; value: number; detail: string }[]
 }
 
-export function consistency(workouts: Workout[], today: string, weeksBack = 26): Consistency {
+export function consistency(workouts: Workout[], today: string, weeksBack = 26, exMap: Map<string, Exercise> = new Map()): Consistency {
   const done = workouts.filter((w) => w.sets.some(isHard))
   const startWk = shiftDay(weekStart(today), -7 * (weeksBack - 1))
   const weeks: Consistency['weeks'] = []
@@ -470,7 +579,7 @@ export function consistency(workouts: Workout[], today: string, weeksBack = 26):
   const perDay = new Map<string, { sets: number; names: string[] }>()
   for (const w of done) {
     const d = perDay.get(w.day) ?? { sets: 0, names: [] }
-    d.sets += w.sets.filter(isHard).length
+    d.sets += countedSets(w, exMap).length
     d.names.push(w.name || 'Workout')
     perDay.set(w.day, d)
   }
@@ -533,7 +642,7 @@ export interface Composition {
 
 /** Hard sets in [from, to]: rep zones, balance, effort. */
 export function composition(workouts: Workout[], exMap: Map<string, Exercise>, from: string, to: string): Composition {
-  const sets = workouts.filter((w) => w.day >= from && w.day <= to).flatMap((w) => w.sets.filter(isHard))
+  const sets = workouts.filter((w) => w.day >= from && w.day <= to).flatMap((w) => countedSets(w, exMap))
   const muscle = (id: string): Muscle => exMap.get(id)?.muscle ?? 'other'
   const count = (ms: Muscle[]): number => sets.filter((s) => ms.includes(muscle(s.exerciseId))).length
   const rpes = sets.map((s) => s.rpe).filter(isNum)
@@ -556,7 +665,7 @@ export function muscleHeat(workouts: Workout[], exMap: Map<string, Exercise>, to
   for (const w of workouts) {
     if (w.day < start) continue
     const wk = weekStart(w.day)
-    for (const s of w.sets.filter(isHard)) {
+    for (const s of countedSets(w, exMap)) {
       const m = exMap.get(s.exerciseId)?.muscle ?? 'other'
       counts.set(`${m}|${wk}`, (counts.get(`${m}|${wk}`) ?? 0) + 1)
     }

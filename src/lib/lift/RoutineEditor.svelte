@@ -14,7 +14,7 @@
   // A copy to edit, taken once (the parent remounts this per routine); saved as a whole.
   const initial = untrack(() => routine)
   let name = $state(initial?.name ?? '')
-  let items = $state<RoutineItem[]>(initial ? initial.items.map((i) => ({ exerciseId: i.exerciseId, alternatives: [...i.alternatives] })) : [])
+  let items = $state<RoutineItem[]>(initial ? initial.items.map((i) => ({ exerciseId: i.exerciseId, alternatives: [...i.alternatives], ...(i.priority ? { priority: true } : {}) })) : [])
   let saving = $state(false)
   let confirmDelete = $state(false)
 
@@ -45,6 +45,14 @@
   }
   const removeAt = (i: number): void => { items = items.filter((_, k) => k !== i) }
   const dropAlt = (i: number, id: string): void => { items[i].alternatives = items[i].alternatives.filter((a) => a !== id) }
+  /** One priority lift per routine: picking one clears the others. */
+  function togglePriority(i: number): void {
+    const on = !items[i].priority
+    items = items.map((it, k) => {
+      const { priority: _, ...rest } = it
+      return k === i && on ? { ...rest, priority: true } : rest
+    })
+  }
 
   async function save(): Promise<void> {
     saving = true
@@ -89,11 +97,13 @@
               <span class="i-n" aria-hidden="true">{i + 1}</span>
               <b class="i-name">{exName(item.exerciseId)}</b>
               <div class="i-tools">
+                <button class="icon-button prio" type="button" aria-pressed={Boolean(item.priority)} aria-label="Make {exName(item.exerciseId)} the priority lift" title="Priority lift" onclick={() => togglePriority(i)}><Icon name="flag" size={18} /></button>
                 <button class="icon-button" type="button" aria-label="Move {exName(item.exerciseId)} up" disabled={i === 0} onclick={() => move(i, -1)}><Icon name="arrow-up" size={18} /></button>
                 <button class="icon-button" type="button" aria-label="Move {exName(item.exerciseId)} down" disabled={i === items.length - 1} onclick={() => move(i, 1)}><Icon name="arrow-down" size={18} /></button>
                 <button class="icon-button" type="button" aria-label="Remove {exName(item.exerciseId)}" onclick={() => removeAt(i)}><Icon name="trash" size={18} /></button>
               </div>
             </div>
+            {#if item.priority}<p class="prio-note">Priority lift: other lifts that work the same muscles warn you before you do them first.</p>{/if}
             <div class="alts">
               {#each item.alternatives as alt (alt)}
                 <span class="alt">or {exName(alt)}<button type="button" aria-label="Remove {exName(alt)} as a stand-in" onclick={() => dropAlt(i, alt)}><Icon name="x" size={14} /></button></span>
@@ -144,6 +154,9 @@
   .i-n { display: grid; width: 1.75rem; height: 1.75rem; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--color-surface-sunken); color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-bold); }
   .i-name { min-width: 0; flex: 1; overflow-wrap: anywhere; }
   .i-tools { display: flex; flex: 0 0 auto; }
+  .prio { color: var(--color-text-muted); }
+  .prio[aria-pressed='true'] { color: var(--color-accent); }
+  .prio-note { margin: 0; padding-left: calc(1.75rem + var(--space-2)); color: var(--color-accent); font-size: var(--text-xs); }
   .alts { display: flex; padding-left: calc(1.75rem + var(--space-2)); flex-wrap: wrap; gap: var(--space-2); }
   .alt { display: inline-flex; min-height: 2.25rem; padding-left: var(--space-3); align-items: center; gap: 2px; border-radius: var(--radius-pill); background: var(--color-surface-sunken); font-size: var(--text-sm); }
   .alt button { display: grid; width: 2.25rem; height: 2.25rem; place-items: center; border: 0; background: transparent; color: var(--color-text-muted); }

@@ -24,6 +24,7 @@ import type {
   Meal,
   MealInput,
   MealPatch,
+  ShareStatus,
   Phase,
   PhaseInput,
   PhasePatch,
@@ -71,7 +72,7 @@ store.subscribe((state) => {
 /* Routing                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export const ROUTES = ['chat', 'dashboard', 'calories', 'foods', 'settings', 'history', 'activity', 'insights', 'advanced', 'lifting'] as const
+export const ROUTES = ['chat', 'dashboard', 'calories', 'foods', 'settings', 'history', 'activity', 'insights', 'advanced', 'lifting', 'models'] as const
 export type Route = (typeof ROUTES)[number]
 
 // A `$state` primitive cannot be exported and reassigned — only its
@@ -156,6 +157,8 @@ export const actions = {
   createMeal: (input: MealInput): Promise<Meal> => store.createMeal(input),
   updateMeal: (id: string, patch: MealPatch): Promise<Meal> => store.updateMeal(id, patch),
   deleteMeal: (id: string): Promise<void> => store.deleteMeal(id),
+  shareMeal: (id: string): Promise<{ status: ShareStatus; to: string }> => store.shareMeal(id),
+  acceptSharedMeal: (shareId: string, input: MealPatch): Promise<Meal> => store.acceptSharedMeal(shareId, input),
 
   loadFoods: (): Promise<Food[]> => store.loadFoods(),
   createFood: (input: FoodInput): Promise<Food> => store.createFood(input),

@@ -944,6 +944,120 @@ async function run() {
   r = await api('GET', '/api/lifting', { token: authToken })
   eq('routines: deleted default is not seeded again', r.json?.routines?.map((x) => x.name), ['Legs A'])
 
+  /* ---------- partner sharing ---------- */
+  {
+    const partnerLogin = await api('POST', '/api/auth/login', { body: { email: 'owner@example.com', password: 'own3r-pass' } })
+    const partnerToken = partnerLogin.json?.token
+
+    r = await api('GET', '/api/partner', { token: authToken })
+    eq('partner: none by default', r.json?.partner, null)
+    r = await api('PUT', '/api/partner', { token: authToken, body: { email: 'not-an-email' } })
+    eq('partner: rejects a bad email', r.status, 400)
+    r = await api('PUT', '/api/partner', { token: authToken, body: { email: EMAIL.toUpperCase() } })
+    eq('partner: rejects your own email', r.status, 400)
+
+    r = await api('POST', '/api/meals', { token: authToken, body: { day: TODAY, name: 'Chicken curry', kcal: 800, proteinG: 50, carbsG: 80, fatG: 30, source: 'ai', items: [{ name: 'Curry', quantity: '1 bowl', kcal: 500, proteinG: 45, carbsG: 20, fatG: 25 }, { name: 'Rice', quantity: '200 g', kcal: 300, proteinG: 5, carbsG: 60, fatG: 5 }] } })
+    const curryId = r.json?.meal?.id
+    eq('partner: meal starts unshared', r.json?.meal?.sharedStatus, null)
+
+    r = await api('POST', `/api/meals/${curryId}/share`, { token: authToken })
+    eq('share: 409 without a linked partner', r.status, 409)
+
+    r = await api('PUT', '/api/partner', { token: authToken, body: { email: 'Owner@Example.com' } })
+    eq('partner: one-sided link is pending', r.json?.partner?.status, 'pending')
+    eq('partner: pending link hides the name', r.json?.partner?.name, null)
+    r = await api('POST', `/api/meals/${curryId}/share`, { token: authToken })
+    eq('share: 409 while the link is one-sided', r.status, 409)
+
+    r = await api('PUT', '/api/partner', { token: partnerToken, body: { email: EMAIL } })
+    eq('partner: mutual link is linked', r.json?.partner?.status, 'linked')
+    eq('partner: linked name falls back to the email', r.json?.partner?.name, 'Sam')
+    r = await api('GET', '/api/partner', { token: authToken })
+    eq('partner: linked from the other side too', [r.json?.partner?.status, r.json?.partner?.name], ['linked', 'Owner'])
+
+    r = await api('POST', `/api/meals/${curryId}/share`, { token: partnerToken })
+    eq('share: cannot share somebody else’s meal', r.status, 404)
+    r = await api('POST', `/api/meals/${curryId}/share`, { token: authToken })
+    eq('share: 201', r.status, 201)
+    const shareId = r.json?.share?.id
+    eq('share: names the partner', r.json?.share?.to, 'Owner')
+    r = await api('POST', `/api/meals/${curryId}/share`, { token: authToken })
+    eq('share: idempotent per meal', [r.status, r.json?.share?.id], [200, shareId])
+    r = await api('GET', `/api/meals?day=${TODAY}`, { token: authToken })
+    eq('share: sender sees it as pending', r.json?.meals?.find((m) => m.id === curryId)?.sharedStatus, 'pending')
+
+    // A correction by the sender before it is accepted shows up in the inbox.
+    await api('PUT', `/api/meals/${curryId}`, { token: authToken, body: { kcal: 820 } })
+    r = await api('GET', '/api/shared-meals', { token: partnerToken })
+    eq('inbox: one pending meal', r.json?.shares?.length, 1)
+    eq('inbox: from the partner', r.json?.shares?.[0]?.from?.name, 'Sam')
+    eq('inbox: reads the meal live', r.json?.shares?.[0]?.meal?.kcal, 820)
+    eq('inbox: carries the items', r.json?.shares?.[0]?.meal?.items?.length, 2)
+    ok('inbox: hides the sender’s analysis link', !('analysisId' in (r.json?.shares?.[0]?.meal ?? {})))
+    r = await api('GET', '/api/shared-meals', { token: authToken })
+    eq('inbox: the sender’s inbox is empty', r.json?.shares?.length, 0)
+    r = await api('POST', `/api/shared-meals/${shareId}/accept`, { token: authToken, body: {} })
+    eq('accept: only the recipient can accept', r.status, 404)
+
+    r = await api('POST', `/api/shared-meals/${shareId}/accept`, {
+      token: partnerToken,
+      body: { kcal: 600, proteinG: 38, carbsG: 60, fatG: 22, items: [{ name: 'Curry', quantity: '¾ bowl', kcal: 375, proteinG: 34, carbsG: 15, fatG: 19 }, { name: 'Rice', quantity: '150 g', kcal: 225, proteinG: 4, carbsG: 45, fatG: 3 }] },
+    })
+    eq('accept: 201', r.status, 201)
+    eq('accept: corrected kcal saved', r.json?.meal?.kcal, 600)
+    eq('accept: name copied', r.json?.meal?.name, 'Chicken curry')
+    eq('accept: day copied', r.json?.meal?.day, TODAY)
+    eq('accept: source is shared', r.json?.meal?.source, 'shared')
+    eq('accept: corrected items saved', r.json?.meal?.items?.[0]?.quantity, '¾ bowl')
+    const acceptedId = r.json?.meal?.id
+    r = await api('POST', `/api/shared-meals/${shareId}/accept`, { token: partnerToken, body: {} })
+    eq('accept: idempotent', [r.status, r.json?.meal?.id], [200, acceptedId])
+    r = await api('GET', `/api/meals?day=${TODAY}`, { token: partnerToken })
+    eq('accept: meal lands in the partner’s log', r.json?.meals?.length, 1)
+    r = await api('GET', '/api/shared-meals', { token: partnerToken })
+    eq('accept: inbox empties', r.json?.shares?.length, 0)
+    r = await api('GET', `/api/meals?day=${TODAY}`, { token: authToken })
+    eq('accept: sender sees it as accepted', r.json?.meals?.find((m) => m.id === curryId)?.sharedStatus, 'accepted')
+    eq('accept: sender’s meal untouched', r.json?.meals?.find((m) => m.id === curryId)?.kcal, 820)
+
+    // Dismiss, and a plain accept that copies everything.
+    r = await api('POST', '/api/meals', { token: authToken, body: { day: YESTERDAY, name: 'Pizza', kcal: 900, proteinG: 35, carbsG: 100, fatG: 35, items: [{ name: 'Pizza', kcal: 900, proteinG: 35, carbsG: 100, fatG: 35 }] } })
+    const pizzaId = r.json?.meal?.id
+    const pizzaShare = (await api('POST', `/api/meals/${pizzaId}/share`, { token: authToken })).json?.share?.id
+    r = await api('POST', `/api/shared-meals/${pizzaShare}/dismiss`, { token: partnerToken })
+    eq('dismiss: 200', r.status, 200)
+    r = await api('GET', '/api/shared-meals', { token: partnerToken })
+    eq('dismiss: gone from the inbox', r.json?.shares?.length, 0)
+    r = await api('POST', `/api/meals/${pizzaId}/share`, { token: authToken })
+    eq('dismiss: sharing again re-offers it', [r.status, r.json?.share?.status], [200, 'pending'])
+    r = await api('POST', `/api/shared-meals/${pizzaShare}/accept`, { token: partnerToken, body: {} })
+    eq('accept: empty body copies the meal', [r.json?.meal?.kcal, r.json?.meal?.day, r.json?.meal?.items?.length], [900, YESTERDAY, 1])
+
+    // Unlinking hides pending offers; deleting the source meal withdraws them.
+    r = await api('POST', '/api/meals', { token: authToken, body: { day: TODAY, name: 'Tacos', kcal: 700, proteinG: 30, carbsG: 70, fatG: 30 } })
+    const tacoId = r.json?.meal?.id
+    await api('POST', `/api/meals/${tacoId}/share`, { token: authToken })
+    await api('DELETE', '/api/partner', { token: partnerToken })
+    r = await api('GET', '/api/shared-meals', { token: partnerToken })
+    eq('unlink: inbox is empty', r.json?.shares?.length, 0)
+    r = await api('POST', '/api/meals', { token: authToken, body: { day: TODAY, name: 'Soup', kcal: 300, proteinG: 10, carbsG: 30, fatG: 10 } })
+    r = await api('POST', `/api/meals/${r.json?.meal?.id}/share`, { token: authToken })
+    eq('unlink: sharing stops', r.status, 409)
+    await api('PUT', '/api/partner', { token: partnerToken, body: { email: EMAIL } })
+    r = await api('GET', '/api/shared-meals', { token: partnerToken })
+    eq('relink: pending offer comes back', r.json?.shares?.[0]?.meal?.name, 'Tacos')
+    await api('DELETE', `/api/meals/${tacoId}`, { token: authToken })
+    r = await api('GET', '/api/shared-meals', { token: partnerToken })
+    eq('delete: removing the meal withdraws the offer', r.json?.shares?.length, 0)
+
+    // Leave the partner account empty for the scoping checks below.
+    for (const m of (await api('GET', '/api/meals?limit=200', { token: partnerToken })).json?.meals ?? []) {
+      await api('DELETE', `/api/meals/${m.id}`, { token: partnerToken })
+    }
+    await api('DELETE', '/api/partner', { token: partnerToken })
+    await api('DELETE', '/api/partner', { token: authToken })
+  }
+
   /* ---------- auth scoping + logout ---------- */
   r = await api('POST', '/api/auth/register', { body: { email: 'owner@example.com', password: 'whatever1' } })
   eq('register: duplicate email without an invite is 409', r.status, 409)

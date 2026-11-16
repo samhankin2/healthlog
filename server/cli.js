@@ -15,6 +15,8 @@
  *   node server/cli.js coros sync --email <email> [--days N]   sync COROS now
  *   node server/cli.js coros dump --email <email> [--days N]   raw COROS MCP replies (for tuning the parsers)
  *   node server/cli.js coros last --email <email>     the raw replies of that user's latest sync (no COROS call)
+ *   node server/cli.js bench status                   model benchmark: runs per model, meals still missing panel answers
+ *   node server/cli.js bench backfill [--dry-run] [--email E] [--days N] [--limit N]   ask the panel about earlier meals
  *   node server/cli.js invite create --note "sam"
  *   node server/cli.js invite list
  *   node server/cli.js user create --email me@example.com --password "hunter22"
@@ -40,6 +42,8 @@ import {
 import { backupNow, listBackups } from './lib/backup.js'
 import { spawnSync } from 'node:child_process'
 import { garminAvailable, garminStatus, markLoggedIn, pythonBin, scriptPath, syncUser, tokensDir } from './lib/garmin.js'
+import { backfillBench, backfillTargets, benchConfig } from './lib/modelBench.js'
+import { isMocked, userTextFromPrompt } from './ai.js'
 import { corosStatus, dumpRaw as corosDump, readLastSync as corosLastSync, syncUser as corosSync } from './lib/coros.js'
 
 function parseArgs(argv) {
@@ -80,6 +84,9 @@ function usage() {
     '  node server/cli.js coros sync --email <email> [--days N]   sync COROS now',
     '  node server/cli.js coros dump --email <email> [--days N]   raw COROS MCP replies, for tuning the parsers',
     '  node server/cli.js coros last --email <email>     raw replies of the latest sync (no COROS call)',
+    '  node server/cli.js bench status                   model benchmark: runs per model + meals missing panel answers',
+    '  node server/cli.js bench backfill [--dry-run] [--email <email>] [--days N] [--limit N]',
+    '                       [--models a,b] [--retry-failed] [--delay ms]   ask the panel about earlier meals',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
     '  node server/cli.js invite list                    list invite codes',
     '  node server/cli.js invite revoke --code <code>',
@@ -492,6 +499,64 @@ async function cmdCoros(action, args) {
   fail('usage: node server/cli.js coros status|sync|dump|last [--email <email>] [--days N]')
 }
 
+/* ------------------------------------------------------------------ */
+/* Model benchmark                                                     */
+/* ------------------------------------------------------------------ */
+
+async function cmdBench(action, args) {
+  const db = getDb()
+  const cfg = benchConfig()
+  if (action === 'status') {
+    console.log(`panel: ${cfg.enabled ? cfg.models.join(', ') : 'off (AI_BENCH_MODELS=off)'}`)
+    console.log(`primary: A ${cfg.modelA}, B ${cfg.modelB}${isMocked() ? '   [AI is MOCKED here - no OPENCODE_API_KEY in this environment]' : ''}`)
+    printTable(db.prepare(
+      `SELECT model, role, COUNT(*) AS runs, SUM(error IS NULL) AS ok, SUM(error IS NOT NULL) AS failed,
+              CAST(AVG(latency_ms) AS INTEGER) AS avg_ms, MAX(created_at) AS latest
+         FROM model_runs GROUP BY model, role ORDER BY role, model`,
+    ).all())
+    const pending = backfillTargets(db, { models: cfg.models })
+    console.log(`\n${pending.length} meals are missing panel answers (${pending.reduce((n, t) => n + t.missing.length, 0)} calls). Run "bench backfill --dry-run" for details.`)
+    return
+  }
+  if (action === 'backfill') {
+    if (!cfg.enabled && !args.models) throw new Error('the panel is off (AI_BENCH_MODELS=off); pass --models a,b to choose models')
+    // Without the key every answer would be the canned mock - refuse unless asked for.
+    if (isMocked() && !args.mock) throw new Error('OPENCODE_API_KEY is not set (or AI_MOCK is on), so this would only record mock answers. Load the server env first, or pass --mock to do it on purpose.')
+    const user = args.email ? userByEmailArg(db, args) : null
+    const opts = {
+      userId: user?.id ?? null,
+      days: args.days !== undefined ? Math.max(1, Number(args.days) || 0) : null,
+      limit: args.limit !== undefined ? Math.max(1, Number(args.limit) || 0) : null,
+      models: typeof args.models === 'string' ? args.models.split(',').map((s) => s.trim()).filter(Boolean) : null,
+      retryFailed: Boolean(args['retry-failed']),
+      delayMs: args.delay !== undefined ? Math.max(0, Number(args.delay) || 0) : 1000,
+    }
+    const plan = await backfillBench(db, { ...opts, dryRun: true })
+    console.log(`${plan.meals} meals, ${plan.calls} model calls${user ? ` for ${user.email}` : ''}${opts.days ? ` in the last ${opts.days} days` : ''}.`)
+    if (args['dry-run'] || !plan.meals) {
+      for (const t of backfillTargets(db, { ...opts, models: opts.models ?? cfg.models }).slice(0, 20)) {
+        console.log(`  ${t.created_at}  ${userTextFromPrompt(t.prompt_text).slice(0, 50).padEnd(50)}  needs ${t.missing.join(', ')}`)
+      }
+      if (plan.meals > 20) console.log(`  … and ${plan.meals - 20} more`)
+      return
+    }
+    const snap = backupNow(db, { label: 'pre-bench' })
+    console.log(`backup: ${snap.file ?? snap}`)
+    const started = Date.now()
+    const result = await backfillBench(db, {
+      ...opts,
+      onProgress: ({ index, total, target, tally }) => {
+        const text = userTextFromPrompt(target.prompt_text).slice(0, 44)
+        console.log(`[${String(index).padStart(String(total).length)}/${total}] ${target.created_at.slice(0, 10)}  ${text.padEnd(44)}  ${tally.ok} ok${tally.failed ? `, ${tally.failed} failed` : ''}${tally.limited ? '  (usage limit)' : ''}`)
+      },
+    })
+    console.log(`\ndone in ${Math.round((Date.now() - started) / 1000)} s: ${result.done}/${result.meals} meals, ${result.ok} answers, ${result.failed} failed.`)
+    if (result.stoppedOnLimit) fail('Stopped: the AI usage limit was hit. Run the same command again later - it carries on where it stopped.')
+    return
+  }
+  fail('usage: node server/cli.js bench status | bench backfill [--email <email>] [--days N] [--limit N] [--models a,b] [--retry-failed] [--delay ms] [--dry-run]')
+}
+
 async function main() {
   const [group, action] = process.argv.slice(2)
   const args = parseArgs(process.argv.slice(3))
@@ -507,6 +572,7 @@ async function main() {
   if (group === 'backup') return cmdBackup(action)
   if (group === 'garmin') return cmdGarmin(action, args)
   if (group === 'coros') return cmdCoros(action, args)
+  if (group === 'bench') return cmdBench(action, args)
 
   const db = getDb()
 

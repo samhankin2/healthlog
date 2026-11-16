@@ -150,6 +150,7 @@ export function exercisePayload(row) {
     incrementKg: num(row.increment_kg),
     repMin: num(row.rep_min),
     repMax: num(row.rep_max),
+    perSide: Boolean(row.per_side),
     archived: Boolean(row.archived_at),
     createdAt: iso(row.created_at),
   }

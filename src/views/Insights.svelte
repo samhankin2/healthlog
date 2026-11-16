@@ -328,6 +328,11 @@
       <span class="adv-copy"><b>Advanced insights</b><span>Sport deep dives, pace at the same heart rate, training load, sleep debt, recovery and 10 more analyses.</span></span>
       <Icon name="chevron-right" size={20} />
     </button>
+    <button class="adv-link" type="button" onclick={() => navigate('models')}>
+      <span class="adv-icon" aria-hidden="true"><Icon name="target" size={20} /></span>
+      <span class="adv-copy"><b>AI model accuracy</b><span>How the two calorie models compare with five others — and every meal where they disagreed.</span></span>
+      <Icon name="chevron-right" size={20} />
+    </button>
 
     <!-- ============================ FITNESS ============================ -->
     {#if ins.fitness.vo2.length || ins.fitness.races.some((r) => r.now)}

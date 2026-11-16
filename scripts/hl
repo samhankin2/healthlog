@@ -23,6 +23,9 @@
 #   scripts/hl coros-sync EMAIL [DAYS]    sync COROS now
 #   scripts/hl coros-dump EMAIL [DAYS]    raw COROS MCP replies (to tune the parsers)
 #   scripts/hl coros-last EMAIL           raw replies of that account's latest sync (no COROS call)
+#   scripts/hl bench-status       model benchmark: runs per model, meals missing panel answers
+#   scripts/hl bench-backfill [--dry-run] [--days N] [--limit N] [--email E] [--models a,b] [--retry-failed]
+#                                 ask the 5 background models about every earlier meal (resumable)
 #   scripts/hl ssh                plain shell on the box
 #
 # The DB on the box is read through server/cli.js, so nothing extra needs
@@ -41,7 +44,7 @@ ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
 remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 
-usage() { sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Only fixed flags are forwarded to the remote command line; the SQL itself
 # goes over stdin, so no quoting or injection worries.
@@ -215,6 +218,23 @@ EOF
 
   coros-status)
     remote "$CLI coros status"
+    ;;
+
+  bench-status|bench-backfill)
+    # The AI key is read from the server's env file into this one process on the
+    # box - never printed, never sent back over ssh.
+    flags=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dry-run|--retry-failed) flags+=("$1") ;;
+        --days|--limit|--delay) positive_int "${2:-}" || { echo "$1 needs a number" >&2; exit 2; }; flags+=("$1" "$2"); shift ;;
+        --email) [[ "${2:-}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || { echo "--email needs an address" >&2; exit 2; }; flags+=("$1" "'$2'"); shift ;;
+        --models) [[ "${2:-}" =~ ^[A-Za-z0-9._/,:-]+$ ]] || { echo "--models needs a comma list of model ids" >&2; exit 2; }; flags+=("$1" "$2"); shift ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+      shift
+    done
+    remote "set -a; . <(sudo cat /etc/healthlog/healthlog.env); set +a; $CLI bench ${cmd#bench-} ${flags[*]:-}"
     ;;
 
   help|-h|--help)

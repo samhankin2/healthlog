@@ -360,6 +360,46 @@ CREATE TABLE IF NOT EXISTS workout_sets (
   done_at     TEXT                               -- ISO, client clock
 );
 
+CREATE TABLE IF NOT EXISTS partners (            -- who a user shares meals with
+  user_id       TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  partner_email TEXT NOT NULL COLLATE NOCASE,      -- linked only when both sides name each other
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS shared_meals (        -- a meal offered to a linked partner
+  id             TEXT PRIMARY KEY,
+  from_user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_meal_id TEXT NOT NULL REFERENCES meals(id) ON DELETE CASCADE,  -- read live while pending
+  status         TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted | dismissed
+  meal_id        TEXT REFERENCES meals(id) ON DELETE SET NULL,          -- the recipient's copy
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS model_runs (          -- one estimate per model per analysis (SPEC §7 "Model benchmark")
+  id           TEXT PRIMARY KEY,
+  analysis_id  TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  model        TEXT NOT NULL,
+  role         TEXT NOT NULL,                    -- a | b (the two the app uses) | bench (background only)
+  kcal         REAL,                             -- null when the model failed
+  protein_g    REAL,
+  carbs_g      REAL,
+  fat_g        REAL,
+  meal_count   INTEGER,
+  confidence   REAL,
+  latency_ms   INTEGER,
+  error        TEXT,
+  output       TEXT,                             -- normalised JSON
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_model_runs_user_created ON model_runs(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_model_runs_analysis     ON model_runs(analysis_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_meals_source_to ON shared_meals(source_meal_id, to_user_id);
+CREATE INDEX IF NOT EXISTS idx_shared_meals_to_status        ON shared_meals(to_user_id, status);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name ON exercises(user_id, name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_workouts_user_day         ON workouts(user_id, day);
 CREATE INDEX IF NOT EXISTS idx_workout_sets_workout      ON workout_sets(workout_id, position);
@@ -384,7 +424,9 @@ export function migrate(db) {
   migrateMacroPctToGrams(db)
   addColumns(db, 'activities', ACTIVITY_EXTRA_COLUMNS)
   addColumns(db, 'exercises', { rep_min: 'INTEGER', rep_max: 'INTEGER' }) // rep range; null = automatic
+  addColumns(db, 'exercises', { per_side: 'INTEGER NOT NULL DEFAULT 0' }) // 1 = one side at a time (each arm its own entry)
   addColumns(db, 'integrations', { export_day: 'TEXT', export_count: 'INTEGER' }) // Cronometer's daily export budget
+  addColumns(db, 'analyses', { revises_id: 'TEXT' }) // the analysis a chat correction revised (model benchmark ground truth)
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

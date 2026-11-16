@@ -112,6 +112,14 @@ function systemPrompt() {
   ].join('\n')
 }
 
+/** The messages every estimator gets for one prompt — primary and benchmark models alike. */
+export function analysisMessages(promptText) {
+  return [
+    { role: 'system', content: systemPrompt() },
+    { role: 'user', content: promptText },
+  ]
+}
+
 /**
  * @param {{message: string, intake?: object|null, profile?: object|null, day?: string}} ctx
  */
@@ -647,7 +655,13 @@ export const MOCK_JUDGE_TEXT =
  * Ask one model and normalise its answer. Always resolves (never rejects).
  * @returns {Promise<{output: object, raw: string}>}
  */
-export async function analyseWithModel({ variant, model, messages, sessionId, userMessage, cfg }) {
+export async function analyseWithModel(args) {
+  const started = Date.now()
+  const res = await analyseWithModelUntimed(args)
+  return { ...res, latencyMs: Date.now() - started }
+}
+
+async function analyseWithModelUntimed({ variant, model, messages, sessionId, userMessage, cfg }) {
   try {
     if (isMocked(cfg)) {
       const mode = mockModeFor(userMessage, cfg)
@@ -732,10 +746,7 @@ export async function judgeComparison({ a, b, recon, sessionId, message, cfg }) 
 export async function runAnalysis({ user, message, profile = null, intake = null, day = null, sessionId = null, previous = null }) {
   const cfg = aiConfig()
   const promptText = buildPrompt({ message, intake, profile, day, previous })
-  const messages = [
-    { role: 'system', content: systemPrompt() },
-    { role: 'user', content: promptText },
-  ]
+  const messages = analysisMessages(promptText)
   const sid = sessionId || `healthlog-${user?.id || 'anon'}`
 
   // Parallel, and neither rejection can escape: both helpers always resolve.
@@ -773,6 +784,8 @@ export async function runAnalysis({ user, message, profile = null, intake = null
     modelB: resB.model || cfg.modelB,
     outputA: resA.output,
     outputB: resB.output,
+    latencyA: resA.latencyMs ?? null,
+    latencyB: resB.latencyMs ?? null,
     reconciled: recon.reconciled,
     comparison,
     agreement: recon.agreement,

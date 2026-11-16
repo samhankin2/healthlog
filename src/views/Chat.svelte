@@ -10,6 +10,8 @@
   import Icon from '../lib/components/Icon.svelte'
   import AssistantMessage from '../lib/chat/AssistantMessage.svelte'
   import MealEditor from '../lib/chat/MealEditor.svelte'
+  import SharedMealInbox from '../lib/components/SharedMealInbox.svelte'
+  import { partnerName } from '../lib/sharing.svelte'
 
   interface PendingRequest {
     text: string
@@ -211,6 +213,36 @@
     }
   }
 
+  /** Every saved meal behind one analysis (a reply can log several). */
+  function mealsFor(message: ChatMessage, analysis: Analysis): Meal[] {
+    const linked = app.meals.filter((meal) => meal.analysisId === analysis.id)
+    if (linked.length > 0) return linked
+    const direct = mealFor(message, analysis)
+    return direct ? [direct] : []
+  }
+
+  function shareStatusFor(message: ChatMessage, analysis: Analysis): Meal['sharedStatus'] {
+    const meals = mealsFor(message, analysis)
+    if (meals.length === 0 || meals.some((meal) => !meal.sharedStatus)) return null
+    return meals.every((meal) => meal.sharedStatus === 'accepted') ? 'accepted' : 'pending'
+  }
+
+  async function shareMeals(message: ChatMessage, analysis: Analysis): Promise<void> {
+    if (mealActionBusy) return
+    const meals = mealsFor(message, analysis).filter((meal) => !meal.sharedStatus)
+    if (meals.length === 0) return
+    mealActionBusy = message.id
+    try {
+      let to = partnerName() ?? 'your partner'
+      for (const meal of meals) to = (await actions.shareMeal(meal.id)).to
+      showToast(`Shared with ${to}`, 'success')
+    } catch (cause: unknown) {
+      showToast(cause instanceof Error ? cause.message : 'Could not share the meal.', 'error')
+    } finally {
+      mealActionBusy = null
+    }
+  }
+
   function onMealSaved(): void {
     void actions.loadDashboard().catch(() => {})
   }
@@ -245,6 +277,8 @@
     <p class="view-subtitle">Describe a meal in your own words. HealthLog will help with the numbers.</p>
   </header>
 
+  <SharedMealInbox compact />
+
   <div class="chat-scroll" bind:this={chatScroll} onscroll={onScroll}>
     {#if app.messages.length === 0 && !pending}
       <EmptyState
@@ -278,6 +312,9 @@
               onedit={() => (editing = { message, analysis, meal, prompt })}
               onaskagain={() => askAgain(prompt)}
               oncorrect={() => startCorrecting(analysis)}
+              partnerName={partnerName()}
+              shareStatus={shareStatusFor(message, analysis)}
+              onshare={() => shareMeals(message, analysis)}
             />
           {:else}
             <div class="message-bubble">{message.content}</div>

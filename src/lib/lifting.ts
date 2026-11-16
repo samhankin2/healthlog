@@ -19,6 +19,8 @@
 import type { Equipment, Exercise, InsightActivity, InsightsPayload, LiftSet, LiftingPayload, Muscle, SetKind, Workout } from './types'
 import { dayNum, isNum, shiftDay, weekStart } from './insights'
 import { planNext, type Target } from './progression'
+import { NO_FATIGUE, fatigueBefore, freshEquivalent, type FatigueSource } from './fatigue'
+import { hardSetCount, setShares } from './sides'
 
 export const MUSCLES: { key: Muscle; label: string }[] = [
   { key: 'chest', label: 'Chest' },
@@ -117,6 +119,12 @@ export interface SessionLine {
   reps: number
   /** Set ids that set a record when they were lifted, with the kind. */
   prs: { setId: string; kinds: PrKind[] }[]
+  /** Pre-fatigue from related lifts done before it in the workout (fatigue.ts); 0 = fresh. */
+  fatigue: number
+  /** What was done before it that counted. */
+  after: FatigueSource[]
+  /** `best` as if done fresh: what progression and status compare. */
+  bestFresh: number | null
 }
 
 export type LiftStatus = 'new' | 'progressing' | 'steady' | 'stalled' | 'regressing'
@@ -171,7 +179,11 @@ export function sortWorkouts(workouts: Workout[]): Workout[] {
   return [...workouts].sort((a, b) => (a.day === b.day ? (a.startedAt ?? '').localeCompare(b.startedAt ?? '') : a.day < b.day ? -1 : 1))
 }
 
-export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightAt, today?: string): ExerciseStats {
+/**
+ * Everything about one lift. Pass `exMap` (every exercise) so the order of a
+ * workout counts: without it every session is treated as done fresh.
+ */
+export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightAt, today?: string, exMap?: Map<string, Exercise>): ExerciseStats {
   const ordered = sortWorkouts(workouts)
   const raw = ordered.map((w) => ({ w, sets: w.sets.filter((s) => s.exerciseId === ex.id) })).filter((x) => x.sets.length)
   const anyLoad = raw.some((x) => x.sets.some((s) => setLoad(s, ex, bw(x.w.day)) > 0))
@@ -199,7 +211,9 @@ export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightA
       reps += s.reps
     }
     Object.assign(run, before)
-    return { workoutId: w.id, day: w.day, sets, hard, best, heaviest, volume, reps, prs }
+    const fat = exMap ? fatigueBefore(w, ex.id, exMap) : NO_FATIGUE
+    const bestFresh = isNum(best) ? freshEquivalent(best, metric, fat.score) : null
+    return { workoutId: w.id, day: w.day, sets, hard, best, heaviest, volume, reps, prs, fatigue: fat.score, after: fat.after, bestFresh }
   })
 
   // Records
@@ -222,10 +236,12 @@ export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightA
   }
   const repMaxes = REP_MAX_COLUMNS.filter((c) => repMax.has(c)).map((c) => ({ reps: c, ...repMax.get(c)! }))
 
-  // Progression
-  const scored = sessions.filter((s) => isNum(s.best))
+  // Progression: on the fresh-equivalent best, so doing a lift after a related
+  // one is not read as slipping or stalling.
+  const scored = sessions.filter((s) => isNum(s.bestFresh))
+  const val = (s: SessionLine): number => s.bestFresh as number
   let bestIdx = -1
-  scored.forEach((s, i) => { if (bestIdx < 0 || (s.best as number) > (scored[bestIdx].best as number) + 1e-9) bestIdx = i })
+  scored.forEach((s, i) => { if (bestIdx < 0 || val(s) > val(scored[bestIdx]) + 1e-9) bestIdx = i })
   const sessionsSinceBest = bestIdx < 0 ? 0 : scored.length - 1 - bestIdx
   const lastDay = sessions.length ? sessions[sessions.length - 1].day : null
   let change: number | null = null
@@ -234,8 +250,8 @@ export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightA
     const recent = scored.filter((s) => dayNum(s.day) > end - 28)
     let prior = scored.filter((s) => dayNum(s.day) <= end - 28 && dayNum(s.day) > end - 56)
     if (!prior.length) prior = scored.filter((s) => dayNum(s.day) <= end - 28)
-    const rMax = Math.max(...recent.map((s) => s.best as number))
-    const pMax = prior.length ? Math.max(...prior.map((s) => s.best as number)) : NaN
+    const rMax = Math.max(...recent.map(val))
+    const pMax = prior.length ? Math.max(...prior.map(val)) : NaN
     if (recent.length && pMax > 0) change = ((rMax - pMax) / pMax) * 100
   }
   let status: LiftStatus = 'new'
@@ -254,7 +270,8 @@ export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightA
 }
 
 export function allExerciseStats(exercises: Exercise[], workouts: Workout[], bw: BodyweightAt, today?: string): Map<string, ExerciseStats> {
-  return new Map(exercises.map((ex) => [ex.id, exerciseStats(ex, workouts, bw, today)]))
+  const exMap = new Map(exercises.map((e) => [e.id, e]))
+  return new Map(exercises.map((ex) => [ex.id, exerciseStats(ex, workouts, bw, today, exMap)]))
 }
 
 /** Live PR check for a set about to be logged, against everything before it. */
@@ -299,12 +316,14 @@ export function workoutDurationS(w: Workout, now = Date.now()): number {
   return w.sets.filter(isHard).length * 150 + w.sets.filter((s) => !isHard(s)).length * 60
 }
 
-export function liftLoad(w: Workout): number {
+/** Pass `exMap` so a one-side lift's pair of arms counts as one set. */
+export function liftLoad(w: Workout, exMap?: Map<string, Exercise>): number {
+  const share = exMap ? setShares(w, exMap) : null
   let load = 0
   for (const s of w.sets) {
     if (!isHard(s)) { load += 1; continue }
     const effort = isNum(s.rpe) ? Math.min(1.7, Math.max(0.4, (s.rpe - 5) / 3)) : 1
-    load += 5 * effort
+    load += 5 * effort * (share?.get(s.id) ?? 1)
   }
   return Math.round(load)
 }
@@ -330,7 +349,7 @@ export function workoutSummary(w: Workout, exMap: Map<string, Exercise>, bw: Bod
     volume += (ex ? setLoad(s, ex, b) : s.weightKg) * s.reps
     reps += s.reps
   }
-  return { durationS: workoutDurationS(w), hardSets: w.sets.filter(isHard).length, volume, reps, exercises, load: liftLoad(w) }
+  return { durationS: workoutDurationS(w), hardSets: hardSetCount(w, exMap), volume, reps, exercises, load: liftLoad(w, exMap) }
 }
 
 /** Exercise ids in the order they first appear in a workout. */
@@ -354,12 +373,14 @@ export function muscleWeeks(workouts: Workout[], exMap: Map<string, Exercise>, f
     if (!row) continue
     row.sessions += 1
     const b = bw(w.day)
+    const share = setShares(w, exMap)
     for (const s of w.sets) {
       if (!isHard(s)) continue
       const ex = exMap.get(s.exerciseId)
       const m = ex?.muscle ?? 'other'
-      row.sets[m] += 1
-      row.total += 1
+      const n = share.get(s.id) ?? 1
+      row.sets[m] += n
+      row.total += n
       row.volume += (ex ? setLoad(s, ex, b) : s.weightKg) * s.reps
     }
   }
@@ -410,10 +431,12 @@ export function mergeLifting(payload: InsightsPayload, lifting: LiftingPayload |
   if (!lifting?.workouts.length) return payload
   const activities = payload.activities.map((a) => ({ ...a }))
   const taken = new Set<string>()
+  const exMap = new Map(lifting.exercises.map((e) => [e.id, e]))
   for (const w of lifting.workouts) {
     const hard = w.sets.filter(isHard)
     if (!hard.length) continue
-    const load = liftLoad(w)
+    const load = liftLoad(w, exMap)
+    const setCount = Math.round(hardSetCount(w, exMap))
     const stamp = localStamp(w.startedAt, w.day)
     const watch = activities
       .filter((a) => a.day === w.day && !taken.has(a.id) && (a.type ?? '').includes('strength'))
@@ -421,7 +444,7 @@ export function mergeLifting(payload: InsightsPayload, lifting: LiftingPayload |
     if (watch) {
       taken.add(watch.id)
       watch.trainingLoad = Math.max(watch.trainingLoad ?? 0, load)
-      watch.sets = hard.length
+      watch.sets = setCount
       watch.reps = hard.reduce((a, s) => a + s.reps, 0)
       watch.name = w.name || watch.name
       continue
@@ -430,7 +453,7 @@ export function mergeLifting(payload: InsightsPayload, lifting: LiftingPayload |
       id: `lift:${w.id}`, startLocal: stamp, day: w.day, name: w.name || 'Strength session', type: 'strength_training',
       durationS: workoutDurationS(w), movingS: null, distanceM: null, kcal: null, avgHr: null, maxHr: null, elevationGainM: null,
       avgSpeedMps: null, trainingEffect: null, anaerobicTe: null, trainingLoad: load, teLabel: null, vo2max: null, steps: null,
-      cadence: null, location: null, hrZonesS: null, sets: hard.length, reps: hard.reduce((a, s) => a + s.reps, 0),
+      cadence: null, location: null, hrZonesS: null, sets: setCount, reps: hard.reduce((a, s) => a + s.reps, 0),
     }
     activities.push(synth)
   }

@@ -15,9 +15,26 @@
     onedit: () => void
     onaskagain: () => void
     oncorrect: () => void
+    /** The linked partner's name; null hides sharing. */
+    partnerName?: string | null
+    /** How far sharing got: null = not shared yet. */
+    shareStatus?: 'pending' | 'accepted' | 'dismissed' | null
+    onshare?: () => void
   }
 
-  let { message, analysis, saved, busy = false, onsave, onedit, onaskagain, oncorrect }: Props = $props()
+  let {
+    message,
+    analysis,
+    saved,
+    busy = false,
+    onsave,
+    onedit,
+    onaskagain,
+    oncorrect,
+    partnerName = null,
+    shareStatus = null,
+    onshare,
+  }: Props = $props()
 
   function isModelOutput(output: Analysis['modelAOutput']): output is ModelOutput {
     return !('error' in output)
@@ -140,6 +157,17 @@
         </Button>
       {:else}
         <span class="badge" data-tone="success"><Icon name="check" size={15} /> Meal saved</span>
+        {#if partnerName && onshare}
+          {#if shareStatus === 'accepted'}
+            <span class="badge" data-tone="accent"><Icon name="heart" size={15} /> {partnerName} logged it too</span>
+          {:else if shareStatus}
+            <span class="badge" data-tone="accent"><Icon name="heart" size={15} /> Shared with {partnerName}</span>
+          {:else}
+            <Button variant="secondary" onclick={onshare} disabled={busy}>
+              <Icon name="heart" size={17} /> Share with {partnerName}
+            </Button>
+          {/if}
+        {/if}
       {/if}
       {#if !saved}
         <Button variant="secondary" onclick={oncorrect} disabled={busy}>

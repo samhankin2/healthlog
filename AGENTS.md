@@ -44,7 +44,10 @@ src/
     lifting.ts        lift analysis: e1RM, records, status, load, Insights merge (pure)
     liftAnalysis.ts   lifting analytics: trends, strength index, form factors, rest, consistency (pure)
     progression.ts    the progression engine: rep ranges, next-session plan, mid-session next set, deload hint (pure)
+    fatigue.ts        exercise order: pre-fatigue from related lifts done earlier in a workout, and its cost (pure)
+    sides.ts          one side at a time: pairs each-arm entries into sets (pure)
     lifting.svelte.ts lifting state + offline outbox + rest timer
+    sharing.svelte.ts partner link + shared-meal inbox (components/SharedMealInbox, PartnerCard)
     lift/             the gym logger, exercise picker/page, routine editor, steppers, rest timer
   design/             tokens.css + ui.css — the design system, global CSS
 index.html            Vite entry
@@ -57,6 +60,7 @@ server/               API — node:http + node:sqlite, zero runtime dependencies
   lib/garminStore.js  the only writer of Garmin rows (live sync + export import)
   lib/cronometer.js   Cronometer food-diary sync (unofficial web API; keeps the session, never the password)
   lib/coros.js        COROS watch sync over COROS's official MCP (OAuth; corosMcp.js client, corosParse.js text parsers)
+  lib/partners.js     partner link (mutual by email); routes/sharing.js: share a meal, inbox, accept/dismiss
 sync/
   garmin_sync.py      Garmin fetcher (python-garminconnect); spawned by server/lib/garmin.js
   requirements.txt    the pinned version — the only Python dependency
@@ -76,6 +80,8 @@ qa/                   smoke / API / browser checks
                       lifting-browser-test.mjs: headless-Edge run of the gym logger (after npm run build)
                       progression-test.mjs: progression engine on realistic training histories
                       lift-analysis-test.mjs: analytics on synthetic logs with known answers
+                      model-bench-test.mjs: background model panel recording + scoring (AI_MOCK)
+                      sharing-browser-test.mjs: partner meal sharing in headless Edge (after npm run build)
 ```
 
 ## Commands

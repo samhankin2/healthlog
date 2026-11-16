@@ -10,6 +10,7 @@
   import LogWeightPanel from '../lib/panels/LogWeightPanel.svelte'
   import PhasePanel from '../lib/panels/PhasePanel.svelte'
   import ConfirmPanel from '../lib/panels/ConfirmPanel.svelte'
+  import SharedMealInbox from '../lib/components/SharedMealInbox.svelte'
   import { actions, app, navigate } from '../lib/state.svelte'
   import { fmtKg, fmtKcal, fmtNumber, today } from '../lib/format'
   import { showToast } from '../lib/toast.svelte'
@@ -112,6 +113,8 @@
     </div>
     <button class="button button--primary" type="button" onclick={() => openLog()}><Icon name="plus" size={19} /> Log weight</button>
   </header>
+
+  <SharedMealInbox />
 
   {#if metrics}
     <section class="dashboard-summary" aria-label="Current weight and goal progress">

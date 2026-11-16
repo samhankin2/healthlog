@@ -8,6 +8,8 @@
     isHard, setLoad, type BodyweightAt, type ExerciseStats,
   } from '../lifting'
   import { PLAN_LABEL, fmtPlan, nextSet, planNext, repRange } from '../progression'
+  import { fatigueBefore, fatiguePenalty, overlap } from '../fatigue'
+  import { loggedOrder, otherSidePending, sideGroups } from '../sides'
   import { addSet, lift, startRest } from '../lifting.svelte'
   import type { Exercise, LiftSet, SetKind, Workout } from '../types'
 
@@ -39,7 +41,33 @@
   })
   /** Sessions before this workout: the plan is built from these. */
   const prior = $derived(idx >= 0 ? stats.sessions.slice(0, idx) : stats.sessions.filter((s) => s.day <= workout.day))
-  const target = $derived(prior.length ? planNext(exercise, prior, stats.metric, bw, workout.day) : null)
+  /** Set number per entry (both arms of a one-side pair share one), and how many sets so far. */
+  const setNo = $derived.by(() => {
+    const out = new Map<string, number>()
+    sideGroups(loggedOrder(mySets.filter(isHard)), exercise.perSide).forEach((g, i) => { for (const s of g.sets) out.set(s.id, i + 1) })
+    return out
+  })
+  const setsDone = $derived(new Set(setNo.values()).size)
+  const sidePending = $derived(otherSidePending(mySets, exercise.perSide))
+  const exAll = $derived(new Map(lift.exercises.map((e) => [e.id, e])))
+  /** What has been done before this lift today, in the order it was logged. */
+  const fatigueNow = $derived(fatigueBefore(workout, exercise.id, exAll, live ? Date.now() : undefined))
+  const target = $derived(prior.length ? planNext(exercise, prior, stats.metric, bw, workout.day, fatigueNow) : null)
+  /** The routine's priority lift, when starting this one first would tire it. */
+  const priorityWarn = $derived.by(() => {
+    if (!live || mySets.some(isHard)) return null
+    const item = lift.routines.find((r) => r.name === workout.name)?.items.find((i) => i.priority)
+    if (!item) return null
+    const group = [item.exerciseId, ...item.alternatives]
+    if (group.includes(exercise.id)) return null
+    if (workout.sets.some((s) => isHard(s) && group.includes(s.exerciseId))) return null
+    const p = exAll.get(group.find((id) => (lift.plans[workout.id] ?? []).includes(id)) ?? item.exerciseId)
+    if (!p) return null
+    const o = overlap(exercise, p)
+    if (o < 0.3) return null
+    const pct = Math.round(fatiguePenalty(o * (target?.sets.length ?? 3) * 0.85) * 100)
+    return pct >= 2 ? { name: p.name, pct } : null
+  })
   const range = $derived(repRange(exercise, prior).range)
   const liveNext = $derived(nextSet(exercise, target, mySets, range))
   const prBySet = $derived(new Map((current?.prs ?? []).map((p) => [p.setId, p.kinds])))
@@ -116,7 +144,7 @@
     <button class="ex-toggle" type="button" aria-expanded={expanded} aria-controls={panelId} onclick={onexpand}>
       <span class="ex-title">{exercise.name}</span>
       <span class="ex-sub">
-        {#if mySets.length}{mySets.filter(isHard).length} set{mySets.filter(isHard).length === 1 ? '' : 's'} · {fmtSets(mySets, exercise)}
+        {#if mySets.length}{setsDone} set{setsDone === 1 ? '' : 's'}{exercise.perSide ? ' each side' : ''} · {fmtSets(mySets, exercise)}
         {:else}{MUSCLE_LABEL[exercise.muscle]} · {EQUIPMENT_LABEL[exercise.equipment]}{/if}
       </span>
     </button>
@@ -131,6 +159,9 @@
             <button class="swap" type="button" onclick={() => onswap(alt.id)}><Icon name="repeat" size={16} /> Or do {alt.name} instead</button>
           {/each}
         </div>
+      {/if}
+      {#if priorityWarn}
+        <p class="adjust" role="note">{priorityWarn.name} is this routine's priority lift. Doing {exercise.name} first costs it about {priorityWarn.pct} %, so do {priorityWarn.name} first if you can.</p>
       {/if}
       {#if last || target}
         <div class="hints">
@@ -152,7 +183,7 @@
             {@const prs = prBySet.get(s.id)}
             <li>
               <button class="set-row" class:warm={!isHard(s)} type="button" onclick={() => onedit(s)} aria-label="Set {i + 1}: {bodyweight ? `bodyweight plus ${fmtW(s.weightKg)}` : fmtW(s.weightKg)} kg for {s.reps} reps{s.kind !== 'working' ? `, ${KIND_LABEL[s.kind]}` : ''}{s.rpe ? `, RPE ${s.rpe}` : ''}{prs ? `, ${prs.map((k) => PR_LABEL[k]).join(', ')}` : ''}{vs ? `, ${TONE_WORD[vs.tone]} last time (${vs.text})` : ''}. Edit">
-                <span class="set-n" aria-hidden="true">{KIND_SHORT[s.kind] || i + 1 - mySets.slice(0, i).filter((x) => !isHard(x)).length}</span>
+                <span class="set-n" aria-hidden="true">{KIND_SHORT[s.kind] || (setNo.get(s.id) ?? i + 1 - mySets.slice(0, i).filter((x) => !isHard(x)).length)}</span>
                 <span class="set-main" aria-hidden="true"><b>{bodyweight ? (s.weightKg ? `+${fmtW(s.weightKg)}` : 'BW') : fmtW(s.weightKg)}</b><small>{bodyweight && !s.weightKg ? '' : 'kg'}</small> × <b>{s.reps}</b>{#if s.rpe}<em>@{s.rpe}</em>{/if}</span>
                 <span class="set-side" aria-hidden="true">
                   {#if prs}<span class="pr-badge"><Icon name="award" size={13} /> PR</span>{/if}
@@ -185,7 +216,7 @@
         {#if liveNext?.note && kind !== 'warmup'}<p class="adjust" role="status">{liveNext.note}</p>{/if}
         <button class="log-btn" type="button" disabled={reps < 1} onclick={log}>
           <Icon name="check" size={22} />
-          Log {kind === 'warmup' ? 'warm-up' : `set ${mySets.filter(isHard).length + 1}`}
+          Log {kind === 'warmup' ? 'warm-up' : exercise.perSide ? `set ${sidePending ? setsDone : setsDone + 1}, ${sidePending ? 'second' : 'first'} side` : `set ${setsDone + 1}`}
           <span class="log-sum">{bodyweight ? (weight ? `BW+${fmtW(weight)}` : 'BW') : `${fmtW(weight)} kg`} × {reps}</span>
         </button>
       </div>

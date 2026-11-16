@@ -15,6 +15,7 @@ import type {
   Meal,
   MealInput,
   MealPatch,
+  ShareStatus,
   Phase,
   PhaseInput,
   PhasePatch,
@@ -235,6 +236,20 @@ export const store = {
 
   async updateMeal(id: string, patch: MealPatch, options?: ApiRequestOptions): Promise<Meal> {
     const response = await api.updateMeal(id, patch, options)
+    commit({ meals: upsertById(state.meals, response.meal) })
+    return response.meal
+  },
+
+  /** Offer a meal to the linked partner; marks it shared locally. */
+  async shareMeal(id: string, options?: ApiRequestOptions): Promise<{ status: ShareStatus; to: string }> {
+    const response = await api.shareMeal(id, options)
+    commit({ meals: state.meals.map((meal) => (meal.id === id ? { ...meal, sharedStatus: response.share.status } : meal)) })
+    return response.share
+  },
+
+  /** Add a partner's shared meal to this account, with any corrections. */
+  async acceptSharedMeal(shareId: string, input: MealPatch, options?: ApiRequestOptions): Promise<Meal> {
+    const response = await api.acceptSharedMeal(shareId, input, options)
     commit({ meals: upsertById(state.meals, response.meal) })
     return response.meal
   },

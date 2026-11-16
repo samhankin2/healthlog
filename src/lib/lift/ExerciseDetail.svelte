@@ -60,6 +60,7 @@
   let increment = $state('')
   let repMin = $state('')
   let repMax = $state('')
+  let perSide = $state(false)
   let saving = $state(false)
   function openEdit(): void {
     name = ex.name
@@ -68,6 +69,7 @@
     increment = ex.incrementKg === null ? '' : String(ex.incrementKg)
     repMin = ex.repMin ? String(ex.repMin) : ''
     repMax = ex.repMax ? String(ex.repMax) : ''
+    perSide = Boolean(ex.perSide)
     editOpen = true
   }
   async function useRange(r: RepRange): Promise<void> {
@@ -87,7 +89,7 @@
       const hi = repMax.trim() === '' ? null : Number(repMax)
       if ((lo === null) !== (hi === null)) throw new Error('Fill in both ends of the rep range, or leave both empty for automatic.')
       if (lo !== null && hi !== null && !(Number.isInteger(lo) && Number.isInteger(hi) && lo >= 1 && hi <= 50 && hi >= lo)) throw new Error('Rep range must be whole numbers from 1 to 50, low to high.')
-      await editExercise(ex.id, { name: name.trim(), muscle, equipment, incrementKg: inc, repMin: lo, repMax: hi })
+      await editExercise(ex.id, { name: name.trim(), muscle, equipment, incrementKg: inc, repMin: lo, repMax: hi, ...(perSide !== Boolean(ex.perSide) ? { perSide } : {}) })
       editOpen = false
       showToast('Exercise updated.', 'success')
     } catch (cause) {
@@ -228,6 +230,10 @@
       </div>
       <em>Add reps until every set reaches the top, then add weight. Leave both empty to pick automatically.</em>
     </fieldset>
+    <div class="f">
+      <label class="side-toggle"><input type="checkbox" bind:checked={perSide} /> One side at a time</label>
+      <em>Log each arm (or leg) as its own entry. Two in a row at the same weight count as one set, and targets go by your weaker side.</em>
+    </div>
     <button class="button button--secondary" type="button" onclick={toggleArchive}>{ex.archived ? 'Show in the exercise list again' : 'Hide from the exercise list'}</button>
   </div>
   {#snippet actions()}
@@ -290,5 +296,7 @@
   .f { display: flex; flex-direction: column; gap: var(--space-1); color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
   .f input, .f select { min-height: var(--touch-target); padding: 0 var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); font-size: 1rem; font-weight: var(--weight-regular); }
   .f em { font-style: normal; font-weight: var(--weight-regular); }
+  .side-toggle { display: inline-flex; min-height: var(--touch-target); align-items: center; gap: var(--space-2); color: var(--color-text); font-size: var(--text-sm); }
+  .f .side-toggle input { width: 1.25rem; height: 1.25rem; min-height: 0; padding: 0; accent-color: var(--color-accent); }
   @media (min-width: 43.75rem) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 </style>
