@@ -174,7 +174,7 @@ CREATE TABLE meals (                      -- one logged eating occasion
   carbs_g    REAL NOT NULL DEFAULT 0,
   fat_g      REAL NOT NULL DEFAULT 0,
   fiber_g    REAL,
-  source     TEXT NOT NULL DEFAULT 'ai',   -- 'ai' | 'manual' | 'import' | 'saved_food' | 'cronometer'
+  source     TEXT NOT NULL DEFAULT 'ai',   -- 'ai' | 'manual' | 'import' | 'saved_food' | 'cronometer' | 'shared'
   confidence REAL,                         -- 0..1
   analysis_id TEXT,                        -- -> analyses.id
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -276,15 +276,36 @@ overwrites a stored value.
 chest|back|shoulders|biceps|triceps|quads|hamstrings|glutes|calves|core|other,
 `equipment` barbell|dumbbell|machine|cable|bodyweight|kettlebell|other,
 `increment_kg` (null = equipment default), `rep_min` / `rep_max` (rep range for
-progression, both null = automatic), `archived_at`), `workouts` (per user:
+progression, both null = automatic), `per_side` (1 = one side at a time, default 0),
+`archived_at`), `workouts` (per user:
 `day`, `name`, `notes`, `started_at` / `ended_at` ISO from the client clock,
 `ended_at` null while in progress) and `workout_sets` (`workout_id` cascade,
 `exercise_id`, `position`, `weight_kg` — added load for bodyweight lifts —
 `reps`, `rpe` 1–10 optional, `kind` working|warmup|drop|failure, `done_at`),
-`routines` (per user: `name`, `items` JSON `[{exerciseId, alternatives:[exerciseId]}]`,
+`routines` (per user: `name`, `items` JSON `[{exerciseId, alternatives:[exerciseId], priority?:true}]` (at most one priority item),
 `position`, `deleted_at` — soft delete, so the default routine is seeded once).
 Ids are client-generated (8–64 of `[A-Za-z0-9_-]`) so an offline phone can create
 them. Exact DDL lives in `server/db.js`.
+
+### Partner sharing tables
+
+`partners` (`user_id` primary key, `partner_email` case-insensitive): who a user
+shares meals with, at most one. The link is **live only when both accounts name
+each other**. `shared_meals` (`from_user_id`, `to_user_id`, `source_meal_id` →
+the sender's meal, cascade; `status` pending|accepted|dismissed; `meal_id` → the
+recipient's copy once accepted, set null; `created_at`, `resolved_at`), unique on
+`(source_meal_id, to_user_id)`. A pending offer stores no copy: it reads the
+sender's meal live, so a correction made after sharing is what the partner sees.
+Exact DDL lives in `server/db.js`.
+
+### Model benchmark table
+
+`model_runs` (`analysis_id` → analyses, cascade; `user_id`; `model`; `role`
+a|b|bench; `kcal`, `protein_g`, `carbs_g`, `fat_g`, `meal_count`, `confidence`
+— null when the model failed; `latency_ms`; `error`; `output` normalised JSON):
+one row per model per analysis, primary and background alike. `analyses` gains
+`revises_id` — the analysis a chat correction revised — so a correction chain
+can be followed to the meal that was finally saved (§7 "Model benchmark").
 
 ## 5. Auth model
 
@@ -439,6 +460,27 @@ message, and (when `save` is not `false`) stores the meal. It must be
 ```
 GET /api/analyses/:id -> 200 { ok:true, analysis:{...} }
 ```
+
+### Model benchmark
+```
+GET /api/model-bench?days=90   (1..3650, default 90)
+  -> 200 { ok:true,
+           config:{ enabled, paused, modelA, modelB, bench:[model], differPct },
+           totals:{ logs, benchmarked, differed, corrected, accepted },
+           models:[{ model, role:"logged"|"a"|"b"|"bench"|"other", tier, runs, failures,
+                     failRate, medianLatencyMs, proteinMedianAbsG,
+                     consensus:{ n, medianAbsPct, biasPct, within10, within20 },
+                     corrected:{ ...same } }],
+           pairs:{ models:[model], cells:[[{ pct, n }]] },
+           logs:[{ id, createdAt, text, logged, loggedDevPct, loggedRefDevPct,
+                   consensusKcal, spreadPct, abPct, differed,
+                   outcome:"unsaved"|"accepted"|"corrected",
+                   reference:{ kcal, proteinG, source:"chat correction"|"edited meal" }|null,
+                   runs:[{ model, role, kcal, proteinG, carbsG, fatG, mealCount, confidence,
+                           latencyMs, error, devPct, looDevPct, refDevPct }] }] }
+```
+Only the signed-in user's analyses. `logs` is newest first, at most 300. The
+"Logged value" entry in `models` scores what the app actually proposed.
 
 ### Garmin
 
@@ -726,20 +768,20 @@ written by `storeGarmin(..., { source: 'coros' })`, so the checks and
 ### Lifting
 
 ```
-GET    /api/lifting?from&to              -> 200 { ok:true, exercises:[{id,name,muscle,equipment,incrementKg,repMin,repMax,archived,createdAt}],
+GET    /api/lifting?from&to              -> 200 { ok:true, exercises:[{id,name,muscle,equipment,incrementKg,repMin,repMax,perSide,archived,createdAt}],
                                                   workouts:[{id,day,name,notes,startedAt,endedAt,createdAt,updatedAt,
                                                   sets:[{id,exerciseId,weightKg,reps,rpe,kind,doneAt}]}],
                                                   routines:[{id,name,items:[{exerciseId,alternatives}],position,updatedAt}] }
 POST   /api/lifting/exercises { id?, name, muscle?, equipment?, incrementKg?, repMin?, repMax? } -> 201 { ok:true, exercise }
        # idempotent: a known id, or a name that exists (case-insensitive, un-archived), returns it with 200
-PUT    /api/lifting/exercises/:id { name?, muscle?, equipment?, incrementKg?, repMin?, repMax?, archived? } -> 200 { ok:true, exercise }
+PUT    /api/lifting/exercises/:id { name?, muscle?, equipment?, incrementKg?, repMin?, repMax?, perSide?, archived? } -> 200 { ok:true, exercise }
 DELETE /api/lifting/exercises/:id        -> 200 { ok:true, archived:<id> } when it has sets, else { ok:true, deleted:<id> }
 GET    /api/lifting/workouts/:id         -> 200 { ok:true, workout }
 PUT    /api/lifting/workouts/:id { day, name?, notes?, startedAt?, endedAt?, sets:[{ id, exerciseId, weightKg, reps, rpe?, kind? }] }
                                          -> 201 created / 200 replaced { ok:true, workout }   (max 400 sets)
 DELETE /api/lifting/workouts/:id         -> 200 { ok:true, deleted:<id> }
-PUT    /api/lifting/routines/:id { name, items:[{ exerciseId, alternatives? }], position? }
-                                         -> 201 created / 200 replaced { ok:true, routine }   (max 40 items, 5 alternatives each)
+PUT    /api/lifting/routines/:id { name, items:[{ exerciseId, alternatives?, priority? }], position? }
+                                         -> 201 created / 200 replaced { ok:true, routine }   (max 40 items, 5 alternatives each; priority kept on the first item that sets it)
 DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (soft delete)
 ```
 
@@ -774,9 +816,7 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   hard sets per primary muscle, against a 10–20 band.
 - **Progression** (`src/lib/progression.ts`, pure; the header comment has the
   sources). Rep range (`repMin`/`repMax` are both null or both 1–50, max ≥ min) is
-  set on the exercise, else a default: core 10–20; calves, biceps and isolation
-  by name (curl, raise, fly, extension, pushdown …) 10–15; barbell 5–8;
-  bodyweight 6–12; else 8–12. If the median first working set of the last 4
+  set on the exercise, else a default: 6–12, lateral raises (by name) 6–15. If the median first working set of the last 4
   sessions is more than 1 below or 2 above the default, the preset that starts
   there is used instead. RIR = 10 − RPE, capped at 4; failure = 0; unknown = same
   effort as last time. Prescriptions aim for RPE 8 (RIR 2), never easier than
@@ -800,6 +840,30 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   (`nextSet`), the next set: under the range at RIR ≤ 1 → lighter; 2+ short of the plan →
   match the last set; RIR ≥ 3 and on plan → one increment more. Lifting home suggests a lighter week when ≥ 3 lifts
   (≥ 40 % of those trained in 3 weeks with 4+ sessions) are stalled or slipping.
+- **One side at a time** (`src/lib/sides.ts`, pure). An exercise with
+  `perSide` is logged one arm per entry. Two entries in a row (logged order) at
+  the same weight and kind are one set: weekly sets per muscle, set counts, lift
+  load, the consistency calendar, composition and pre-fatigue count it once;
+  rest runs from the second arm of one pair to the first of the next; the plan
+  merges each pair into one set at the weaker arm's reps (harder RPE) and shows
+  "each side". Mid-session, after one arm the next entry is the same weight and
+  reps ("Now the other side"); after a full pair the plan moves on. A lone entry
+  is a set on its own. Records and tonnage stay per entry.
+- **Exercise order** (`src/lib/fatigue.ts`, pure; the header comment has the
+  sources). Each lift in each workout gets a pre-fatigue score F: the hard sets
+  of other exercises logged before its first hard set (ordered by `doneAt` when
+  every set has one, else stored order), each weighted by muscle overlap (primary
+  muscle 1 plus secondaries from the name; overlap = Σ this × earlier ÷ Σ this),
+  effort (1 at RPE 8 or none, ±15 % per rep of RIR, 0.7–1.3) and time
+  (0.5 + 0.5·e^(−min/20), 0.75 without times). Cost = 2.5 % of estimated max per
+  unit of F, at most 15 %. Status, sessions since best and the plan's plateau /
+  off-day / reset checks compare fresh-equivalent sessions (best ÷ (1 − cost)).
+  The plan scales last session's reps (Epley, same effort) from last time's F to
+  today's before its rules run, when that moves the estimate by ≥ 1.5 %; the
+  logger passes today's F, timed to now, and planning ahead assumes the same
+  order as last time. Records stay raw. A routine can mark one **priority lift**:
+  in a live workout named as the routine, opening a lift with overlap ≥ 0.3
+  before the priority lift has a hard set warns with its estimated cost.
 - **Analysis** (`src/lib/liftAnalysis.ts`, pure; methods in its header).
   Per lift (4+ sessions spanning 14+ days): Theil–Sen trend of session-best e1RM
   over the last 120 days as %/month, a 90 % bootstrap range (400 resamples,
@@ -820,6 +884,11 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   rest bucket. Also: sessions per week, week streak, training calendar, routine
   completion (workouts named as the routine; stand-ins count), rep zones, push /
   pull and upper / lower sets, effort logged, muscle × week heatmap, records.
+  Exercise order: session form (lifts with 5+ sessions) after related lifts
+  (F ≥ 1) vs fresh (F < 0.3), 5+ per side, bootstrap 90 % range; OLS slope of
+  form on F (10+ points) against the assumed −2.5 %/unit; per-lift differences
+  (2+ per side) with what each usually follows; lifts whose last 8 sessions
+  include 2+ fresh and 2+ after related lifts are flagged as varying in order.
 - **Insights.** `mergeLifting` folds logged workouts into the Garmin
   activities before `buildInsights` / `buildAdvanced`: a workout on a day with a
   watch strength activity enriches it (sets, reps, the higher of the two loads);
@@ -827,6 +896,36 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   × (RPE − 5) / 3 clamped 0.4–1.7 (1 without RPE) + 1 per warm-up — ~100 for a
   20-set session, because Garmin's heart-rate load under-counts lifting. Nothing
   is written back to Garmin rows.
+
+### Partner sharing
+```
+GET    /api/partner                 -> 200 { ok:true, partner:{email,status:'linked'|'pending',name}|null }
+PUT    /api/partner { email }       -> 200 { ok:true, partner }   # 400 bad email / your own email
+DELETE /api/partner                 -> 200 { ok:true, partner:null }
+POST   /api/meals/:id/share         -> 201 { ok:true, share:{id,status:'pending',to} }
+                                       # 200 with the existing share when already offered (re-offers a
+                                       # dismissed one); 404 not your meal; 409 no live link, or 50 pending
+GET    /api/shared-meals            -> 200 { ok:true, shares:[{id, from:{name}, sharedAt, meal:{...meal}}] }
+POST   /api/shared-meals/:id/accept { name?, day?, eatenAt?, description?, kcal?, proteinG?, carbsG?,
+                                      fatG?, items?[] }
+                                    -> 201 { ok:true, meal }      # 200 with the same meal on a repeat
+POST   /api/shared-meals/:id/dismiss -> 200 { ok:true, dismissed:<id> }
+```
+- **Mutual link.** `status` is `linked` only when both users name each other;
+  `name` (display name's first word, else the email's local part, capitalised)
+  is returned only then, so a pending link never reveals whether an email has
+  an account. Sharing and the inbox both require a live link: unlinking hides
+  pending offers (relinking brings them back).
+- **Inbox** lists pending offers from the currently linked partner, oldest
+  first, at most 50. Each `meal` is the sender's meal as it is now, without
+  `analysisId`, `confidence` or `sharedStatus`.
+- **Accept** creates a meal in the recipient's account with `source:'shared'`;
+  any field in the body replaces the sender's value, the rest (items included)
+  are copied, `day` defaults to the sender's day. The sender's meal is never
+  changed. Only the recipient can accept or dismiss (others get `404`).
+- Deleting the sender's meal withdraws the offer (cascade).
+- Every meal payload carries `sharedStatus` — `pending` | `accepted` |
+  `dismissed` | `null` — so the sender can see what happened to an offer.
 
 ### Imports
 ```
@@ -958,6 +1057,39 @@ and returns `meal` (the first) and `meals` (all).
 7. The assistant chat message contains: the reconciled kcal/macros, the
    comparison note, and the assumption notes from the chosen model. The client
    renders a two-column "Model A / Model B" card from `analysis`.
+8. After the reply has been sent, the **model benchmark** runs in the
+   background (below). It never changes the reply, the analysis or the meal.
+
+**Model benchmark.** To measure whether models A and B are accurate enough,
+every new food message (not corrections) is also sent, with the identical
+prompt, to a panel of extra models:
+```
+AI_BENCH_MODELS=qwen3.8-max,kimi-k3,gpt-5.6-luna,deepseek-v4.1-flash,glm-5.3-flash   # default
+AI_BENCH_MODELS=off    # disable
+```
+- Each estimate — A and B too, with their latency — is one `model_runs` row.
+  Failures are recorded with their error, not dropped.
+- The panel never uses the fallback provider (a fallback answer would be a
+  different model under the same name), runs at most 2 batches at once, and
+  pauses for an hour after any 402/429 so it cannot spend the quota A and B
+  need. Expect roughly 3.5× the AI usage per logged meal while it is on.
+- Scoring has two yardsticks, because there is no measured truth:
+  **corrected** — the user changed the numbers (a chat correction chain ending
+  in a saved meal, or a saved meal whose total differs from the proposal by
+  more than max(10 kcal, 3%)); the saved total is the reference. **consensus**
+  — each model against the median of the *other* models (leave-one-out, needs
+  ≥3 valid estimates). Consensus measures agreement, not truth; a correction
+  outranks it.
+- A meal "differed" when the panel's spread (max − min) exceeds 20% of the
+  panel median.
+- The client shows this at `#/models` (linked from Insights and Settings).
+- **Backfill:** `cli.js bench backfill` (`scripts/hl bench-backfill`) asks the
+  panel about earlier original analyses, using each one's stored `prompt_text`.
+  Only missing answers are requested (`--retry-failed` also re-asks failures),
+  one meal at a time with a 1 s pause, runs stamped with the analysis's own
+  `created_at`. It takes a backup first, stops at the first 402/429 and resumes
+  where it stopped. It refuses to run without a real AI key unless `--mock`.
+  A and B are never re-asked: their stored outputs are what was logged.
 
 **Cost control:** the judge call only happens when the two models disagree by
 more than 15%; otherwise the deterministic comparison is enough. (The client
@@ -1070,11 +1202,21 @@ that the frontend can read.
   - the reconciled kcal + macro ring/bars,
   - a **Model A / Model B** side-by-side card (each model's kcal, confidence,
     notes) and the agreement badge,
-  - buttons: **Save meal** (if not already saved), **Edit**, **Ask again**.
+  - buttons: **Save meal** (if not already saved), **Edit**, **Ask again**;
+    once saved and with a linked partner, **Share with <name>** (then
+    "Shared with <name>" / "<name> logged it too").
   - Suggested quick-phrases when the chat is empty.
+  - **Shared meals** (partner sharing, §6): a one-line notification under the
+    header — "<name> shared <meal>" — with **Review**, which opens a sheet of
+    the pending offers. Each offer shows kcal and macros at a chosen portion
+    (½, ¾, Same, 1¼, 1½ of the partner's), and **Add to my log**, **Correct**
+    (the meal-edit sheet prefilled at that portion; saving adds it) and
+    **Not for me**. The inbox is fetched when the app opens and again whenever
+    it returns to the foreground.
 - **Dashboard view**: the old trend chart (7-day average + raw dots + phase
   shading) plus a calorie panel for today (kcal vs target, macro split) and a
-  7-day intake bar chart.
+  7-day intake bar chart. Pending shared meals appear as full cards under the
+  header (same actions as in the chat).
 - **Calories view** (`#/calories`): a day in detail (kcal vs target with a
   progress bar, each macro against its gram target, that day's meals) — today
   by default, with previous / next / date-picker controls to step back to any
@@ -1095,7 +1237,10 @@ that the frontend can read.
   add-food sheet, and the CSV import flow
   (paste or file → preview table with column mapping → commit).
 - **Settings view**: profile (height, start/goal weight, sex, age, activity,
-  macro split), chart range, **import old weight JSON**, export data, sign out.
+  macro split), chart range, **Partner sharing** (partner's email; Waiting /
+  Linked, Check again, Change, Remove), **import old weight JSON**, export
+  data, sign out. History meal cards get a **Share** action with a linked
+  partner; Calories and History label accepted meals "Shared by partner".
 - Accessibility commitments from the old app **must not regress**: accessible
   names on every control, ≥44px touch targets, visible focus rings, focus trap
   in sheets, Escape closes, WCAG AA contrast in light and dark,

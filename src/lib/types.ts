@@ -60,7 +60,7 @@ export interface MealItem extends Nutrition {
   quantity: string | null
 }
 
-export type MealSource = 'ai' | 'manual' | 'import' | 'saved_food' | 'cronometer'
+export type MealSource = 'ai' | 'manual' | 'import' | 'saved_food' | 'cronometer' | 'shared'
 
 export interface Meal extends Nutrition {
   id: string
@@ -75,6 +75,25 @@ export interface Meal extends Nutrition {
   createdAt: Timestamp
   updatedAt: Timestamp
   items: MealItem[]
+  /** Whether you offered this meal to your partner, and what they did with it. */
+  sharedStatus?: ShareStatus | null
+}
+
+export type ShareStatus = 'pending' | 'accepted' | 'dismissed'
+
+/** Your partner link. `name` is only known once both of you have linked. */
+export interface Partner {
+  email: string
+  status: 'linked' | 'pending'
+  name: string | null
+}
+
+/** A meal your partner offered you, waiting in your inbox. */
+export interface SharedMeal {
+  id: string
+  from: { name: string }
+  sharedAt: Timestamp
+  meal: Omit<Meal, 'analysisId' | 'sharedStatus' | 'confidence'>
 }
 
 export interface Food extends Nutrition {
@@ -350,7 +369,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced' | 'lifting'
+export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced' | 'lifting' | 'models'
 
 export interface ViewContext {
   state: AppState
@@ -571,6 +590,8 @@ export interface Exercise {
   /** Rep range for progression; both null = picked automatically. */
   repMin?: number | null
   repMax?: number | null
+  /** One side at a time: each arm logged as its own entry, a pair is one set (sides.ts). */
+  perSide?: boolean
   archived: boolean
   createdAt?: string | null
 }
@@ -603,6 +624,8 @@ export interface RoutineItem {
   exerciseId: string
   /** Swapped in when the kit for the main exercise is taken. */
   alternatives: string[]
+  /** The lift the session is built around: other lifts warn before tiring it (one per routine). */
+  priority?: boolean
 }
 
 export interface Routine {
@@ -617,4 +640,75 @@ export interface LiftingPayload {
   exercises: Exercise[]
   workouts: Workout[]
   routines?: Routine[]
+}
+
+/* ---- Model benchmark (SPEC §7 "Model benchmark") ---- */
+
+export type BenchRole = 'logged' | 'a' | 'b' | 'bench' | 'other'
+
+export interface BenchRun {
+  model: string
+  role: BenchRole
+  kcal: number | null
+  proteinG: number | null
+  carbsG: number | null
+  fatG: number | null
+  mealCount: number | null
+  confidence: number | null
+  latencyMs: number | null
+  error: string | null
+  /** % from the whole panel's median. */
+  devPct: number | null
+  /** % from the median of the other models (what the score uses). */
+  looDevPct: number | null
+  looProteinDiffG: number | null
+  /** % from the user's corrected total, when there is one. */
+  refDevPct: number | null
+}
+
+export interface BenchLog {
+  id: string
+  createdAt: string | null
+  text: string
+  logged: { kcal: number; proteinG: number } | null
+  loggedDevPct: number | null
+  loggedRefDevPct: number | null
+  loggedProteinDiffG: number | null
+  consensusKcal: number | null
+  spreadPct: number | null
+  abPct: number | null
+  differed: boolean
+  outcome: 'unsaved' | 'accepted' | 'corrected'
+  reference: { kcal: number; proteinG: number; source: 'chat correction' | 'edited meal' } | null
+  runs: BenchRun[]
+}
+
+export interface BenchStats {
+  n: number
+  medianAbsPct: number | null
+  biasPct: number | null
+  within10: number | null
+  within20: number | null
+}
+
+export interface BenchModel {
+  model: string
+  role: BenchRole
+  tier: 'small' | 'medium' | 'large' | null
+  runs: number
+  failures: number
+  failRate: number
+  medianLatencyMs: number | null
+  consensus: BenchStats
+  corrected: BenchStats
+  proteinMedianAbsG: number | null
+}
+
+export interface ModelBenchPayload {
+  config: { enabled: boolean; paused: boolean; modelA: string; modelB: string; bench: string[]; differPct: number }
+  days: number
+  totals: { logs: number; benchmarked: number; differed: number; corrected: number; accepted: number }
+  models: BenchModel[]
+  pairs: { models: string[]; cells: { pct: number | null; n: number }[][] }
+  logs: BenchLog[]
 }

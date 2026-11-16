@@ -7,8 +7,19 @@
     meal: Meal
     onclose: () => void
     onsave: (patch: MealPatch) => Promise<void>
+    title?: string
+    subtitle?: string
+    saveLabel?: string
   }
-  let { open, meal, onclose, onsave }: Props = $props()
+  let {
+    open,
+    meal,
+    onclose,
+    onsave,
+    title = 'Edit meal',
+    subtitle = 'Adjust the estimate to match what you ate.',
+    saveLabel = 'Save meal',
+  }: Props = $props()
   let name = $state('')
   let day = $state('')
   let description = $state('')
@@ -33,9 +44,12 @@
     }
   })
 
-  function validNumber(value: string): boolean {
-    const parsed = Number(value)
-    return value.trim() !== '' && Number.isFinite(parsed) && parsed >= 0
+  // `bind:value` on a type="number" input hands back a number (or null when
+  // empty) once the user edits it, not the string the field started as.
+  function validNumber(value: string | number | null): boolean {
+    const text = String(value ?? '').trim()
+    const parsed = Number(text)
+    return text !== '' && Number.isFinite(parsed) && parsed >= 0
   }
 
   async function save(): Promise<void> {
@@ -63,7 +77,7 @@
   }
 </script>
 
-<Sheet {open} title="Edit meal" subtitle="Adjust the estimate to match what you ate." onclose={() => { if (!saving) onclose() }}>
+<Sheet {open} {title} {subtitle} onclose={() => { if (!saving) onclose() }}>
   <div class="meal-form">
     <div class="field"><label class="field-label" for="meal-name">Meal name</label><input class="field-input" id="meal-name" data-autofocus maxlength="200" bind:value={name} disabled={saving} /></div>
     <div class="field"><label class="field-label" for="meal-day">Day</label><input class="field-input" id="meal-day" type="date" bind:value={day} disabled={saving} /></div>
@@ -78,7 +92,7 @@
   </div>
   {#snippet actions()}
     <button class="button button--secondary" type="button" disabled={saving} onclick={onclose}>Cancel</button>
-    <button class="button button--primary" type="button" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save meal'}</button>
+    <button class="button button--primary" type="button" disabled={saving} onclick={save}>{saving ? 'Saving…' : saveLabel}</button>
   {/snippet}
 </Sheet>
 

@@ -386,7 +386,7 @@ export function createExercise(input: { name: string; muscle: Muscle; equipment:
   return ex
 }
 
-export async function editExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'repMin' | 'repMax'>>): Promise<void> {
+export async function editExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'repMin' | 'repMax' | 'perSide'>>): Promise<void> {
   const pendingLocal = outbox.exercises.find((e) => e.id === id)
   if (pendingLocal) {
     Object.assign(pendingLocal, patch)

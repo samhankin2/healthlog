@@ -15,7 +15,7 @@
   import { fmtDayLong } from '../viz/scale'
   import { PR_LABEL, firstLiftDay, fmtW, type BodyweightAt, type ExerciseStats } from '../lifting'
   import {
-    VERDICT_LABEL, composition, consistency, factorReport, liftTrend, muscleHeat, recordEvents, restReport, routineUse, sessionForms, strengthIndex,
+    VERDICT_LABEL, composition, consistency, factorReport, liftTrend, muscleHeat, orderReport, recordEvents, restReport, routineUse, sessionForms, strengthIndex,
   } from '../liftAnalysis'
   import { lift } from '../lifting.svelte'
   import type { Exercise, InsightsPayload } from '../types'
@@ -45,7 +45,8 @@
   const forms = $derived(sessionForms(all, lift.workouts))
   const factors = $derived(factorReport(forms, lift.workouts, insights, weights))
   const rest = $derived(restReport(lift.workouts, exMap))
-  const cons = $derived(consistency(lift.workouts, todayDay))
+  const order = $derived(orderReport(all))
+  const cons = $derived(consistency(lift.workouts, todayDay, 26, exMap))
   const routines = $derived(routineUse(lift.routines, lift.workouts))
   const comp = $derived(composition(lift.workouts, exMap, shiftDay(todayDay, -27), todayDay))
   const heat = $derived(muscleHeat(lift.workouts, exMap, todayDay))
@@ -149,6 +150,37 @@
         <p class="note">Waiting for more data: {factors.waiting.map((w) => w.label.toLowerCase()).join(', ')}.</p>
       {/if}
       {#if insightsState === 'none'}<p class="note">Couldn't load sleep, HRV and calorie data, so only training factors are shown.</p>{/if}
+    </section>
+
+    <!-- Exercise order -->
+    <section class="card pad" aria-labelledby="order-title">
+      <h2 class="sec" id="order-title">Exercise order</h2>
+      <p class="lede">How your lifts compare with your trend when you do them after lifts that work the same muscles, vs doing them fresh. Your targets already allow for this.</p>
+      {#if order.diff !== null}
+        <div class="order-head">
+          <b>{pct(order.diff)}</b>
+          <span>after related lifts ({order.nTired}) vs fresh ({order.nFresh}){#if order.ci}<em>range {pct(order.ci[0])} to {pct(order.ci[1])}{order.clear ? '' : ', could be chance'}</em>{/if}</span>
+        </div>
+        {#if order.perUnit !== null}
+          <p class="note">Per hard set of a related lift done just before: {pct(order.perUnit)}{#if order.perUnitCi} (range {pct(order.perUnitCi[0])} to {pct(order.perUnitCi[1])}){/if}. Your targets assume {pct(order.assumed)}.</p>
+        {/if}
+      {:else}
+        <p class="muted">Needs 5+ sessions done fresh and 5+ done after related lifts, from lifts with 5+ sessions each{order.points ? ` (so far ${order.nFresh} fresh, ${order.nTired} after)` : ''}.</p>
+      {/if}
+      {#if order.lifts.some((l) => l.diff !== null)}
+        <ul class="bars">
+          {#each order.lifts.filter((l) => l.diff !== null).slice(0, 8) as l (l.exercise.id)}
+            <li>
+              <span class="b-label">{l.exercise.name}</span>
+              <span class="b-track" aria-hidden="true"><span style:width="{Math.min(100, (Math.abs(l.diff ?? 0) / 15) * 100)}%"></span></span>
+              <span class="b-val">{pct(l.diff ?? 0)}<em>{l.usualAfter ? `after ${l.usualAfter}` : `${l.nTired} vs ${l.nFresh}`}</em></span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if order.varies.length}
+        <p class="note">Order changes from session to session for {order.varies.slice(0, 4).map((e) => e.name).join(', ')}{order.varies.length > 4 ? ` and ${order.varies.length - 4} more` : ''}. Targets allow for it, but keeping your main lifts in a fixed order (or marking a priority lift in the routine) makes their progress easier to read.</p>
+      {/if}
     </section>
 
     <!-- Rest -->
@@ -271,6 +303,9 @@
   .b-val { display: flex; min-width: 4.5rem; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; }
   .b-val em { color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
   .segs { display: flex; flex-direction: column; gap: var(--space-3); }
+  .order-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+  .order-head b { font-size: var(--text-2xl); letter-spacing: -0.03em; }
+  .order-head em { display: block; color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }
   .seg-label { display: block; margin-bottom: 4px; color: var(--color-text-muted); font-size: var(--text-xs); }
   .recs { display: flex; margin: 0; padding: 0; flex-direction: column; gap: var(--space-2); list-style: none; font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .recs em { display: block; color: var(--color-text-muted); font-size: var(--text-xs); font-style: normal; }

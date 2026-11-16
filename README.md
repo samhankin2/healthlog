@@ -156,6 +156,7 @@ variables locally. `.env` is git-ignored.
 | `AI_MODEL_A` | `claude-haiku-5-5` | First estimator. |
 | `AI_MODEL_B` | `gemini-4-argon` | Second estimator. |
 | `AI_JUDGE_MODEL` | `minimax-m3.1-flash` | Writes the comparison when the two disagree. |
+| `AI_BENCH_MODELS` | `qwen3.8-max,kimi-k3,gpt-5.6-luna,deepseek-v4.1-flash,glm-5.3-flash` | Background benchmark panel (never affects what is logged); `off` disables. See `#/models`. |
 | `GROQ_API_KEY` | — | **Secret.** Free Groq key; enables the fallback retry on 401/402/403/429. |
 | `AI_FALLBACK` | on | Set `off` to disable the fallback. |
 | `AI_FALLBACK_BASE_URL` | `https://api.groq.com/openai/v1` | Fallback endpoint. |
@@ -332,6 +333,8 @@ Windows; uses `DEPLOY_HOST` and `SSH_KEY`, defaulting to the live box):
 | Backups | `scripts/hl backup`, `scripts/hl backup list`, `scripts/hl backup pull` (download to `data/backups/`) |
 | Local dev DB = copy of production | `scripts/hl pull` |
 | Restart + health check | `scripts/hl restart` |
+| Model benchmark: runs per model, meals still missing panel answers | `scripts/hl bench-status` |
+| Ask the 5 background models about every earlier meal (resumable, stops on usage limit) | `scripts/hl bench-backfill --dry-run`, then `scripts/hl bench-backfill [--days N] [--limit N]` |
 | Connect Garmin (once, interactive: password + MFA) | `scripts/hl garmin-login you@example.com` |
 | Garmin sync now / backfill | `scripts/hl garmin-sync you@example.com [days]` |
 | Garmin status per account | `scripts/hl garmin-status` |

@@ -119,6 +119,11 @@ export function registerLiftingRoutes(router) {
     if (inc !== undefined) { sets.push('increment_kg = ?'); values.push(inc) }
     const repRange = readRepRange(body, existing)
     if (repRange !== undefined) { sets.push('rep_min = ?', 'rep_max = ?'); values.push(repRange.lo, repRange.hi) }
+    const perSide = alias(body, 'perSide', 'per_side')
+    if (perSide !== undefined) {
+      if (typeof perSide !== 'boolean') throw new HttpError(400, 'perSide must be true or false')
+      sets.push('per_side = ?'); values.push(perSide ? 1 : 0)
+    }
     if (body.archived !== undefined) { sets.push('archived_at = ?'); values.push(body.archived ? nowSql() : null) }
     if (sets.length === 0) throw new HttpError(400, 'Nothing to update')
     sets.push('updated_at = ?'); values.push(nowSql())
@@ -236,11 +241,16 @@ export function registerLiftingRoutes(router) {
       if (typeof v !== 'string' || !owned.has(v)) throw new HttpError(400, `${field} is not one of your exercises`)
       return v
     }
+    let priorityTaken = false
     const items = body.items.map((raw, i) => {
       const item = asObject(raw)
       const alts = item.alternatives === undefined ? [] : item.alternatives
       if (!Array.isArray(alts) || alts.length > 5) throw new HttpError(400, `items[${i}].alternatives must be a list of up to 5`)
-      return { exerciseId: mine(item.exerciseId, `items[${i}].exerciseId`), alternatives: [...new Set(alts.map((a, j) => mine(a, `items[${i}].alternatives[${j}]`)))] }
+      if (item.priority !== undefined && typeof item.priority !== 'boolean') throw new HttpError(400, `items[${i}].priority must be true or false`)
+      const out = { exerciseId: mine(item.exerciseId, `items[${i}].exerciseId`), alternatives: [...new Set(alts.map((a, j) => mine(a, `items[${i}].alternatives[${j}]`)))] }
+      // One priority lift per routine: the first one marked wins.
+      if (item.priority === true && !priorityTaken) { priorityTaken = true; out.priority = true }
+      return out
     })
     const existing = db.prepare('SELECT user_id FROM routines WHERE id = ?').get(id)
     if (existing && existing.user_id !== user.id) throw new HttpError(404, 'Routine not found')

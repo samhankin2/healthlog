@@ -147,6 +147,7 @@
     if (source === 'import') return 'Imported'
     if (source === 'saved_food') return 'Saved food'
     if (source === 'cronometer') return 'Cronometer'
+    if (source === 'shared') return 'Shared by partner'
     return 'Manual'
   }
 </script>

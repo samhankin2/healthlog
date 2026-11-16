@@ -23,13 +23,17 @@ import type {
   Meal,
   MealInput,
   MealPatch,
+  Partner,
   Phase,
   PhaseInput,
   PhasePatch,
   LiftingPayload,
+  ModelBenchPayload,
   Routine,
   Profile,
   ProfilePatch,
+  SharedMeal,
+  ShareStatus,
   User,
   WeightEntry,
   WeightInput,
@@ -230,6 +234,34 @@ export const api = {
     return request(`/meals/${encodeURIComponent(id)}`, { method: 'DELETE' }, options)
   },
 
+  shareMeal(id: string, options?: ApiRequestOptions): Promise<SuccessResponse & { share: { id: string; status: ShareStatus; to: string } }> {
+    return request(`/meals/${encodeURIComponent(id)}/share`, { method: 'POST' }, options)
+  },
+
+  getPartner(options?: ApiRequestOptions): Promise<SuccessResponse & { partner: Partner | null }> {
+    return request('/partner', {}, options)
+  },
+
+  setPartner(email: string, options?: ApiRequestOptions): Promise<SuccessResponse & { partner: Partner | null }> {
+    return request('/partner', { method: 'PUT', body: { email } }, options)
+  },
+
+  removePartner(options?: ApiRequestOptions): Promise<SuccessResponse & { partner: null }> {
+    return request('/partner', { method: 'DELETE' }, options)
+  },
+
+  getSharedMeals(options?: ApiRequestOptions): Promise<SuccessResponse & { shares: SharedMeal[] }> {
+    return request('/shared-meals', {}, options)
+  },
+
+  acceptSharedMeal(id: string, input: MealPatch, options?: ApiRequestOptions): Promise<SuccessResponse & { meal: Meal }> {
+    return request(`/shared-meals/${encodeURIComponent(id)}/accept`, { method: 'POST', body: input }, options)
+  },
+
+  dismissSharedMeal(id: string, options?: ApiRequestOptions): Promise<SuccessResponse & { dismissed: string }> {
+    return request(`/shared-meals/${encodeURIComponent(id)}/dismiss`, { method: 'POST' }, options)
+  },
+
   getFoods(options?: ApiRequestOptions): Promise<SuccessResponse & { foods: Food[] }> {
     return request('/foods', {}, options)
   },
@@ -294,6 +326,10 @@ export const api = {
   },
 
   /** Everything the Insights tab charts, for one date range. */
+  getModelBench(days: number, options?: ApiRequestOptions): Promise<SuccessResponse & ModelBenchPayload> {
+    return request(`/model-bench${queryString({ days })}`, {}, options)
+  },
+
   getInsights(range: { from?: DayString; to?: DayString } = {}, options?: ApiRequestOptions): Promise<SuccessResponse & InsightsPayload> {
     return request(`/insights${queryString(range)}`, {}, { timeoutMs: 30_000, ...options })
   },
@@ -347,7 +383,7 @@ export const api = {
     return request('/lifting/exercises', { method: 'POST', body: input }, options)
   },
 
-  updateExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'repMin' | 'repMax' | 'archived'>>, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
+  updateExercise(id: string, patch: Partial<Pick<Exercise, 'name' | 'muscle' | 'equipment' | 'incrementKg' | 'repMin' | 'repMax' | 'perSide' | 'archived'>>, options?: ApiRequestOptions): Promise<SuccessResponse & { exercise: Exercise }> {
     return request(`/lifting/exercises/${encodeURIComponent(id)}`, { method: 'PUT', body: patch }, options)
   },
 

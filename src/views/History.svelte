@@ -7,6 +7,7 @@
   import { actions, app } from '../lib/state.svelte'
   import { fmtKg, fmtLong, fmtMacro, fmtNumber, fmtTime, today } from '../lib/format'
   import { showToast } from '../lib/toast.svelte'
+  import { partnerName } from '../lib/sharing.svelte'
   import type { Meal, MealPatch, WeightEntry } from '../lib/types'
 
   interface MonthGroup { key: string; label: string; entries: WeightEntry[] }
@@ -101,11 +102,28 @@
     showToast('Meal deleted.', 'success')
   }
 
+  let sharingId = $state<string | null>(null)
+  const partner = $derived(partnerName())
+
+  async function shareMeal(meal: Meal): Promise<void> {
+    if (sharingId) return
+    sharingId = meal.id
+    try {
+      const share = await actions.shareMeal(meal.id)
+      showToast(`Shared with ${share.to}`, 'success')
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : 'Could not share the meal.', 'error')
+    } finally {
+      sharingId = null
+    }
+  }
+
   function sourceLabel(meal: Meal): string {
     if (meal.source === 'ai') return 'AI estimate'
     if (meal.source === 'import') return 'Imported'
     if (meal.source === 'saved_food') return 'Saved food'
     if (meal.source === 'cronometer') return 'Cronometer'
+    if (meal.source === 'shared') return 'Shared by partner'
     return 'Manual'
   }
 </script>
@@ -181,6 +199,15 @@
                 <div><dt>Fat</dt><dd>{fmtMacro(meal.fatG)}</dd></div>
               </dl>
               <div class="meal-actions">
+                {#if partner && meal.source !== 'shared'}
+                  {#if meal.sharedStatus === 'accepted'}
+                    <span class="badge" data-tone="accent"><Icon name="heart" size={15} /> {partner} logged it</span>
+                  {:else if meal.sharedStatus}
+                    <span class="badge" data-tone="accent"><Icon name="heart" size={15} /> Shared</span>
+                  {:else}
+                    <button class="button button--ghost" type="button" aria-label={`Share ${meal.name} with ${partner}`} disabled={sharingId === meal.id} onclick={() => shareMeal(meal)}><Icon name="heart" size={17} /> Share</button>
+                  {/if}
+                {/if}
                 <button class="button button--secondary" type="button" aria-label={`Edit ${meal.name}`} onclick={() => { editingMeal = meal }}><Icon name="edit" size={17} /> Edit</button>
                 <button class="icon-button danger-icon" type="button" aria-label={`Delete ${meal.name}`} onclick={() => { deletingMeal = meal }}><Icon name="trash" size={18} /></button>
               </div>
@@ -234,7 +261,7 @@
   .meal-macros div { padding: var(--space-2); border-radius: var(--radius-sm); background: var(--color-surface-sunken); }
   .meal-macros dt { color: var(--color-text-muted); font-size: var(--text-xs); }
   .meal-macros dd { margin: 0; font-size: var(--text-sm); font-variant-numeric: tabular-nums; font-weight: var(--weight-semibold); }
-  .meal-actions { display: flex; margin-top: var(--space-3); align-items: center; justify-content: flex-end; gap: var(--space-2); }
+  .meal-actions { display: flex; margin-top: var(--space-3); align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
   @media (max-width: 30rem) {
     .history-header { align-items: flex-start; flex-direction: column; }
     .history-header .button { width: 100%; }

@@ -30,6 +30,8 @@ import { registerGarminRoutes } from './routes/garmin.js'
 import { registerLiftingRoutes } from './routes/lifting.js'
 import { registerCronometerRoutes } from './routes/cronometer.js'
 import { registerCorosRoutes } from './routes/coros.js'
+import { registerSharingRoutes } from './routes/sharing.js'
+import { registerModelBenchRoutes } from './routes/modelBench.js'
 import { scheduleBackups } from './lib/backup.js'
 import { scheduleGarminSync } from './lib/garmin.js'
 import { scheduleCronometerSync } from './lib/cronometer.js'
@@ -59,6 +61,8 @@ export function buildRouter() {
   registerLiftingRoutes(router)
   registerCronometerRoutes(router)
   registerCorosRoutes(router)
+  registerSharingRoutes(router)
+  registerModelBenchRoutes(router)
   return router
 }
 

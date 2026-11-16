@@ -5,9 +5,9 @@
  * The rules, and where they come from:
  *
  * - Rep ranges, not fixed reps (double progression). Every lift has a range:
- *   set on the exercise, or picked from its type (barbell compounds 5–8,
- *   other compounds 8–12, isolation 10–15, core 10–20) and moved to fit
- *   what you actually do if your reps sit well outside it. Below the top of the
+ *   set on the exercise, else 6–12 (lateral raises 6–15), and moved to fit
+ *   what you actually do if your reps sit well outside it. A one-side lift
+ *   plans per arm, on the weaker arm's reps (sides.ts). Below the top of the
  *   range you add reps; when every working set at the top weight reaches the
  *   top, you add weight. Load progression and rep progression grow muscle and
  *   strength about equally (Plotkin et al. 2022, PeerJ 10:e14142), so both
@@ -41,10 +41,20 @@
  *   restart at 80–90 % depending on how long.
  *
  * - Back-off sets keep their weight ratio to the top set and their reps.
+ *
+ * - Exercise order (fatigue.ts). A lift done after related lifts comes in
+ *   lower. Sessions are compared as if each had been done fresh, so a lower
+ *   number after bench press is not an off day or a stall. The plan itself is
+ *   built for today's order: last session's reps are scaled (Epley, same
+ *   effort) from how tired the lift was then to how tired it is now, before
+ *   the rules below run. Without today's order (planning ahead) it assumes the
+ *   same order as last time.
  */
 import type { Exercise, LiftSet } from './types'
 import { dayNum, isNum } from './insights'
 import { defaultIncrement, fmtW, roundKg, setLoad, type BodyweightAt, type SessionLine } from './lifting'
+import { TIRED_FROM, fatiguePenalty, fmtAfter, freshEquivalent, scaleReps, type Fatigue } from './fatigue'
+import { loggedOrder, mergeSides, otherSidePending } from './sides'
 
 export interface RepRange { lo: number; hi: number }
 
@@ -76,23 +86,21 @@ export interface Target {
   rangeAuto: boolean
   /** A different range to switch to (kind 'range'). */
   suggestRange: RepRange | null
+  /** Set when the plan was moved for today's order vs last time's (fatigue.ts). */
+  context: { fatigue: number; lastFatigue: number; pct: number; after: string } | null
 }
 
 /** Target effort for working sets: RPE 8. */
 const TARGET_RIR = 2
 const EPS = 1e-9
 const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6
-const ISOLATION = /curl|raise|fly|flye|extension|pushdown|push-down|kickback|crunch|shrug|pullover|face pull|calf|skull|crossover|pec deck/i
 
 export const fmtRange = (r: RepRange): string => `${r.lo}–${r.hi}`
 
-/** The range a lift starts with before you set one. */
+/** The range a lift starts with before you set one: 6–12, lateral raises 6–15. */
 export function defaultRange(ex: Pick<Exercise, 'name' | 'muscle' | 'equipment'>): RepRange {
-  if (ex.muscle === 'core') return { lo: 10, hi: 20 }
-  if (ex.muscle === 'calves' || ex.muscle === 'biceps' || ISOLATION.test(ex.name)) return { lo: 10, hi: 15 }
-  if (ex.equipment === 'barbell') return { lo: 5, hi: 8 }
-  if (ex.equipment === 'bodyweight') return { lo: 6, hi: 12 }
-  return { lo: 8, hi: 12 }
+  if (/lateral raise/i.test(ex.name)) return { lo: 6, hi: 15 }
+  return { lo: 6, hi: 12 }
 }
 
 /** The preset that starts at (or just below) a habitual rep count. */
@@ -144,12 +152,19 @@ function rangeSwitch(r: RepRange, ex: Exercise): RepRange {
 /**
  * Plan the next session from everything logged so far.
  * `today` is the day it will happen (for time-off handling); defaults to the
- * last session's day.
+ * last session's day. `now` is today's pre-fatigue for this lift (what has
+ * been done before it in the workout); without it, the same as last time.
  */
-export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' | 'reps', bw: BodyweightAt, today?: string): Target | null {
+export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' | 'reps', bw: BodyweightAt, today?: string, now?: Fatigue): Target | null {
   const last = sessions[sessions.length - 1]
   if (!last) return null
-  const work = working(last.sets)
+  const lastF = last.fatigue ?? 0
+  const nowF = now ? now.score : lastF
+  // Last session's sets, as they would go in today's order.
+  const ratio = (1 - fatiguePenalty(nowF)) / (1 - fatiguePenalty(lastF))
+  const shifted = Math.abs(ratio - 1) >= 0.015
+  // One side at a time: each pair of arms is one set at the weaker arm's reps.
+  const work = working(mergeSides(last.sets, ex.perSide)).map((s) => (shifted ? { ...s, reps: scaleReps(s.reps, ratio) } : s))
   if (!work.length) return null
 
   const { range, auto } = repRange(ex, sessions)
@@ -168,6 +183,27 @@ export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' |
   const firstTop = repsNow[0]
   const why: string[] = [`Rep range ${fmtRange(range)}${auto ? ' (picked from the lift type and your recent sets; change it on the lift page)' : ' (your setting)'}.`]
   const repsMetric = metric === 'reps' || !(total(top) > 0)
+
+  /* ---------- order: today vs last time ---------- */
+  const pctShift = Math.round((ratio - 1) * 100)
+  const lastAfter = last.after?.length ? fmtAfter(last.after) : ''
+  const nowAfter = now?.after.length ? fmtAfter(now.after) : ''
+  let context: Target['context'] = null
+  let noteTail = ''
+  if (shifted) {
+    context = { fatigue: nowF, lastFatigue: lastF, pct: pctShift, after: nowAfter }
+    if (ratio < 1) {
+      why.push(`Today this comes after ${nowAfter || 'related lifts'}, ${lastAfter && lastF >= TIRED_FROM ? `which tires it more than ${lastAfter} did last time` : `which ${(now?.after.length ?? 0) === 1 ? 'works' : 'work'} the same muscles; last time you did it fresh`}. The plan expects about ${-pctShift} % less, so fewer reps here is on target, not an off day.`)
+      noteTail = ` · ${-pctShift} % lighter after ${now?.after[0]?.name ?? 'related lifts'}`
+    } else {
+      why.push(`Last time this came after ${lastAfter || 'related lifts'}. ${nowAfter ? `Today ${nowAfter} tires it less` : 'Today you are fresher'}, so the plan expects about ${pctShift} % more.`)
+      noteTail = ` · fresher than last time`
+    }
+  } else if (!now && lastF >= TIRED_FROM && lastAfter) {
+    why.push(`Last time you did this after ${lastAfter}. The plan assumes the same order, and adjusts when you start it in a workout.`)
+  } else if (nowF >= TIRED_FROM && nowAfter) {
+    why.push(`Done after ${nowAfter}, like last time, so the numbers compare directly.`)
+  }
 
   /** Estimated max of a set, adjusted for known reps in reserve. */
   const estOf = (s: LiftSet): number => {
@@ -199,15 +235,17 @@ export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' |
       return { weightKg: w, reps: s.reps }
     })
     if (sets.length > topReps.length && work.some((s) => !near(s.weightKg, top))) why.push('Back-off sets keep their weight relative to the top set.')
-    return { kind, weightKg: weight, reps: topReps, sets, note, why, range, rangeAuto: auto, suggestRange }
+    return { kind, weightKg: weight, reps: topReps, sets, note: (shifted && kind === 'reps' ? 'Same weight' : note) + noteTail, why, range, rangeAuto: auto, suggestRange, context }
   }
 
   /* ---------- context ---------- */
   const daysOff = today ? dayNum(today) - dayNum(last.day) : 0
-  const sessionTop = (s: SessionLine): number => Math.max(0, ...working(s.sets).map((x) => total(x.weightKg, bw(s.day))))
+  // Both compare sessions as if each had been done fresh.
+  const sessionTop = (s: SessionLine): number => Math.max(0, ...working(s.sets).map((x) => total(x.weightKg, bw(s.day)))) / (1 - fatiguePenalty(s.fatigue ?? 0))
   const score = (s: SessionLine): number => {
     const b = bw(s.day)
-    return Math.max(0, ...working(s.sets).map((x) => (repsMetric ? x.reps : total(x.weightKg, b) * (1 + Math.min(x.reps, 30) / 30))))
+    const raw = Math.max(0, ...working(s.sets).map((x) => (repsMetric ? x.reps : total(x.weightKg, b) * (1 + Math.min(x.reps, 30) / 30))))
+    return freshEquivalent(raw, repsMetric ? 'reps' : 'e1rm', s.fatigue ?? 0)
   }
   // The latest deliberate drop (reset or comeback) starts a new segment.
   let seg = 0
@@ -220,7 +258,7 @@ export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' |
   scores.forEach((v, i) => { if (v > scores[bestIdx] * 1.002) bestIdx = i })
   const sinceBest = win.length - 1 - bestIdx
   const stalled = win.length >= 4 && sinceBest >= 3
-  const resetBefore = seg > 0 && sessionTop(sessions[seg - 1]) <= total(top) + inc + EPS
+  const resetBefore = seg > 0 && sessionTop(sessions[seg - 1]) <= sessionTop(last) + inc + EPS
   const prev = scores.slice(-4, -1)
   const lastScore = scores[scores.length - 1]
   const prevBest = prev.length ? Math.max(...prev) : 0
@@ -346,7 +384,13 @@ export interface NextSet { weightKg: number; reps: number; note: string | null }
  * worse or much better than planned.
  */
 export function nextSet(ex: Exercise, plan: Target | null, logged: LiftSet[], range: RepRange): NextSet | null {
-  const done = working(logged.filter((s) => s.kind !== 'warmup'))
+  const hardLogged = logged.filter((s) => s.kind !== 'warmup')
+  // One side at a time: after the first arm, the other arm does the same.
+  if (otherSidePending(hardLogged, ex.perSide)) {
+    const first = loggedOrder(hardLogged)[hardLogged.length - 1]
+    return { weightKg: first.weightKg, reps: first.reps, note: 'Now the other side' }
+  }
+  const done = working(mergeSides(hardLogged, ex.perSide))
   const planned = plan ? plan.sets[Math.min(done.length, plan.sets.length - 1)] ?? null : null
   const prevSet = done[done.length - 1]
   if (!prevSet) return planned ? { ...planned, note: null } : null
@@ -392,7 +436,11 @@ export function deloadAdvice(stats: { exercise: Exercise; status: string; lastDa
 }
 
 /** "82.5 kg × 6, 6, 6 · 70 kg × 10": consecutive sets at one weight grouped. */
-export function fmtPlan(t: Pick<Target, 'sets'>, ex: Pick<Exercise, 'equipment'>): string {
+export function fmtPlan(t: Pick<Target, 'sets'>, ex: Pick<Exercise, 'equipment' | 'perSide'>): string {
+  return fmtPlanSets(t, ex) + (ex.perSide ? ' each side' : '')
+}
+
+function fmtPlanSets(t: Pick<Target, 'sets'>, ex: Pick<Exercise, 'equipment'>): string {
   const groups: { w: number; reps: number[] }[] = []
   for (const s of t.sets) {
     const g = groups[groups.length - 1]

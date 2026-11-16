@@ -46,7 +46,18 @@ export function attachItems(db, mealRows) {
     if (!byMeal.has(row.meal_id)) byMeal.set(row.meal_id, [])
     byMeal.get(row.meal_id).push(row)
   }
-  return mealRows.map((row) => mealPayload(row, byMeal.get(row.id) ?? []))
+  // Whether the owner offered the meal to their partner (accepted wins over
+  // pending over dismissed). Shown so the sender can see it went through.
+  const rank = { accepted: 3, pending: 2, dismissed: 1 }
+  const shared = new Map()
+  const shareRows = db
+    .prepare(`SELECT source_meal_id, status FROM shared_meals WHERE source_meal_id IN (${placeholders})`)
+    .all(...ids)
+  for (const s of shareRows) {
+    const prev = shared.get(s.source_meal_id)
+    if (!prev || (rank[s.status] ?? 0) > (rank[prev] ?? 0)) shared.set(s.source_meal_id, s.status)
+  }
+  return mealRows.map((row) => ({ ...mealPayload(row, byMeal.get(row.id) ?? []), sharedStatus: shared.get(row.id) ?? null }))
 }
 
 /** Fetch one meal (scoped to the user) with its items. */

@@ -6,6 +6,7 @@
   import GarminSyncControl from '../lib/components/GarminSyncControl.svelte'
   import CronometerCard from '../lib/components/CronometerCard.svelte'
   import CorosCard from '../lib/components/CorosCard.svelte'
+  import PartnerCard from '../lib/components/PartnerCard.svelte'
   import { actions, app, navigate } from '../lib/state.svelte'
   import { api } from '../lib/api'
   import { logout } from '../lib/auth'
@@ -184,6 +185,24 @@
     {#if error}<p class="form-error" role="alert"><Icon name="alert" size={19} /> {error}</p>{/if}
     <button class="button button--primary save-settings" type="submit" disabled={saving}>{#if saving}<span class="spinner" aria-hidden="true"></span> Saving…{:else}<Icon name="check" size={19} /> Save settings{/if}</button>
   </form>
+
+  <section class="metric-card settings-card" aria-labelledby="ai-models-title">
+    <div class="metric-card-header">
+      <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="sparkles" size={20} /></span><h2 class="metric-card-title" id="ai-models-title">AI model accuracy</h2></div>
+      <button class="button button--secondary compact-button" type="button" onclick={() => navigate('models')}>Open <Icon name="chevron-right" size={17} /></button>
+    </div>
+    <div class="metric-card-content">
+      <p class="card-note">Every meal you describe is also sent, in the background, to five more AI models. Nothing they say changes what gets logged — they are there to show how the two models HealthLog uses compare, and where they all disagree.</p>
+    </div>
+  </section>
+
+  <section class="metric-card settings-card" aria-labelledby="partner-title">
+    <div class="metric-card-header"><div class="metric-card-heading"><span class="metric-card-icon"><Icon name="heart" size={20} /></span><h2 class="metric-card-title" id="partner-title">Partner sharing</h2></div></div>
+    <div class="metric-card-content">
+      <p class="card-note">Share a meal you logged — dinner you cooked together, say — with your partner's HealthLog. They see it when they open the app and can add it with their own portion or corrections.</p>
+      <PartnerCard />
+    </div>
+  </section>
 
   <section class="metric-card settings-card" aria-labelledby="garmin-title">
     <div class="metric-card-header">
