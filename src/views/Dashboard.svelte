@@ -129,6 +129,9 @@
         <span class="summary-label">Current weight</span>
         <strong>{metrics.currentWeightKg === null ? '—' : fmtNumber(metrics.currentWeightKg)} <span>kg</span></strong>
         <span class="summary-note">{trendKg === null ? 'Log a weight to begin your trend.' : `Trend ${fmtKg(trendKg)}${change7 === null ? '' : ` · ${signed(change7)} kg this week`}`}</span>
+        {#if app.weights.length > 0}
+          <button class="button button--secondary compact-button weight-link" type="button" onclick={() => navigate('weight')}>Weekly &amp; monthly change <Icon name="chevron-right" size={17} /></button>
+        {/if}
       </div>
       {#if metrics.goalProgressPct !== null}
         <div class="goal-progress">
@@ -239,6 +242,11 @@
   </div>
 
   <section class="history-link-card">
+    <div><h2>Weight in detail</h2><p>Trend, pace, weekly and monthly change, goal date.</p></div>
+    <button class="button button--primary" type="button" onclick={() => navigate('weight')}>Open Weight <Icon name="chevron-right" size={18} /></button>
+  </section>
+
+  <section class="history-link-card">
     <div><h2>Every entry, in one place</h2><p>Review weigh-ins and meals, make corrections, or add a note.</p></div>
     <button class="button button--secondary" type="button" onclick={() => navigate('history')}>Open History <Icon name="chevron-right" size={18} /></button>
   </section>
@@ -318,6 +326,7 @@
   .history-link-card h2 { margin: 0 0 var(--space-1); font-size: var(--text-lg); }
   .history-link-card p { margin: 0; color: var(--color-text-muted); font-size: var(--text-sm); }
   .loading-panel { min-height: 10rem; }
+  .weight-link { align-self: flex-start; margin-top: var(--space-3); }
   @media (max-width: 30rem) {
     .dashboard-header { align-items: flex-start; flex-direction: column; }
     .dashboard-header .button { width: 100%; }

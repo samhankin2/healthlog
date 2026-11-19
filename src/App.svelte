@@ -151,7 +151,7 @@
         class="tab-button"
         type="button"
         data-tab={tab.id}
-        aria-current={current === tab.id || (tab.id === 'insights' && (current === 'advanced' || current === 'models')) ? 'page' : 'false'}
+        aria-current={current === tab.id || (tab.id === 'insights' && (current === 'advanced' || current === 'models')) || (!rail && tab.id === 'dashboard' && current === 'weight') ? 'page' : 'false'}
         onclick={() => navigate(tab.id)}
       >
         <Icon name={tab.icon} size={22} />
