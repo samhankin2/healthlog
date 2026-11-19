@@ -369,7 +369,7 @@ export interface AppState {
   error: string | null
 }
 
-export type Route = 'chat' | 'dashboard' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced' | 'lifting' | 'models'
+export type Route = 'chat' | 'dashboard' | 'weight' | 'calories' | 'foods' | 'settings' | 'history' | 'activity' | 'insights' | 'advanced' | 'lifting' | 'models'
 
 export interface ViewContext {
   state: AppState

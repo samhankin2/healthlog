@@ -31,7 +31,7 @@ reference/
 src/
   main.ts             entry: mount(App) — Svelte 5
   App.svelte          shell: auth gate, hash router, tab bar / side rail
-  views/              Login, Chat, Dashboard, Calories, Lifting, Insights, Foods, Settings, History, Activity
+  views/              Login, Chat, Dashboard, Weight, Calories, Lifting, Insights, Foods, Settings, History, Activity
   lib/
     api.ts            the ONLY module that calls fetch
     auth.ts format.ts pwa.ts types.ts store.ts   framework-agnostic
@@ -45,6 +45,7 @@ src/
     liftAnalysis.ts   lifting analytics: trends, strength index, form factors, rest, consistency (pure)
     progression.ts    the progression engine: rep ranges, next-session plan, mid-session next set, deload hint (pure)
     fatigue.ts        exercise order: pre-fatigue from related lifts done earlier in a workout, and its cost (pure)
+    weightTrend.ts    weight trend (EMA over interpolated days), pace fit, weekly/monthly change, weekday pattern (pure)
     sides.ts          one side at a time: pairs each-arm entries into sets (pure)
     lifting.svelte.ts lifting state + offline outbox + rest timer
     sharing.svelte.ts partner link + shared-meal inbox (components/SharedMealInbox, PartnerCard)
@@ -78,6 +79,7 @@ qa/                   smoke / API / browser checks
                       cronometer-browser-test.mjs: the Settings card in headless Edge (after npm run build)
                       coros-test.mjs: COROS OAuth + MCP sync against a fake COROS
                       lifting-browser-test.mjs: headless-Edge run of the gym logger (after npm run build)
+                      weight-trend-test.mjs: weight trend maths on synthetic weigh-ins with known answers
                       progression-test.mjs: progression engine on realistic training histories
                       lift-analysis-test.mjs: analytics on synthetic logs with known answers
                       model-bench-test.mjs: background model panel recording + scoring (AI_MOCK)

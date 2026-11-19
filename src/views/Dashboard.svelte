@@ -15,6 +15,7 @@
   import { fmtKg, fmtKcal, fmtNumber, today } from '../lib/format'
   import { showToast } from '../lib/toast.svelte'
   import type { Phase, PhaseInput, WeightEntry } from '../lib/types'
+  import { buildTrend, fitRate, trendChange, trendOn } from '../lib/weightTrend'
 
   const RANGES = [
     { value: '30', label: '30d' },
@@ -36,6 +37,12 @@
     metrics && metrics.intake.kcalTarget !== null ? Math.round(metrics.intake.kcalTarget - metrics.intake.kcal) : null,
   )
   let latestWeight = $derived([...app.weights].sort((a, b) => b.date.localeCompare(a.date))[0])
+  // Smoothed trend (lib/weightTrend.ts) rather than the server's 7-day mean,
+  // which collapses to the single weigh-in when a week has only one.
+  const trend = $derived(buildTrend(app.weights, today()))
+  const trendKg = $derived(trendOn(trend, today()))
+  const pace = $derived(fitRate(app.weights, today(), 28))
+  const change7 = $derived(trendChange(trend, today(), 7))
 
   function direction(value: number | null): 'up' | 'down' | 'neutral' {
     if (value === null || Math.abs(value) <= 0.05) return 'neutral'
@@ -121,7 +128,7 @@
       <div class="current-weight">
         <span class="summary-label">Current weight</span>
         <strong>{metrics.currentWeightKg === null ? '—' : fmtNumber(metrics.currentWeightKg)} <span>kg</span></strong>
-        <span class="summary-note">{metrics.avg7d === null ? 'Log a weight to begin your trend.' : `7-day average ${fmtKg(metrics.avg7d)}`}</span>
+        <span class="summary-note">{trendKg === null ? 'Log a weight to begin your trend.' : `Trend ${fmtKg(trendKg)}${change7 === null ? '' : ` · ${signed(change7)} kg this week`}`}</span>
       </div>
       {#if metrics.goalProgressPct !== null}
         <div class="goal-progress">
@@ -139,13 +146,13 @@
     <section class="metric-card chart-card">
       <div class="metric-card-header chart-header">
         <div class="metric-card-heading"><span class="metric-card-icon"><Icon name="activity" size={20} /></span><h2 class="metric-card-title">Weight trend</h2></div>
-        <span class="badge">{app.weights.length} weigh-in{app.weights.length === 1 ? '' : 's'}</span>
+        <button class="button button--secondary compact-button" type="button" onclick={() => navigate('weight')}>Details <Icon name="chevron-right" size={17} /></button>
       </div>
       <div class="metric-card-content">
         <div class="range-wrap"><SegmentedControl options={RANGES} value={String(range)} ariaLabel="Chart time range" onchange={changeRange} /></div>
         <WeightChart entries={app.weights} phases={app.phases} windowDays={range} />
         <ul class="chart-legend" aria-label="Chart legend">
-          <li><span class="legend-line" aria-hidden="true"></span>7-day average</li>
+          <li><span class="legend-line" aria-hidden="true"></span>Trend</li>
           <li><span class="legend-dot" aria-hidden="true"></span>Weigh-ins</li>
           {#if app.phases.length > 0}<li><span class="legend-band" aria-hidden="true"></span>Training phases</li>{/if}
         </ul>
@@ -178,9 +185,9 @@
       <div class="section-heading"><h2 id="metrics-title">Key metrics</h2><span>From your saved entries</span></div>
       {#if metrics}
         <div class="stat-grid">
-          <StatTile label="7-day average" value={metrics.avg7d === null ? '—' : fmtNumber(metrics.avg7d)} unit={metrics.avg7d === null ? undefined : 'kg'} sublabel="Smoothed trend" />
+          <StatTile label="Trend weight" value={trendKg === null ? '—' : fmtNumber(trendKg)} unit={trendKg === null ? undefined : 'kg'} sublabel={change7 === null ? 'Smoothed trend' : `${signed(change7)} kg in 7 days`} tone={direction(change7)} />
           <StatTile label="Total change" value={signed(metrics.totalChangeKg)} unit={metrics.totalChangeKg === null ? undefined : 'kg'} sublabel="Since first entry" tone={direction(metrics.totalChangeKg)} />
-          <StatTile label="Weekly rate" value={signed(metrics.weeklyRateKg)} unit={metrics.weeklyRateKg === null ? undefined : 'kg/wk'} sublabel="Recent pace" tone={direction(metrics.weeklyRateKg)} />
+          <StatTile label="Weekly pace" value={pace ? signed(pace.kgPerWeek, 2) : '—'} unit={pace ? 'kg/wk' : undefined} sublabel={pace ? `Last 4 weeks · ${pace.weighIns} weigh-ins` : 'Needs 3 weigh-ins over a week'} tone={direction(pace?.kgPerWeek ?? null)} />
           <StatTile label="Streak" value={metrics.streakDays} unit={metrics.streakDays === 1 ? 'day' : 'days'} sublabel={`Best ${metrics.bestStreakDays} days`} />
           {#if metrics.bmi !== null}<StatTile label="BMI" value={fmtNumber(metrics.bmi)} sublabel="From your saved height" />{/if}
           {#if metrics.dailySwingKg !== null}<StatTile label="Daily swing" value={fmtNumber(metrics.dailySwingKg, 2)} unit="kg" sublabel="Average movement" />{/if}

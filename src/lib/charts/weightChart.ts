@@ -119,14 +119,14 @@ export function createWeightChart(canvas: HTMLCanvasElement, options: WeightChar
     current.series = series.map((point) => ({ ...point }))
     current.phases = phases.map((phase) => ({ ...phase }))
     current.labels = current.series.length > 0 ? current.series.map((point) => point.date) : ['']
-    current.empty = current.series.length === 0 || current.series.every((point) => point.weightKg === null && point.avg7Kg === null)
+    current.empty = current.series.length === 0 || current.series.every((point) => point.weightKg === null && point.trendKg === null)
     current.emptyMessage = options.entries.length > 0
       ? options.windowDays === 0 ? 'No weigh-ins to chart' : `No weigh-ins in the last ${options.windowDays} days`
       : 'No weigh-ins yet'
   }
   sync(options.series, options.phases)
 
-  const values = (key: 'weightKg' | 'avg7Kg'): (number | null)[] =>
+  const values = (key: 'weightKg' | 'trendKg'): (number | null)[] =>
     current.series.length > 0 ? current.series.map((point) => point[key]) : [null]
 
   function areaFill(context: ScriptableContext<'line'>): string | CanvasGradient {
@@ -217,8 +217,8 @@ export function createWeightChart(canvas: HTMLCanvasElement, options: WeightChar
           spanGaps: false,
         },
         {
-          label: '7-day average',
-          data: values('avg7Kg'),
+          label: 'Trend',
+          data: values('trendKg'),
           borderColor: () => theme.accent,
           backgroundColor: areaFill,
           borderWidth: 3,
@@ -263,9 +263,9 @@ export function createWeightChart(canvas: HTMLCanvasElement, options: WeightChar
             afterLabel(item) {
               const point = current.series[item.dataIndex]
               if (!point) return ''
-              const average = point.avg7Kg === null ? '—' : fmtKg(point.avg7Kg)
+              const average = point.trendKg === null ? '—' : fmtKg(point.trendKg)
               const delta = point.deltaKg === null ? '—' : `${point.deltaKg > 0 ? '+' : ''}${fmtNumber(point.deltaKg)} kg`
-              return [`7-day avg  ${average}`, `Change  ${delta}`]
+              return [`Trend    ${average}`, `Change  ${delta}`]
             },
           },
         },
@@ -377,7 +377,7 @@ export function createWeightChart(canvas: HTMLCanvasElement, options: WeightChar
       sync(series, phases)
       chart.data.labels = [...current.labels]
       if (chart.data.datasets[0]) chart.data.datasets[0].data = values('weightKg')
-      if (chart.data.datasets[1]) chart.data.datasets[1].data = values('avg7Kg')
+      if (chart.data.datasets[1]) chart.data.datasets[1].data = values('trendKg')
       setAxisVisibility(!current.empty)
       applyAccessibility()
       chart.update()

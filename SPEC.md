@@ -1220,10 +1220,29 @@ that the frontend can read.
     (the meal-edit sheet prefilled at that portion; saving adds it) and
     **Not for me**. The inbox is fetched when the app opens and again whenever
     it returns to the foreground.
-- **Dashboard view**: the old trend chart (7-day average + raw dots + phase
-  shading) plus a calorie panel for today (kcal vs target, macro split) and a
+- **Dashboard view**: the old trend chart (smoothed trend weight + raw dots +
+  phase shading; the trend replaced the old 7-day average, which collapses to
+  the single weigh-in in a sparse week) plus a calorie panel for today (kcal vs target, macro split) and a
   7-day intake bar chart. Pending shared meals appear as full cards under the
   header (same actions as in the chat).
+- **Weight view** (`#/weight`, side rail; "Details" on the Dashboard weight
+  card): built client-side from `GET /api/weights` (`src/lib/weightTrend.ts`),
+  no extra endpoint. **Trend weight** = exponential moving average (α 0.1) over
+  a daily axis from the first weigh-in, gaps linearly interpolated, held flat
+  after the last weigh-in, seeded with the first week's mean. **Pace** =
+  least-squares slope through the raw weigh-ins in the last 28 days (also 14
+  and 90), null under 3 weigh-ins or a 7-day span; shown per week, per month
+  (× 30.44/7) and as ≈ kcal/day at 7700 kcal/kg. Shows: trend chart over
+  30d / 90d / 6mo / 1y / All with weigh-in dots and a goal line; trend change
+  over 7 / 30 / 90 days and since the first weigh-in; goal date at the 4-week
+  pace (beyond 2 years: "2y+"); lowest / highest in range; daily noise (mean
+  |weigh-in − trend| less the window's mean gap); weigh-ins in 30 days;
+  **weekly** (Monday-start) and **monthly** change bars + tables — change = trend
+  at the period's end (or today) minus trend at the previous period's end,
+  none after the last weigh-in; and a day-of-week pattern (mean weigh-in − trend
+  per weekday over 120 days, minus the overall mean). The Dashboard's trend
+  tile and weekly pace use the same maths; the API's `avg7d` / `weeklyRateKg`
+  are unchanged.
 - **Calories view** (`#/calories`): a day in detail (kcal vs target with a
   progress bar, each macro against its gram target, that day's meals) — today
   by default, with previous / next / date-picker controls to step back to any

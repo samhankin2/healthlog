@@ -19,6 +19,7 @@
   import Settings from './views/Settings.svelte'
   import History from './views/History.svelte'
   import Calories from './views/Calories.svelte'
+  import Weight from './views/Weight.svelte'
   import ActivityView from './views/Activity.svelte'
   import Insights from './views/Insights.svelte'
   import AdvancedInsights from './views/AdvancedInsights.svelte'
@@ -34,6 +35,7 @@
     { id: 'calories', label: 'Calories', icon: 'flame' },
     { id: 'lifting', label: 'Lifting', icon: 'dumbbell' },
     { id: 'insights', label: 'Insights', icon: 'insights' },
+    { id: 'weight', label: 'Weight', icon: 'scale', railOnly: true },
     { id: 'foods', label: 'Foods', icon: 'food', railOnly: true },
     { id: 'history', label: 'History', icon: 'calendar', railOnly: true },
     { id: 'activity', label: 'Activity', icon: 'trending-up', railOnly: true },
@@ -43,6 +45,7 @@
   const TITLES: Record<Route, string> = {
     chat: 'Food journal',
     dashboard: 'Your trends',
+    weight: 'Weight',
     calories: 'Calories',
     foods: 'Saved foods',
     settings: 'Settings',
@@ -214,6 +217,8 @@
           <Chat />
         {:else if current === 'dashboard'}
           <Dashboard />
+        {:else if current === 'weight'}
+          <Weight />
         {:else if current === 'calories'}
           <Calories />
         {:else if current === 'foods'}

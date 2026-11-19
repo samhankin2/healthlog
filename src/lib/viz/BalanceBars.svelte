@@ -16,8 +16,10 @@
     height?: number
     upColor?: string
     downColor?: string
+    /** Smallest half-range of the y-axis, so tiny bars do not fill the chart (100 suits kcal). */
+    minExtent?: number
   }
-  let { label, bars, from, to, keyDays = 1, format = (v: number) => `${Math.round(v)}`, upLabel = 'Surplus', downLabel = 'Deficit', height = 200, upColor = 'var(--viz-surplus)', downColor = 'var(--viz-deficit)' }: Props = $props()
+  let { label, bars, from, to, keyDays = 1, format = (v: number) => `${Math.round(v)}`, upLabel = 'Surplus', downLabel = 'Deficit', height = 200, upColor = 'var(--viz-surplus)', downColor = 'var(--viz-deficit)', minExtent = 100 }: Props = $props()
 
   let width = $state(0)
   let hover = $state<number | null>(null)
@@ -25,7 +27,7 @@
 
   const y = $derived.by(() => {
     const vals = bars.map((b) => b.value)
-    const m = Math.max(100, ...vals.map(Math.abs))
+    const m = Math.max(minExtent, ...vals.map(Math.abs))
     const { ticks, domain } = niceTicks(Math.min(0, ...vals, -m * 0.25), Math.max(0, ...vals, m * 0.25), 4)
     return { ticks, scale: linear(domain, [height - PAD.bottom, PAD.top]) }
   })

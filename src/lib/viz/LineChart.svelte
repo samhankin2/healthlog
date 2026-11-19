@@ -29,11 +29,15 @@
     minStep?: number
     /** Cap the y-axis (e.g. 100 for a score). */
     max?: number
+    /** Opacity of the raw dots (faint by default; stronger when each one is a real measurement). */
+    dotOpacity?: number
+    /** Dashed horizontal reference line (e.g. a goal), kept in the y-domain. */
+    reference?: { value: number; label: string }
   }
 
   let {
     label, from, to, line, raw = [], band = [], bandLabel = 'Your normal range', lineLabel = '7-day average', rawLabel = 'Day',
-    format = (v: number) => `${Math.round(v)}`, height = 200, include = [], step = false, color = 'var(--viz-line)', endLabel = true, minStep = 0, max,
+    format = (v: number) => `${Math.round(v)}`, height = 200, include = [], step = false, color = 'var(--viz-line)', endLabel = true, minStep = 0, max, dotOpacity = 0.28, reference,
   }: Props = $props()
 
   let width = $state(0)
@@ -47,6 +51,7 @@
     ...raw.map((p) => p.value),
     ...band.flatMap((b) => [b.lo, b.hi]),
     ...include,
+    ...(reference ? [reference.value] : []),
   ].filter(isNum))
   const y = $derived.by(() => {
     const lo = Math.min(...values)
@@ -175,8 +180,12 @@
       {/each}
       {#if bandPath}<path class="band" d={bandPath} />{/if}
       {#if areaPath && !band.length}<path d={areaPath} fill={color} opacity="0.08" />{/if}
+      {#if reference}
+        <line class="ref" x1={PAD.left} x2={width - PAD.right} y1={y.scale(reference.value)} y2={y.scale(reference.value)} />
+        <text class="ref-label" x={PAD.left + 4} y={y.scale(reference.value) - 4}>{reference.label}</text>
+      {/if}
       {#each dots as p (p.day)}
-        <circle class="dot" cx={xOf(p.day)} cy={y.scale(p.value as number)} r="2" fill={color} />
+        <circle cx={xOf(p.day)} cy={y.scale(p.value as number)} r={dotOpacity > 0.4 ? 2.5 : 2} fill={color} opacity={dotOpacity} />
       {/each}
       <path d={path} fill="none" stroke={color} stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
       {#if endLabel && last && isNum(last.value) && hoverDay === null}
@@ -211,7 +220,8 @@
   .grid { stroke: var(--viz-grid); stroke-width: 1; }
   .tick { fill: var(--viz-axis); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
   .band { fill: var(--viz-band); }
-  .dot { opacity: 0.28; }
+  .ref { stroke: var(--color-text-muted); stroke-width: 1; stroke-dasharray: 4 4; }
+  .ref-label { fill: var(--color-text-muted); font-size: 0.6875rem; }
   .cross { stroke: var(--color-border-strong); stroke-width: 1; }
   .tip {
     position: absolute; top: 0; z-index: 2; display: flex; padding: var(--space-2) var(--space-3);
