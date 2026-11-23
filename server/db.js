@@ -432,6 +432,67 @@ CREATE TABLE IF NOT EXISTS dish_aliases (        -- other spellings that mean th
   PRIMARY KEY (household_id, alias)
 );
 
+CREATE TABLE IF NOT EXISTS dish_options (        -- options on up to two axes, e.g. Style: Korean, Protein: Beef
+  id         TEXT PRIMARY KEY,
+  dish_id    TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  axis       TEXT NOT NULL,                     -- 'Style' | 'Protein' | 'Fish' | ...
+  name       TEXT NOT NULL,
+  position   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS plan_entries (        -- one meal slot: planned, cooked, or imported history
+  id           TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  date         TEXT,                            -- YYYY-MM-DD; null for undated imports
+  import_order INTEGER,                         -- order within undated imports
+  import_key   TEXT,                            -- makes re-running an import a no-op
+  slot         TEXT NOT NULL DEFAULT 'dinner',
+  dish_id      TEXT REFERENCES dishes(id) ON DELETE SET NULL,
+  kind         TEXT NOT NULL DEFAULT 'dish',    -- dish | out | leftovers | takeaway | freezer
+  status       TEXT NOT NULL DEFAULT 'planned', -- planned | cooked | skipped | swapped | moved
+  source       TEXT NOT NULL DEFAULT 'app',     -- app | notes
+  raw          TEXT,                            -- what was typed / imported
+  cook_name    TEXT,
+  note         TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS plan_entry_options (
+  plan_entry_id TEXT NOT NULL REFERENCES plan_entries(id) ON DELETE CASCADE,
+  option_id     TEXT NOT NULL REFERENCES dish_options(id) ON DELETE CASCADE,
+  PRIMARY KEY (plan_entry_id, option_id)
+);
+
+CREATE TABLE IF NOT EXISTS dish_ratings (        -- standing rating of a meal or one of its options
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id      TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  option_id    TEXT NOT NULL DEFAULT '',        -- '' = the meal itself
+  rated_as     TEXT NOT NULL,                   -- 'both' | a member's user id
+  thumbs       INTEGER,                         -- -1 | 1
+  stars        INTEGER,                         -- 1..5
+  updated_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (dish_id, option_id, rated_as)
+);
+
+CREATE TABLE IF NOT EXISTS planner_notes (       -- notes to Claude about a meal; Claude replies via the CLI
+  id           TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id      TEXT REFERENCES dishes(id) ON DELETE CASCADE,
+  body         TEXT NOT NULL,
+  created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  reply        TEXT,
+  resolved_at  TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dish_options_unique   ON dish_options(dish_id, axis, name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_entries_import   ON plan_entries(household_id, import_key);
+CREATE INDEX IF NOT EXISTS idx_plan_entries_household_date  ON plan_entries(household_id, date);
+CREATE INDEX IF NOT EXISTS idx_plan_entries_dish            ON plan_entries(dish_id);
+CREATE INDEX IF NOT EXISTS idx_dish_ratings_household       ON dish_ratings(household_id);
+CREATE INDEX IF NOT EXISTS idx_planner_notes_household      ON planner_notes(household_id, resolved_at);
+
 CREATE INDEX IF NOT EXISTS idx_household_members_household ON household_members(household_id);
 CREATE INDEX IF NOT EXISTS idx_dishes_household            ON dishes(household_id, name);
 CREATE INDEX IF NOT EXISTS idx_dish_aliases_dish           ON dish_aliases(dish_id);
@@ -466,6 +527,7 @@ export function migrate(db) {
   addColumns(db, 'exercises', { per_side: 'INTEGER NOT NULL DEFAULT 0' }) // 1 = one side at a time (each arm its own entry)
   addColumns(db, 'integrations', { export_day: 'TEXT', export_count: 'INTEGER' }) // Cronometer's daily export budget
   addColumns(db, 'analyses', { revises_id: 'TEXT' }) // the analysis a chat correction revised (model benchmark ground truth)
+  addColumns(db, 'dishes', { suggested_tags: "TEXT NOT NULL DEFAULT '[]'" }) // tag chips offered, not yet accepted
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

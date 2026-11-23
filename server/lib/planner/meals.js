@@ -1,0 +1,369 @@
+/**
+ * Meal planner: the household's meals, their options, standing ratings,
+ * tags, notes to Claude, and the Notes-history import. SPEC §6 "Meal planner".
+ */
+import { randomUUID } from 'node:crypto'
+import { withTx } from '../../db.js'
+import { HttpError } from '../http.js'
+
+/** Alias key: lower case, single spaces, no trailing punctuation. */
+export function normaliseName(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, ' ')
+    .replace(/[\s?!.,;:-]+$/g, '')
+    .trim()
+}
+
+const parseList = (text) => {
+  try {
+    const v = JSON.parse(text || '[]')
+    return Array.isArray(v) ? v.filter((s) => typeof s === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export const MAX_TAGS = 20
+const MAX_TAG_LENGTH = 30
+
+/** Validate a tag list: trimmed, de-duplicated (case-insensitive), at most 20 of 30 chars. */
+export function cleanTags(value, field = 'tags') {
+  if (!Array.isArray(value)) throw new HttpError(400, `${field} must be a list`)
+  const seen = new Set()
+  const out = []
+  for (const raw of value) {
+    const tag = String(raw ?? '').trim().replace(/\s+/g, ' ')
+    if (!tag) continue
+    if (tag.length > MAX_TAG_LENGTH) throw new HttpError(400, `A tag can be at most ${MAX_TAG_LENGTH} characters`)
+    const key = tag.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(tag)
+  }
+  if (out.length > MAX_TAGS) throw new HttpError(400, `At most ${MAX_TAGS} tags per meal`)
+  return out
+}
+
+export function findDish(db, householdId, id) {
+  const dish = db.prepare('SELECT * FROM dishes WHERE id = ? AND household_id = ?').get(id, householdId)
+  if (!dish) throw new HttpError(404, 'Meal not found')
+  return dish
+}
+
+/* ------------------------------------------------------------------ */
+/* Read                                                                */
+/* ------------------------------------------------------------------ */
+
+/** Every meal in the household with options, history counts, ratings and notes. */
+export function mealsPayload(db, householdId) {
+  const dishes = db
+    .prepare('SELECT * FROM dishes WHERE household_id = ? AND archived_at IS NULL ORDER BY name COLLATE NOCASE')
+    .all(householdId)
+  const byId = new Map()
+  const meals = dishes.map((d) => {
+    const meal = {
+      id: d.id,
+      name: d.name,
+      tags: parseList(d.tags),
+      suggestedTags: parseList(d.suggested_tags),
+      effort: d.default_effort ?? null,
+      tips: d.tips ?? null,
+      link: d.link ?? null,
+      neverSuggest: Boolean(d.never_suggest),
+      aliases: [],
+      options: [],
+      cooked: 0,
+      lastCooked: null,
+      ratings: [],
+      notes: [],
+    }
+    byId.set(d.id, meal)
+    return meal
+  })
+
+  for (const r of db
+    .prepare('SELECT a.dish_id, a.alias FROM dish_aliases a WHERE a.household_id = ? ORDER BY a.alias')
+    .all(householdId)) {
+    const meal = byId.get(r.dish_id)
+    if (meal && r.alias !== normaliseName(meal.name)) meal.aliases.push(r.alias)
+  }
+  for (const o of db
+    .prepare(
+      `SELECT o.* FROM dish_options o JOIN dishes d ON d.id = o.dish_id
+        WHERE d.household_id = ? ORDER BY o.axis, o.position, o.name`,
+    )
+    .all(householdId)) {
+    byId.get(o.dish_id)?.options.push({ id: o.id, axis: o.axis, name: o.name })
+  }
+  for (const c of db
+    .prepare(
+      `SELECT dish_id, COUNT(*) AS n, MAX(date) AS last FROM plan_entries
+        WHERE household_id = ? AND kind = 'dish' AND status = 'cooked' AND dish_id IS NOT NULL
+        GROUP BY dish_id`,
+    )
+    .all(householdId)) {
+    const meal = byId.get(c.dish_id)
+    if (meal) {
+      meal.cooked = c.n
+      meal.lastCooked = c.last ?? null
+    }
+  }
+  for (const r of db.prepare('SELECT * FROM dish_ratings WHERE household_id = ?').all(householdId)) {
+    byId.get(r.dish_id)?.ratings.push({
+      optionId: r.option_id || null,
+      ratedAs: r.rated_as,
+      thumbs: r.thumbs ?? null,
+      stars: r.stars ?? null,
+    })
+  }
+  for (const n of db
+    .prepare(
+      `SELECT n.*, u.display_name, u.email FROM planner_notes n LEFT JOIN users u ON u.id = n.created_by
+        WHERE n.household_id = ? AND n.dish_id IS NOT NULL ORDER BY n.created_at, n.rowid`,
+    )
+    .all(householdId)) {
+    byId.get(n.dish_id)?.notes.push(notePayload(n))
+  }
+  return meals
+}
+
+function notePayload(n) {
+  return {
+    id: n.id,
+    body: n.body,
+    reply: n.reply ?? null,
+    resolved: Boolean(n.resolved_at),
+    createdAt: n.created_at,
+    createdBy: n.created_by ?? null,
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Write                                                               */
+/* ------------------------------------------------------------------ */
+
+/** Tags, suggested tags, effort, tips. Only the fields given change. */
+export function updateMeal(db, householdId, id, patch) {
+  findDish(db, householdId, id)
+  const sets = []
+  const values = []
+  if (patch.tags !== undefined) {
+    sets.push('tags = ?')
+    values.push(JSON.stringify(cleanTags(patch.tags)))
+  }
+  if (patch.suggestedTags !== undefined) {
+    sets.push('suggested_tags = ?')
+    values.push(JSON.stringify(cleanTags(patch.suggestedTags, 'suggestedTags')))
+  }
+  if (patch.effort !== undefined) {
+    if (patch.effort !== null && ![1, 2, 3].includes(patch.effort)) throw new HttpError(400, 'effort must be 1, 2, 3 or null')
+    sets.push('default_effort = ?')
+    values.push(patch.effort)
+  }
+  if (patch.tips !== undefined) {
+    const tips = patch.tips === null ? null : String(patch.tips).trim().slice(0, 2000) || null
+    sets.push('tips = ?')
+    values.push(tips)
+  }
+  if (patch.neverSuggest !== undefined) {
+    sets.push('never_suggest = ?')
+    values.push(patch.neverSuggest ? 1 : 0)
+  }
+  if (sets.length === 0) return
+  sets.push("updated_at = datetime('now')")
+  db.prepare(`UPDATE dishes SET ${sets.join(', ')} WHERE id = ?`).run(...values, id)
+}
+
+/**
+ * Upsert one standing rating. `ratedAs` is 'both' or a household member's id.
+ * Clearing both thumbs and stars deletes the rating.
+ */
+export function setRating(db, householdId, user, { dishId, optionId = null, ratedAs, thumbs = null, stars = null }) {
+  findDish(db, householdId, dishId)
+  if (optionId) {
+    const option = db.prepare('SELECT id FROM dish_options WHERE id = ? AND dish_id = ?').get(optionId, dishId)
+    if (!option) throw new HttpError(404, 'Option not found')
+  }
+  let as = ratedAs === 'me' ? user.id : ratedAs
+  if (as !== 'both') {
+    const member = db.prepare('SELECT 1 FROM household_members WHERE household_id = ? AND user_id = ?').get(householdId, as)
+    if (!member) throw new HttpError(400, 'ratedAs must be both, me, or someone in your household')
+  }
+  if (thumbs !== null && thumbs !== -1 && thumbs !== 1) throw new HttpError(400, 'thumbs must be -1, 1 or null')
+  if (stars !== null && !(Number.isInteger(stars) && stars >= 1 && stars <= 5)) throw new HttpError(400, 'stars must be 1 to 5 or null')
+
+  const key = [dishId, optionId ?? '', as]
+  if (thumbs === null && stars === null) {
+    db.prepare('DELETE FROM dish_ratings WHERE dish_id = ? AND option_id = ? AND rated_as = ?').run(...key)
+    return null
+  }
+  db.prepare(
+    `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(dish_id, option_id, rated_as) DO UPDATE SET
+       thumbs = excluded.thumbs, stars = excluded.stars,
+       updated_by = excluded.updated_by, updated_at = datetime('now')`,
+  ).run(householdId, ...key, thumbs, stars, user.id)
+  return { optionId: optionId ?? null, ratedAs: as, thumbs, stars }
+}
+
+export const MAX_NOTE = 2000
+
+export function addNote(db, householdId, user, dishId, body) {
+  findDish(db, householdId, dishId)
+  const text = String(body ?? '').trim()
+  if (!text) throw new HttpError(400, 'Write something first')
+  if (text.length > MAX_NOTE) throw new HttpError(400, `A note can be at most ${MAX_NOTE} characters`)
+  const id = randomUUID()
+  db.prepare('INSERT INTO planner_notes (id, household_id, dish_id, body, created_by) VALUES (?, ?, ?, ?, ?)').run(
+    id,
+    householdId,
+    dishId,
+    text,
+    user.id,
+  )
+  return notePayload(db.prepare('SELECT * FROM planner_notes WHERE id = ?').get(id))
+}
+
+/* ------------------------------------------------------------------ */
+/* Import (server/cli.js planner import)                               */
+/* ------------------------------------------------------------------ */
+
+const IMPORT_KINDS = new Set(['dish', 'out', 'leftovers', 'takeaway'])
+
+function findDishByName(db, householdId, name) {
+  const key = normaliseName(name)
+  return (
+    db.prepare('SELECT d.* FROM dish_aliases a JOIN dishes d ON d.id = a.dish_id WHERE a.household_id = ? AND a.alias = ?').get(householdId, key) ??
+    db.prepare('SELECT * FROM dishes WHERE household_id = ? AND lower(name) = ?').get(householdId, key)
+  )
+}
+
+/**
+ * Load a draft (data/notes-import/draft.json) into a household. Safe to run
+ * again: meals match by name or alias, options by (axis, name), history rows
+ * by import key. Existing tags, effort and ratings are never overwritten.
+ */
+export function importDraft(db, householdId, draft, { dryRun = false } = {}) {
+  if (!draft || !Array.isArray(draft.dishes) || !Array.isArray(draft.weeks)) throw new Error('not a draft: needs dishes[] and weeks[]')
+  const stats = { mealsCreated: 0, mealsMatched: 0, aliasesAdded: 0, optionsAdded: 0, historyAdded: 0, historySkipped: 0, problems: [] }
+
+  const run = () => {
+    const dishIds = new Map() // draft name -> dish id
+    const optionIds = new Map() // `${dishId}|${axis}|${name}` -> option id
+    const addAlias = db.prepare('INSERT OR IGNORE INTO dish_aliases (household_id, alias, dish_id) VALUES (?, ?, ?)')
+
+    for (const item of draft.dishes) {
+      const name = String(item.name ?? '').trim()
+      if (!name) continue
+      let dish = findDishByName(db, householdId, name)
+      if (dish) {
+        stats.mealsMatched++
+        db.prepare(
+          // Suggestions only fill an untouched meal, so re-importing never undoes our choices.
+          `UPDATE dishes SET suggested_tags = CASE WHEN suggested_tags = '[]' AND tags = '[]' THEN ? ELSE suggested_tags END,
+                  tips = COALESCE(tips, ?), link = COALESCE(link, ?), updated_at = datetime('now') WHERE id = ?`,
+        ).run(JSON.stringify(cleanTags(item.suggestedTags ?? [])), item.tips ?? null, item.link ?? null, dish.id)
+      } else {
+        const id = randomUUID()
+        db.prepare('INSERT INTO dishes (id, household_id, name, suggested_tags, tips, link) VALUES (?, ?, ?, ?, ?, ?)').run(
+          id,
+          householdId,
+          name,
+          JSON.stringify(cleanTags(item.suggestedTags ?? [])),
+          item.tips ?? null,
+          item.link ?? null,
+        )
+        dish = { id }
+        stats.mealsCreated++
+      }
+      dishIds.set(name, dish.id)
+      for (const a of [name, ...(item.aliases ?? [])]) {
+        const key = normaliseName(a)
+        if (key && Number(addAlias.run(householdId, key, dish.id).changes) > 0) stats.aliasesAdded++
+      }
+      for (const [axis, names] of Object.entries(item.options ?? {})) {
+        names.forEach((optName, position) => {
+          const existing = db.prepare('SELECT id FROM dish_options WHERE dish_id = ? AND axis = ? AND name = ?').get(dish.id, axis, optName)
+          let optionId = existing?.id
+          if (!optionId) {
+            optionId = randomUUID()
+            db.prepare('INSERT INTO dish_options (id, dish_id, axis, name, position) VALUES (?, ?, ?, ?, ?)').run(optionId, dish.id, axis, optName, position)
+            stats.optionsAdded++
+          }
+          optionIds.set(`${dish.id}|${axis}|${optName}`, optionId)
+        })
+      }
+    }
+
+    let order = 0
+    const insertEntry = db.prepare(
+      `INSERT OR IGNORE INTO plan_entries (id, household_id, date, import_order, import_key, slot, dish_id, kind, status, source, raw, cook_name)
+       VALUES (?, ?, NULL, ?, ?, 'dinner', ?, ?, 'cooked', 'notes', ?, ?)`,
+    )
+    const linkOption = db.prepare('INSERT OR IGNORE INTO plan_entry_options (plan_entry_id, option_id) VALUES (?, ?)')
+    for (const week of draft.weeks) {
+      ;(week.entries ?? []).forEach((e, index) => {
+        order++
+        const kind = e.dish ? 'dish' : e.kind
+        if (!IMPORT_KINDS.has(kind)) return // nothing / unclear nights are not history
+        const dishId = e.dish ? dishIds.get(e.dish) : null
+        if (e.dish && !dishId) {
+          stats.problems.push(`week ${week.source}/${week.week}: unknown meal "${e.dish}"`)
+          return
+        }
+        const id = randomUUID()
+        const key = `notes:${week.source}:${week.week}:${index}`
+        const added = Number(insertEntry.run(id, householdId, order, key, dishId, kind, e.raw ?? null, e.cook ?? null).changes) > 0
+        if (!added) {
+          stats.historySkipped++
+          return
+        }
+        stats.historyAdded++
+        for (const [axis, optName] of Object.entries(e.options ?? {})) {
+          const optionId = optionIds.get(`${dishId}|${axis}|${optName}`)
+          if (optionId) linkOption.run(id, optionId)
+          else stats.problems.push(`week ${week.source}/${week.week}: "${e.dish}" has no option ${axis}: ${optName}`)
+        }
+      })
+    }
+    if (dryRun) throw Object.assign(new Error('dry run'), { dryRun: true })
+  }
+
+  try {
+    withTx(db, run)
+  } catch (err) {
+    if (!err?.dryRun) throw err
+  }
+  return stats
+}
+
+/* ------------------------------------------------------------------ */
+/* Notes for Claude (server/cli.js planner notes / reply)              */
+/* ------------------------------------------------------------------ */
+
+export function listNotes(db, { all = false } = {}) {
+  return db
+    .prepare(
+      `SELECT n.id, d.name AS meal, n.body, n.reply, n.created_at, n.resolved_at,
+              COALESCE(u.display_name, u.email) AS by_user
+         FROM planner_notes n
+         LEFT JOIN dishes d ON d.id = n.dish_id
+         LEFT JOIN users u ON u.id = n.created_by
+        ${all ? '' : 'WHERE n.resolved_at IS NULL'}
+        ORDER BY n.created_at, n.rowid`,
+    )
+    .all()
+}
+
+export function replyToNote(db, id, { reply, resolve = false }) {
+  const note = db.prepare('SELECT id FROM planner_notes WHERE id = ?').get(id)
+  if (!note) throw new Error(`no note with id ${id}`)
+  db.prepare(`UPDATE planner_notes SET reply = COALESCE(?, reply), resolved_at = CASE WHEN ? THEN datetime('now') ELSE resolved_at END WHERE id = ?`).run(
+    reply ?? null,
+    resolve ? 1 : 0,
+    id,
+  )
+}

@@ -45,6 +45,8 @@ import { garminAvailable, garminStatus, markLoggedIn, pythonBin, scriptPath, syn
 import { backfillBench, backfillTargets, benchConfig } from './lib/modelBench.js'
 import { isMocked, userTextFromPrompt } from './ai.js'
 import { corosStatus, dumpRaw as corosDump, readLastSync as corosLastSync, syncUser as corosSync } from './lib/coros.js'
+import { ensureHousehold } from './lib/planner/household.js'
+import { importDraft, listNotes, replyToNote } from './lib/planner/meals.js'
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -87,6 +89,10 @@ function usage() {
     '  node server/cli.js bench status                   model benchmark: runs per model + meals missing panel answers',
     '  node server/cli.js bench backfill [--dry-run] [--email <email>] [--days N] [--limit N]',
     '                       [--models a,b] [--retry-failed] [--delay ms]   ask the panel about earlier meals',
+    '  node server/cli.js planner import --email <email> [--dry-run] [file|-]',
+    '                       load a Notes-import draft (JSON, stdin by default) into that user\'s household',
+    '  node server/cli.js planner notes [--all]          notes to Claude about meals (open ones by default)',
+    '  node server/cli.js planner reply --id <note id> [--resolve] [-]   reply text from stdin',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
     '  node server/cli.js invite list                    list invite codes',
     '  node server/cli.js invite revoke --code <code>',
@@ -412,8 +418,56 @@ function cmdBackup(action) {
 }
 
 /* ------------------------------------------------------------------ */
-/* main                                                                */
+/* Meal planner                                                        */
 /* ------------------------------------------------------------------ */
+
+async function cmdPlanner(action, args) {
+  if (action === 'import') {
+    const db = getDb()
+    const user = userByEmailArg(db, args)
+    const file = args._[1] // args._[0] is the action itself
+    const text = !file || file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8')
+    const draft = JSON.parse(text)
+    const dryRun = Boolean(args['dry-run'])
+    if (!dryRun) {
+      const snap = backupNow(db, { label: 'pre-planner-import' })
+      console.error(`backup taken first: ${snap.file}`)
+    }
+    const householdId = ensureHousehold(db, user)
+    const stats = importDraft(db, householdId, draft, { dryRun })
+    console.log(`${dryRun ? 'DRY RUN (nothing saved): ' : ''}household ${householdId}`)
+    for (const [k, v] of Object.entries(stats)) if (k !== 'problems') console.log(`  ${k}: ${v}`)
+    for (const p of stats.problems) console.log(`  problem: ${p}`)
+    if (stats.problems.length) process.exitCode = 1
+    return
+  }
+  if (action === 'notes') {
+    const rows = listNotes(openReadOnly(), { all: Boolean(args.all) })
+    if (rows.length === 0) {
+      console.log(args.all ? 'No notes yet.' : 'No open notes.')
+      return
+    }
+    if (args.json) {
+      console.log(JSON.stringify(rows, null, 2))
+      return
+    }
+    for (const n of rows) {
+      console.log(`${n.id}  [${n.meal ?? '-'}]  ${n.by_user ?? '?'}  ${n.created_at}${n.resolved_at ? '  (resolved)' : ''}`)
+      console.log(`  ${n.body.replace(/\n/g, '\n  ')}`)
+      if (n.reply) console.log(`  reply: ${n.reply.replace(/\n/g, '\n         ')}`)
+    }
+    return
+  }
+  if (action === 'reply') {
+    if (typeof args.id !== 'string') throw new Error('--id <note id> is required')
+    const text = args._[1] === '-' || !process.stdin.isTTY ? fs.readFileSync(0, 'utf8').trim() : ''
+    replyToNote(getDb(), args.id, { reply: text || null, resolve: Boolean(args.resolve) })
+    console.log(`note ${args.id} updated${args.resolve ? ' and resolved' : ''}`)
+    return
+  }
+  usage()
+  process.exitCode = 1
+}
 
 /* ------------------------------------------------------------------ */
 /* Garmin                                                              */
@@ -573,6 +627,7 @@ async function main() {
   if (group === 'garmin') return cmdGarmin(action, args)
   if (group === 'coros') return cmdCoros(action, args)
   if (group === 'bench') return cmdBench(action, args)
+  if (group === 'planner') return cmdPlanner(action, args)
 
   const db = getDb()
 

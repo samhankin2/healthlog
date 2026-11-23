@@ -26,6 +26,9 @@
 #   scripts/hl bench-status       model benchmark: runs per model, meals missing panel answers
 #   scripts/hl bench-backfill [--dry-run] [--days N] [--limit N] [--email E] [--models a,b] [--retry-failed]
 #                                 ask the 5 background models about every earlier meal (resumable)
+#   scripts/hl planner-import EMAIL [--dry-run] < draft.json   load a meal-history draft
+#   scripts/hl planner-notes [--all]   notes to Claude about meals
+#   echo text | scripts/hl planner-reply ID [--resolve]   answer a note
 #   scripts/hl ssh                plain shell on the box
 #
 # The DB on the box is read through server/cli.js, so nothing extra needs
@@ -44,7 +47,7 @@ ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
 remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 
-usage() { sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Only fixed flags are forwarded to the remote command line; the SQL itself
 # goes over stdin, so no quoting or injection worries.
@@ -235,6 +238,31 @@ EOF
       shift
     done
     remote "set -a; . <(sudo cat /etc/healthlog/healthlog.env); set +a; $CLI bench ${cmd#bench-} ${flags[*]:-}"
+    ;;
+
+  planner-import)
+    # hl planner-import EMAIL [--dry-run] < data/notes-import/draft.json
+    email="${1:-}"; shift || true
+    [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || { echo "usage: hl planner-import EMAIL [--dry-run] < draft.json" >&2; exit 2; }
+    flag=""
+    case "${1:-}" in --dry-run) flag="--dry-run" ;; "") ;; *) echo "unknown flag: $1" >&2; exit 2 ;; esac
+    remote "$CLI planner import --email '$email' $flag -"
+    ;;
+
+  planner-notes)
+    # hl planner-notes [--all] [--json]
+    flags=()
+    for a in "$@"; do case "$a" in --all|--json) flags+=("$a") ;; *) echo "unknown flag: $a" >&2; exit 2 ;; esac; done
+    remote "$CLI planner notes ${flags[*]:-}"
+    ;;
+
+  planner-reply)
+    # echo "reply text" | hl planner-reply NOTE_ID [--resolve]
+    id="${1:-}"; shift || true
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || { echo "usage: echo text | hl planner-reply NOTE_ID [--resolve]" >&2; exit 2; }
+    flag=""
+    case "${1:-}" in --resolve) flag="--resolve" ;; "") ;; *) echo "unknown flag: $1" >&2; exit 2 ;; esac
+    remote "$CLI planner reply --id $id $flag -"
     ;;
 
   help|-h|--help)

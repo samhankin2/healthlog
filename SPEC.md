@@ -308,8 +308,19 @@ log's): `name`, `tags` JSON array, `default_effort` 1–3, `tips`, `link`,
 `regular_every_days`, `regular_weekday` (0 = Monday), `never_suggest`,
 `archived_at`. `dish_aliases` (`household_id`, `alias` normalised to lower case
 with single spaces, `dish_id`, cascade), primary key `(household_id, alias)`.
-Later milestones add plan entries, reviews, freezer stock, photos and shopping
-lists; every planner table carries `household_id`.
+`dishes.suggested_tags` (JSON) holds tag chips offered but not yet accepted.
+`dish_options` (`dish_id`, `axis` e.g. Style / Protein / Fish, `name`,
+`position`; unique per dish + axis + name): options on up to two axes.
+`plan_entries`: one meal slot (`date` null for undated imports, ordered by
+`import_order`; `import_key` unique per household so re-imports are no-ops;
+`slot`, `dish_id`, `kind` dish|out|leftovers|takeaway|freezer, `status`
+planned|cooked|skipped|swapped|moved, `source` app|notes, `raw`, `cook_name`,
+`note`). `plan_entry_options` links an entry to the options cooked.
+`dish_ratings`: a standing rating of a meal (`option_id` '') or one option,
+primary key `(dish_id, option_id, rated_as)`, `rated_as` 'both' or a member's
+user id, `thumbs` −1|1, `stars` 1–5. `planner_notes`: a note to Claude about a
+meal (`body`, `reply`, `resolved_at`). Later milestones add reviews, freezer
+stock, photos and shopping lists; every planner table carries `household_id`.
 
 ### Model benchmark table
 
@@ -958,7 +969,28 @@ in to one signs you in to the other.
 ```
 GET    /api/planner/household       -> 200 { ok:true, household:{ id, members:[{id,name,me}],
                                                 partner:{status:'linked'|'pending',email}|null } }
+GET    /api/planner/meals           -> 200 { ok:true, meals:[{ id, name, tags[], suggestedTags[], effort,
+                                                tips, link, neverSuggest, aliases[], options:[{id,axis,name}],
+                                                cooked, lastCooked, ratings:[{optionId,ratedAs,thumbs,stars}],
+                                                notes:[{id,body,reply,resolved,createdAt,createdBy}] }] }
+PUT    /api/planner/meals/:id { tags?, suggestedTags?, effort?: 1|2|3|null, tips?, neverSuggest? }
+                                    -> 200 { ok:true, meal }   # 400 bad effort / >20 tags / tag >30 chars
+PUT    /api/planner/ratings { dishId, optionId?, ratedAs:'both'|'me'|<member id>, thumbs?, stars? }
+                                    -> 200 { ok:true, rating|null }  # both null deletes; 404 foreign meal/option
+POST   /api/planner/meals/:id/notes { body } -> 201 { ok:true, note }   # 1–2000 chars
 ```
+- **Ratings** are standing opinions of a meal or one of its options, separate
+  from per-cook reviews (M3). Either member may rate as `both`, as themselves,
+  or as the other member. `cooked` counts `plan_entries` with kind `dish` and
+  status `cooked`; undated imports count but leave `lastCooked` null.
+- **Tags:** accepted `tags` and offered `suggestedTags`; the client shows a
+  suggestion only while it isn't accepted. Re-imports refill suggestions only
+  on a meal with no tags and no suggestions, so they never undo our choices.
+- **Import and notes** are admin tasks (`server/cli.js planner import | notes |
+  reply`, or `scripts/hl planner-import EMAIL < draft.json`, `planner-notes`,
+  `planner-reply ID`). The import takes a backup first, matches meals by name
+  or alias and history by import key, and never overwrites tags, effort or
+  ratings. A reply to a note shows under it in the app.
 - **Household resolution** runs at the start of every planner request
   (`server/lib/planner/household.js`): no household → one is created for the
   user and their linked partner; a linked partner's household → the user joins

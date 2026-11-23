@@ -156,6 +156,118 @@ async function run() {
   eq('relink: Chloe keeps her household', chloeAfter?.id, chloeSolo.id)
   eq('relink: Chloe is alone in it', chloeAfter?.members.map((m) => m.name), ['Chloe'])
   ok('relink: the dish stayed with Chloe', dishHousehold(curry).includes(chloeSolo.id))
+
+  await runMeals({ sam, chloe, alex })
+}
+
+/* ---------- meals, import, ratings, tags, notes ---------- */
+const DRAFT = {
+  dishes: [
+    { name: 'Dirty cabbage', options: { Style: ['Korean', 'Chinese'], Protein: ['Kangaroo', 'Beef'] }, aliases: ['Filthy cabbage'], suggestedTags: ['stir-fry', 'quick'] },
+    { name: 'Thai curry', options: { Protein: ['Tofu'] }, aliases: ['Thai cuzza'], suggestedTags: ['curry', 'Thai'], tips: 'Light coconut milk' },
+    { name: 'Palak', options: {}, aliases: [], suggestedTags: [] },
+  ],
+  weeks: [
+    { source: 'qa', week: 1, entries: [
+      { day: 'Mon', raw: 'Chinese dirty cabbage', dish: 'Dirty cabbage', options: { Style: 'Chinese' } },
+      { day: 'Tue', raw: 'Thai cuzza', dish: 'Thai curry' },
+      { day: 'Wed', raw: 'OUT', kind: 'out' },
+      { day: 'Thu', raw: '-', kind: 'nothing' },
+      { day: 'Fri', raw: 'Filthy cabbage', dish: 'Dirty cabbage' },
+    ] },
+  ],
+}
+
+function cliImport(email, draft, ...flags) {
+  return spawnSync(process.execPath, [CLI, 'planner', 'import', '--email', email, ...flags, '-'], {
+    env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', input: JSON.stringify(draft),
+  })
+}
+
+async function runMeals({ sam, chloe, alex }) {
+  // Chloe re-links Sam (Sam left for Alex above): reset to a clean pair.
+  await link(sam, 'chloe@example.com')
+  await link(chloe, 'sam@example.com')
+  await api('DELETE', '/api/partner', { token: alex })
+  const home = await household(sam)
+  eq('meals setup: Sam and Chloe share a household again', (await household(chloe))?.id, home.id)
+  const chloeId = home.members.find((m) => m.name === 'Chloe').id
+
+  let r = cliImport('sam@example.com', DRAFT, '--dry-run')
+  ok('import: dry run exits 0', r.status === 0, r.stdout + r.stderr)
+  ok('import: dry run says so', /DRY RUN/.test(r.stdout))
+  ok('import: dry run saves nothing', !(await api('GET', '/api/planner/meals', { token: sam })).json.meals.some((m) => m.name === 'Palak'))
+
+  r = cliImport('sam@example.com', DRAFT)
+  ok('import: exits 0', r.status === 0, r.stdout + r.stderr)
+  // Thai curry already exists from the household tests above, so it is matched, not created.
+  ok('import: 2 new meals, 1 matched', /mealsCreated: 2/.test(r.stdout) && /mealsMatched: 1/.test(r.stdout), r.stdout)
+  ok('import: 4 history rows (nothing night skipped)', /historyAdded: 4/.test(r.stdout), r.stdout)
+  r = cliImport('sam@example.com', DRAFT)
+  ok('import: re-run adds nothing', /mealsCreated: 0/.test(r.stdout) && /historyAdded: 0/.test(r.stdout) && /historySkipped: 4/.test(r.stdout), r.stdout)
+
+  r = await api('GET', '/api/planner/meals', { token: chloe })
+  eq('meals: 200 for the partner', r.status, 200)
+  const meals = r.json.meals
+  const cabbage = meals.find((m) => m.name === 'Dirty cabbage')
+  const curry2 = meals.find((m) => m.name === 'Thai curry')
+  eq('meals: cooked count from history', cabbage?.cooked, 2)
+  eq('meals: undated history has no last date', cabbage?.lastCooked, null)
+  eq('meals: options on two axes', cabbage?.options.map((o) => `${o.axis}:${o.name}`).sort(), ['Protein:Beef', 'Protein:Kangaroo', 'Style:Chinese', 'Style:Korean'])
+  eq('meals: suggested tags', cabbage?.suggestedTags, ['stir-fry', 'quick'])
+  eq('meals: no accepted tags yet', cabbage?.tags, [])
+  ok('meals: aliases exclude the name', cabbage?.aliases.includes('filthy cabbage') && !cabbage.aliases.includes('dirty cabbage'))
+  eq('meals: tips imported', curry2?.tips, 'Light coconut milk')
+  eq('meals: outsiders see none of it', (await api('GET', '/api/planner/meals', { token: alex })).json.meals.length, 0)
+
+  // Tags + effort
+  r = await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: sam, body: { tags: ['quick', ' Quick ', 'weeknight'], effort: 1 } })
+  eq('tags: saved, trimmed, de-duplicated', r.json?.meal?.tags, ['quick', 'weeknight'])
+  eq('effort: saved', r.json?.meal?.effort, 1)
+  eq('effort: 4 rejected', (await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: sam, body: { effort: 4 } })).status, 400)
+  eq('tags: too long rejected', (await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: sam, body: { tags: ['x'.repeat(31)] } })).status, 400)
+  eq('meal edit: other household gets 404', (await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: alex, body: { effort: 2 } })).status, 404)
+  r = cliImport('sam@example.com', DRAFT)
+  eq('import: re-run keeps accepted tags', (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id).tags, ['quick', 'weeknight'])
+
+  // Ratings: both, me, as the partner, per option
+  const korean = cabbage.options.find((o) => o.name === 'Korean')
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 1, stars: 4 } })
+  eq('rating: both saved', r.json?.rating, { optionId: null, ratedAs: 'both', thumbs: 1, stars: 4 })
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'me', thumbs: 1, stars: 5 } })
+  eq('rating: me resolves to my id', r.json?.rating?.ratedAs, home.members.find((m) => m.me).id)
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: chloeId, thumbs: -1, stars: 3 } })
+  eq('rating: Sam can rate as Chloe', r.json?.rating?.ratedAs, chloeId)
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: korean.id, ratedAs: 'both', thumbs: 1, stars: 5 } })
+  eq('rating: an option on its own', r.json?.rating?.optionId, korean.id)
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 1, stars: 2 } })
+  const after = (await api('GET', '/api/planner/meals', { token: chloe })).json.meals.find((m) => m.id === cabbage.id)
+  eq('rating: upsert, 4 ratings in total', after.ratings.length, 4)
+  eq('rating: both updated in place', after.ratings.find((x) => x.ratedAs === 'both' && !x.optionId)?.stars, 2)
+  r = await api('PUT', '/api/planner/ratings', { token: chloe, body: { dishId: cabbage.id, ratedAs: 'me', thumbs: null, stars: null } })
+  eq('rating: clearing deletes', r.json?.rating, null)
+  eq('rating: Chloe’s gone', (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id).ratings.length, 3)
+  eq('rating: outsider as ratedAs rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'someone-else', thumbs: 1 } })).status, 400)
+  eq('rating: stars 6 rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', stars: 6 } })).status, 400)
+  eq('rating: thumbs 0 rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 0 } })).status, 400)
+  eq('rating: option from another meal 404', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: curry2.id, optionId: korean.id, ratedAs: 'both', thumbs: 1 } })).status, 404)
+  eq('rating: other household 404', (await api('PUT', '/api/planner/ratings', { token: alex, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 1 } })).status, 404)
+
+  // Notes for Claude
+  r = await api('POST', `/api/planner/meals/${curry2.id}/notes`, { token: chloe, body: { body: 'Green curry should be its own meal' } })
+  eq('note: 201', r.status, 201)
+  const noteId = r.json?.note?.id
+  eq('note: empty rejected', (await api('POST', `/api/planner/meals/${curry2.id}/notes`, { token: chloe, body: { body: '  ' } })).status, 400)
+  eq('note: other household 404', (await api('POST', `/api/planner/meals/${curry2.id}/notes`, { token: alex, body: { body: 'hi' } })).status, 404)
+  r = spawnSync(process.execPath, [CLI, 'planner', 'notes'], { env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8' })
+  ok('cli notes: lists the open note with its meal', r.stdout.includes(noteId) && r.stdout.includes('[Thai curry]') && r.stdout.includes('Green curry'), r.stdout + r.stderr)
+  r = spawnSync(process.execPath, [CLI, 'planner', 'reply', '--id', noteId, '--resolve', '-'], { env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', input: 'Done: added a Style option instead.' })
+  ok('cli reply: exits 0', r.status === 0, r.stdout + r.stderr)
+  const note = (await api('GET', '/api/planner/meals', { token: chloe })).json.meals.find((m) => m.id === curry2.id).notes[0]
+  eq('note: reply shows in the app', note?.reply, 'Done: added a Style option instead.')
+  eq('note: resolved', note?.resolved, true)
+  r = spawnSync(process.execPath, [CLI, 'planner', 'notes'], { env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8' })
+  ok('cli notes: resolved notes hidden by default', !r.stdout.includes(noteId), r.stdout)
 }
 
 try {
