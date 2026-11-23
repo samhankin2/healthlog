@@ -233,7 +233,7 @@ async function runMeals({ sam, chloe, alex }) {
   // Ratings: both, me, as the partner, per option
   const korean = cabbage.options.find((o) => o.name === 'Korean')
   r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 1, stars: 4 } })
-  eq('rating: both saved', r.json?.rating, { optionId: null, ratedAs: 'both', thumbs: 1, stars: 4 })
+  eq('rating: both saved', r.json?.rating, { optionId: null, ratedAs: 'both', thumbs: 1, stars: 4, want: false })
   r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'me', thumbs: 1, stars: 5 } })
   eq('rating: me resolves to my id', r.json?.rating?.ratedAs, home.members.find((m) => m.me).id)
   r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: chloeId, thumbs: -1, stars: 3 } })
@@ -260,6 +260,35 @@ async function runMeals({ sam, chloe, alex }) {
   eq('rating: combination updated', combos[0]?.stars, 2)
   eq('rating: two options from one axis rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${korean.id}+${chinese.id}`, ratedAs: 'both', thumbs: 1 } })).status, 400)
   await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${korean.id}+${beef.id}`, ratedAs: 'both', thumbs: null, stars: null } })
+  // Want to make: no score, counts as an answer; a score clears it
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', want: true } })
+  eq('want: saved with no score', r.json?.rating, { optionId: [chinese.id, beef.id].sort().join('+'), ratedAs: 'both', thumbs: null, stars: null, want: true })
+  eq('want: with stars rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', want: true, stars: 4 } })).status, 400)
+  let listed = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id)
+  eq('want: listed', listed.ratings.find((x) => x.optionId === [chinese.id, beef.id].sort().join('+'))?.want, true)
+  eq('want: ordinary ratings say false', listed.ratings.find((x) => x.ratedAs === 'both' && !x.optionId)?.want, false)
+  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', thumbs: 1, stars: 4 } })
+  eq('want: a score replaces it', r.json?.rating?.want, false)
+  await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', thumbs: null, stars: null } })
+
+  // Hidden variations: never had it, off the list for the household
+  r = await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: `${beef.id}+${chinese.id}` } })
+  eq('hidden: saved, key sorted', r.json?.hidden, [[chinese.id, beef.id].sort().join('+')])
+  listed = (await api('GET', '/api/planner/meals', { token: chloe })).json.meals.find((m) => m.id === cabbage.id)
+  eq('hidden: the partner sees it hidden too', listed.hidden, [[chinese.id, beef.id].sort().join('+')])
+  eq('hidden: again is a no-op', (await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: `${chinese.id}+${beef.id}`, hidden: true } })).json?.hidden.length, 1)
+  eq('hidden: bad option 404', (await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: 'nope' } })).status, 404)
+  eq('hidden: other household 404', (await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: alex, body: { optionId: chinese.id } })).status, 404)
+  r = await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: `${chinese.id}+${beef.id}`, hidden: false } })
+  eq('hidden: put back', r.json?.hidden, [])
+
+  // Removing a meal: off the list, back again with its ratings
+  r = await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: sam, body: { archived: true } })
+  eq('remove meal: 200, no meal in the reply', [r.status, r.json?.meal], [200, null])
+  ok('remove meal: gone from the list', !(await api('GET', '/api/planner/meals', { token: sam })).json.meals.some((m) => m.id === cabbage.id))
+  r = await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: sam, body: { archived: false } })
+  eq('remove meal: undo brings it back with its ratings', r.json?.meal?.ratings.length, 3)
+
   eq('rating: option from another meal 404', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: curry2.id, optionId: korean.id, ratedAs: 'both', thumbs: 1 } })).status, 404)
   eq('rating: other household 404', (await api('PUT', '/api/planner/ratings', { token: alex, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 1 } })).status, 404)
 

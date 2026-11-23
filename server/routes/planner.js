@@ -9,7 +9,7 @@ import { requireUser } from '../auth.js'
 import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
 import { asObject } from '../lib/validate.js'
 import { ensureHousehold, householdPayload } from '../lib/planner/household.js'
-import { addNote, mealsPayload, setRating, updateMeal } from '../lib/planner/meals.js'
+import { addNote, mealsPayload, setHidden, setRating, updateMeal } from '../lib/planner/meals.js'
 
 /** The caller and their household id; use at the top of every planner route. */
 export function plannerContext(req) {
@@ -44,8 +44,9 @@ export function registerPlannerRoutes(router) {
       effort: body.effort === undefined ? undefined : nullableInt(body.effort, 'effort'),
       tips: body.tips,
       neverSuggest: body.neverSuggest,
+      archived: body.archived === undefined ? undefined : Boolean(body.archived),
     })
-    const meal = mealsPayload(db, householdId).find((m) => m.id === params.id)
+    const meal = mealsPayload(db, householdId).find((m) => m.id === params.id) ?? null
     sendJson(res, 200, { ok: true, meal })
   })
 
@@ -60,8 +61,15 @@ export function registerPlannerRoutes(router) {
       ratedAs: body.ratedAs,
       thumbs: nullableInt(body.thumbs, 'thumbs'),
       stars: nullableInt(body.stars, 'stars'),
+      want: body.want === true,
     })
     sendJson(res, 200, { ok: true, rating })
+  })
+
+  router.put('/api/planner/meals/:id/hidden', async ({ req, res, params }) => {
+    const { user, db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    sendJson(res, 200, { ok: true, hidden: setHidden(db, householdId, user, params.id, body.optionId, body.hidden !== false) })
   })
 
   router.post('/api/planner/meals/:id/notes', async ({ req, res, params }) => {

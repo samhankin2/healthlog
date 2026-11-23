@@ -78,6 +78,7 @@ export function mealsPayload(db, householdId) {
       cooked: 0,
       lastCooked: null,
       ratings: [],
+      hidden: [],
       notes: [],
     }
     byId.set(d.id, meal)
@@ -117,7 +118,11 @@ export function mealsPayload(db, householdId) {
       ratedAs: r.rated_as,
       thumbs: r.thumbs ?? null,
       stars: r.stars ?? null,
+      want: Boolean(r.want),
     })
+  }
+  for (const h of db.prepare('SELECT dish_id, option_id FROM dish_hidden_options WHERE household_id = ? ORDER BY option_id').all(householdId)) {
+    byId.get(h.dish_id)?.hidden.push(h.option_id)
   }
   for (const n of db
     .prepare(
@@ -145,7 +150,7 @@ function notePayload(n) {
 /* Write                                                               */
 /* ------------------------------------------------------------------ */
 
-/** Tags, suggested tags, effort, tips. Only the fields given change. */
+/** Tags, suggested tags, effort, tips, archived. Only the fields given change. */
 export function updateMeal(db, householdId, id, patch) {
   findDish(db, householdId, id)
   const sets = []
@@ -172,6 +177,10 @@ export function updateMeal(db, householdId, id, patch) {
     sets.push('never_suggest = ?')
     values.push(patch.neverSuggest ? 1 : 0)
   }
+  if (patch.archived !== undefined) {
+    // Removed from the list; history, ratings and aliases stay, so it can come back.
+    sets.push(patch.archived ? "archived_at = COALESCE(archived_at, datetime('now'))" : 'archived_at = NULL')
+  }
   if (sets.length === 0) return
   sets.push("updated_at = datetime('now')")
   db.prepare(`UPDATE dishes SET ${sets.join(', ')} WHERE id = ?`).run(...values, id)
@@ -197,9 +206,10 @@ export function comboKey(db, dishId, key) {
 
 /**
  * Upsert one standing rating. `ratedAs` is 'both' or a household member's id.
- * Clearing both thumbs and stars deletes the rating.
+ * `want` marks a variation not had yet that we want to make: it carries no
+ * thumbs or stars (a score clears it). Clearing everything deletes the rating.
  */
-export function setRating(db, householdId, user, { dishId, optionId = null, ratedAs, thumbs = null, stars = null }) {
+export function setRating(db, householdId, user, { dishId, optionId = null, ratedAs, thumbs = null, stars = null, want = false }) {
   findDish(db, householdId, dishId)
   optionId = optionId ? comboKey(db, dishId, optionId) : null
   let as = ratedAs === 'me' ? user.id : ratedAs
@@ -209,20 +219,40 @@ export function setRating(db, householdId, user, { dishId, optionId = null, rate
   }
   if (thumbs !== null && thumbs !== -1 && thumbs !== 1) throw new HttpError(400, 'thumbs must be -1, 1 or null')
   if (stars !== null && !(Number.isInteger(stars) && stars >= 1 && stars <= 5)) throw new HttpError(400, 'stars must be 1 to 5 or null')
+  if (want && (thumbs !== null || stars !== null)) throw new HttpError(400, 'want takes no thumbs or stars')
 
   const key = [dishId, optionId ?? '', as]
-  if (thumbs === null && stars === null) {
+  if (thumbs === null && stars === null && !want) {
     db.prepare('DELETE FROM dish_ratings WHERE dish_id = ? AND option_id = ? AND rated_as = ?').run(...key)
     return null
   }
   db.prepare(
-    `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, want, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(dish_id, option_id, rated_as) DO UPDATE SET
-       thumbs = excluded.thumbs, stars = excluded.stars,
+       thumbs = excluded.thumbs, stars = excluded.stars, want = excluded.want,
        updated_by = excluded.updated_by, updated_at = datetime('now')`,
-  ).run(householdId, ...key, thumbs, stars, user.id)
-  return { optionId: optionId ?? null, ratedAs: as, thumbs, stars }
+  ).run(householdId, ...key, thumbs, stars, want ? 1 : 0, user.id)
+  return { optionId: optionId ?? null, ratedAs: as, thumbs, stars, want: Boolean(want) }
+}
+
+/**
+ * Take a variation or combination off a meal's list ("never had it"), or put
+ * it back. Household-wide; its ratings are kept and return with it.
+ */
+export function setHidden(db, householdId, user, dishId, optionId, hidden) {
+  findDish(db, householdId, dishId)
+  if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'optionId is required')
+  const key = comboKey(db, dishId, optionId)
+  if (hidden) {
+    db.prepare(
+      `INSERT INTO dish_hidden_options (household_id, dish_id, option_id, hidden_by) VALUES (?, ?, ?, ?)
+       ON CONFLICT(dish_id, option_id) DO NOTHING`,
+    ).run(householdId, dishId, key, user.id)
+  } else {
+    db.prepare('DELETE FROM dish_hidden_options WHERE dish_id = ? AND option_id = ?').run(dishId, key)
+  }
+  return db.prepare('SELECT option_id FROM dish_hidden_options WHERE dish_id = ? ORDER BY option_id').all(dishId).map((r) => r.option_id)
 }
 
 export const MAX_NOTE = 2000
@@ -404,6 +434,8 @@ export function splitOptions(db, householdId, mealName, { family = null, restNam
           result.aliasesMoved++
         }
       }
+      // Hidden keys naming this option go with it: the new meal is the option itself.
+      db.prepare("DELETE FROM dish_hidden_options WHERE dish_id = ? AND (option_id = ? OR '+' || option_id || '+' LIKE '%+' || ? || '+%')").run(dish.id, o.id, o.id)
       db.prepare('DELETE FROM dish_options WHERE id = ?').run(o.id) // cascades its plan_entry_options
     }
     db.prepare("UPDATE dishes SET name = ?, family = ?, updated_at = datetime('now') WHERE id = ?").run(restName ?? dish.name, familyName, dish.id)

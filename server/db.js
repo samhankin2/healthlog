@@ -475,6 +475,15 @@ CREATE TABLE IF NOT EXISTS dish_ratings (        -- standing rating of a meal or
   PRIMARY KEY (dish_id, option_id, rated_as)
 );
 
+CREATE TABLE IF NOT EXISTS dish_hidden_options ( -- a variation or combination taken off the list ("never had it")
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id      TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  option_id    TEXT NOT NULL,                   -- an option id, or a combination key like dish_ratings.option_id
+  hidden_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  hidden_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (dish_id, option_id)
+);
+
 CREATE TABLE IF NOT EXISTS planner_notes (       -- notes to Claude about a meal; Claude replies via the CLI
   id           TEXT PRIMARY KEY,
   household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
@@ -529,6 +538,7 @@ export function migrate(db) {
   addColumns(db, 'analyses', { revises_id: 'TEXT' }) // the analysis a chat correction revised (model benchmark ground truth)
   addColumns(db, 'dishes', { suggested_tags: "TEXT NOT NULL DEFAULT '[]'" }) // tag chips offered, not yet accepted
   addColumns(db, 'dishes', { family: 'TEXT' }) // a section of related meals, e.g. "Pulled pork"
+  addColumns(db, 'dish_ratings', { want: 'INTEGER NOT NULL DEFAULT 0' }) // 1 = not had it yet, want to make it
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */
