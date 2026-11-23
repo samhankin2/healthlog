@@ -177,15 +177,30 @@ export function updateMeal(db, householdId, id, patch) {
 }
 
 /**
+ * A rating target below the meal: one option id, or a combination of options
+ * from different axes joined with '+' ("<style id>+<protein id>"). Returned
+ * with the ids sorted, so the same combination always has the same key.
+ */
+export function comboKey(db, dishId, key) {
+  const ids = [...new Set(String(key).split('+').filter(Boolean))].sort()
+  if (ids.length === 0 || ids.length > 3) throw new HttpError(400, 'optionId must name 1 to 3 options')
+  const axes = new Set()
+  for (const id of ids) {
+    const option = db.prepare('SELECT axis FROM dish_options WHERE id = ? AND dish_id = ?').get(id, dishId)
+    if (!option) throw new HttpError(404, 'Option not found')
+    if (axes.has(option.axis)) throw new HttpError(400, 'A combination takes one option per axis')
+    axes.add(option.axis)
+  }
+  return ids.join('+')
+}
+
+/**
  * Upsert one standing rating. `ratedAs` is 'both' or a household member's id.
  * Clearing both thumbs and stars deletes the rating.
  */
 export function setRating(db, householdId, user, { dishId, optionId = null, ratedAs, thumbs = null, stars = null }) {
   findDish(db, householdId, dishId)
-  if (optionId) {
-    const option = db.prepare('SELECT id FROM dish_options WHERE id = ? AND dish_id = ?').get(optionId, dishId)
-    if (!option) throw new HttpError(404, 'Option not found')
-  }
+  optionId = optionId ? comboKey(db, dishId, optionId) : null
   let as = ratedAs === 'me' ? user.id : ratedAs
   if (as !== 'both') {
     const member = db.prepare('SELECT 1 FROM household_members WHERE household_id = ? AND user_id = ?').get(householdId, as)

@@ -979,8 +979,11 @@ PUT    /api/planner/ratings { dishId, optionId?, ratedAs:'both'|'me'|<member id>
                                     -> 200 { ok:true, rating|null }  # both null deletes; 404 foreign meal/option
 POST   /api/planner/meals/:id/notes { body } -> 201 { ok:true, note }   # 1–2000 chars
 ```
-- **Ratings** are standing opinions of a meal or one of its options, separate
-  from per-cook reviews (M3). Either member may rate as `both`, as themselves,
+- **Ratings** are standing opinions of a meal, one of its options, or a
+  combination of options from different axes (`optionId` = option ids joined
+  with `+`, stored sorted, at most one per axis; 400 otherwise). The client
+  rates a meal with no options as itself, a one-axis meal per option, and a
+  two-axis meal per combination. They are separate from per-cook reviews (M3). Either member may rate as `both`, as themselves,
   or as the other member. `cooked` counts `plan_entries` with kind `dish` and
   status `cooked`; undated imports count but leave `lastCooked` null.
 - **Tags:** accepted `tags` and offered `suggestedTags`; the client shows a
