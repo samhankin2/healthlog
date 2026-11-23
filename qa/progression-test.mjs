@@ -141,6 +141,35 @@ ok('range: user setting wins', plan(ex({ repMin: 3, repMax: 5 }), [[100, [5, 5, 
   ok('reset: climbing back after a reset is progress, not a plateau', t.kind === 'reps' || t.kind === 'load', show(t))
 }
 
+{
+  // Following the plan exactly is progress: one more rep on the weakest set
+  // never raises the best set, and must not read as a stall.
+  const t = plan(ex(auto), [[80, [10, 9, 8]], [80, [10, 9, 9]], [80, [10, 10, 9]], [80, [10, 10, 10]]])
+  ok('plateau: adding reps to the weakest set is not a stall', t.kind === 'reps' || t.kind === 'load', show(t))
+  const ws = history(ex(auto), [[80, [10, 9, 8]], [80, [10, 9, 9]], [80, [10, 10, 9]], [80, [10, 10, 10]]])
+  const st = L.exerciseStats(ex(auto), ws, noBw, shift(ws[ws.length - 1].day, 3))
+  ok('plateau: status is not stalled while following the plan', st.status !== 'stalled' && st.sessionsSinceBest === 0, `${st.status} / ${st.sessionsSinceBest}`)
+}
+{
+  // Simulate many sessions doing exactly what the plan says: never a reset.
+  for (const [name, e, start] of [
+    ['barbell 6–12', ex(auto), [80, [9, 8, 7]]],
+    ['barbell 5–8', ex(), [80, [7, 6, 5]]],
+    ['dumbbell 6–12', ex({ name: 'Dumbbell curl', muscle: 'biceps', equipment: 'dumbbell', ...auto }), [12, [10, 8, 7]]],
+    ['lateral 6–15', ex({ name: 'Lateral raise', muscle: 'shoulders', equipment: 'dumbbell', ...auto }), [8, [12, 10, 9]]],
+  ]) {
+    const done = [start]
+    const kinds = []
+    for (let i = 0; i < 24; i++) {
+      const t = plan(e, done)
+      kinds.push(t.kind)
+      if (t.kind === 'reset' || t.kind === 'range' || t.kind === 'lighter') break
+      done.push([t.weightKg, t.reps])
+    }
+    ok(`plateau: following the plan for 24 sessions never resets (${name})`, !kinds.some((k) => k === 'reset' || k === 'range' || k === 'lighter'), kinds.join(' '))
+  }
+}
+
 /* ---------- time off ---------- */
 {
   const t = plan(ex(), [[80, [8, 8, 8]]], { todayGap: 14 })

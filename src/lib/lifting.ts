@@ -18,7 +18,7 @@
  */
 import type { Equipment, Exercise, InsightActivity, InsightsPayload, LiftSet, LiftingPayload, Muscle, SetKind, Workout } from './types'
 import { dayNum, isNum, shiftDay, weekStart } from './insights'
-import { planNext, type Target } from './progression'
+import { planNext, progressWindow, type Target } from './progression'
 import { NO_FATIGUE, fatigueBefore, freshEquivalent, type FatigueSource } from './fatigue'
 import { hardSetCount, setShares } from './sides'
 
@@ -240,9 +240,9 @@ export function exerciseStats(ex: Exercise, workouts: Workout[], bw: BodyweightA
   // one is not read as slipping or stalling.
   const scored = sessions.filter((s) => isNum(s.bestFresh))
   const val = (s: SessionLine): number => s.bestFresh as number
-  let bestIdx = -1
-  scored.forEach((s, i) => { if (bestIdx < 0 || val(s) > val(scored[bestIdx]) + 1e-9) bestIdx = i })
-  const sessionsSinceBest = bestIdx < 0 ? 0 : scored.length - 1 - bestIdx
+  // Since the last step forward: a new best, or the plan's rep or load step
+  // (progression.ts), so following the plan is never read as a stall.
+  const sessionsSinceBest = scored.length ? progressWindow(ex, sessions, metric, bw).sinceBest : 0
   const lastDay = sessions.length ? sessions[sessions.length - 1].day : null
   let change: number | null = null
   if (lastDay && scored.length >= 2) {

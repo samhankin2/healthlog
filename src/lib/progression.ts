@@ -240,23 +240,7 @@ export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' |
 
   /* ---------- context ---------- */
   const daysOff = today ? dayNum(today) - dayNum(last.day) : 0
-  // Both compare sessions as if each had been done fresh.
-  const sessionTop = (s: SessionLine): number => Math.max(0, ...working(s.sets).map((x) => total(x.weightKg, bw(s.day)))) / (1 - fatiguePenalty(s.fatigue ?? 0))
-  const score = (s: SessionLine): number => {
-    const b = bw(s.day)
-    const raw = Math.max(0, ...working(s.sets).map((x) => (repsMetric ? x.reps : total(x.weightKg, b) * (1 + Math.min(x.reps, 30) / 30))))
-    return freshEquivalent(raw, repsMetric ? 'reps' : 'e1rm', s.fatigue ?? 0)
-  }
-  // The latest deliberate drop (reset or comeback) starts a new segment.
-  let seg = 0
-  for (let i = sessions.length - 1; i > 0 && i >= sessions.length - 12 && !repsMetric; i--) {
-    if (sessionTop(sessions[i]) <= sessionTop(sessions[i - 1]) * 0.92) { seg = i; break }
-  }
-  const win = sessions.slice(Math.max(seg, sessions.length - 8))
-  const scores = win.map(score)
-  let bestIdx = 0
-  scores.forEach((v, i) => { if (v > scores[bestIdx] * 1.002) bestIdx = i })
-  const sinceBest = win.length - 1 - bestIdx
+  const { seg, win, scores, sinceBest, sessionTop } = progressWindow(ex, sessions, metric, bw)
   const stalled = win.length >= 4 && sinceBest >= 3
   const resetBefore = seg > 0 && sessionTop(sessions[seg - 1]) <= sessionTop(last) + inc + EPS
   const prev = scores.slice(-4, -1)
@@ -294,13 +278,13 @@ export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' |
       const next = rangeSwitch(range, ex)
       const w = weightFor(topSets[0], next.lo)
       const reps = topSets.map((s) => Math.min(next.hi, Math.max(next.lo, repsAt(s, w))))
-      why.push(`No new best in ${sinceBest} sessions, and this is the second plateau around this weight after a reset.`)
+      why.push(`No progress in ${sinceBest} sessions (no extra rep, no extra weight, no new best), and this is the second plateau around this weight after a reset.`)
       why.push(`Changing the rep range for 4–6 weeks is a new stimulus, and it usually breaks the plateau. Your best at ${fmtRange(range)} will be waiting when you switch back.`)
       return build('range', w, reps, `Stuck again — switch to ${fmtRange(next)} reps for a block`, next)
     }
     const w = Math.min(top - inc, gridDown(total(top) * 0.9))
     const reps = repsNow.map((r) => Math.min(hi, Math.max(lo, r)))
-    why.push(`No new best in your last ${sinceBest} sessions.`)
+    why.push(`No progress in your last ${sinceBest} sessions: no extra rep, no extra weight, no new best.`)
     why.push('Drop about 10 % and work back up. The lighter sessions let fatigue clear, and you usually pass the old best within 3–4 weeks.')
     return build('reset', Math.max(0, w), reps, `Stalled ${sinceBest} sessions — reset to ${unit(Math.max(0, w))} and climb`)
   }
@@ -370,6 +354,72 @@ export function planNext(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' |
   if (repsNow.length >= 2 && repsNow[repsNow.length - 1] < repsNow[0] * 0.75) why.push('Reps fell sharply across your sets. Resting longer (2–3 minutes) between sets usually keeps them up.')
   const note = bumped.length === 1 && reps.length > 1 ? `Same weight — one more rep on set ${bumped[0]}` : bumped.length ? `Same weight — ${reps.length > 1 ? 'more reps' : 'one more rep'}` : 'Same weight — match it'
   return build('reps', top, reps, note)
+}
+
+/* ------------------------------------------------------------------ */
+/* Progress: what counts as a step forward                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The sessions the plateau rule looks at, and how many since the last step
+ * forward. A step forward is any of:
+ * - a new best estimated max (+0.2 %), as if done fresh;
+ * - the plan's rep step: same top weight, every top set at least as many reps
+ *   as the last step forward and one more somewhere (or an extra set);
+ * - the plan's load step: a heavier top weight, with the best set's estimated
+ *   max within 6 % of the last step forward (the reps a jump predicts).
+ * Without the last two, following the plan ("one more rep on set 3") would
+ * not count, and three sessions of doing exactly that would read as a stall.
+ */
+export function progressWindow(ex: Exercise, sessions: SessionLine[], metric: 'e1rm' | 'reps', bw: BodyweightAt) {
+  const total = (added: number, day: string): number => setLoad({ weightKg: added }, ex, bw(day))
+  const work = (s: SessionLine): LiftSet[] => working(mergeSides(s.sets, ex.perSide))
+  const last = sessions[sessions.length - 1]
+  const lastTop = last ? Math.max(0, ...work(last).map((x) => x.weightKg)) : 0
+  const repsMetric = metric === 'reps' || !(last && total(lastTop, last.day) > 0)
+  // Both compare sessions as if each had been done fresh.
+  const sessionTop = (s: SessionLine): number => Math.max(0, ...working(s.sets).map((x) => total(x.weightKg, s.day))) / (1 - fatiguePenalty(s.fatigue ?? 0))
+  const score = (s: SessionLine): number => {
+    const raw = Math.max(0, ...working(s.sets).map((x) => (repsMetric ? x.reps : total(x.weightKg, s.day) * (1 + Math.min(x.reps, 30) / 30))))
+    return freshEquivalent(raw, repsMetric ? 'reps' : 'e1rm', s.fatigue ?? 0)
+  }
+  // The latest deliberate drop (reset or comeback) starts a new segment.
+  let seg = 0
+  for (let i = sessions.length - 1; i > 0 && i >= sessions.length - 12 && !repsMetric; i--) {
+    if (sessionTop(sessions[i]) <= sessionTop(sessions[i - 1]) * 0.92) { seg = i; break }
+  }
+  const win = sessions.slice(Math.max(seg, sessions.length - 8))
+  const scores = win.map(score)
+
+  const topOf = (s: SessionLine): { w: number; reps: number[] } => {
+    const ws = work(s)
+    const w = Math.max(0, ...ws.map((x) => x.weightKg))
+    return { w, reps: ws.filter((x) => near(x.weightKg, w)).map((x) => x.reps) }
+  }
+  /** Session b took the plan's rep or load step past session a. */
+  const stepped = (bi: number, ai: number): boolean => {
+    const a = topOf(win[ai])
+    const b = topOf(win[bi])
+    if (!a.reps.length || !b.reps.length) return false
+    if (b.w > a.w + EPS) return scores[bi] >= scores[ai] * 0.94
+    if (!near(a.w, b.w)) return false
+    // Reps as if b had been done as tired as a.
+    const ratio = (1 - fatiguePenalty(win[ai].fatigue ?? 0)) / (1 - fatiguePenalty(win[bi].fatigue ?? 0))
+    const rb = b.reps.map((r) => scaleReps(r, ratio))
+    const n = Math.min(a.reps.length, rb.length)
+    for (let i = 0; i < n; i++) if (rb[i] < a.reps[i]) return false
+    return rb.length > a.reps.length || rb.slice(0, n).some((r, i) => r > a.reps[i])
+  }
+
+  let bar = 0
+  let best = scores[0] ?? 0
+  for (let i = 1; i < win.length; i++) {
+    if (scores[i] > best * 1.002 || stepped(i, bar)) {
+      bar = i
+      best = Math.max(best, scores[i])
+    }
+  }
+  return { seg, win, scores, sinceBest: win.length ? win.length - 1 - bar : 0, sessionTop }
 }
 
 /* ------------------------------------------------------------------ */

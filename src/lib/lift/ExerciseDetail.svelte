@@ -135,10 +135,10 @@
         {#if stats.change !== null}<span class="st-change">{stats.change >= 0 ? '+' : ''}{stats.change.toFixed(1)}% vs the 4 weeks before</span>{/if}
       </div>
       <p class="st-copy">
-        {#if stats.status === 'stalled'}No new best in your last {stats.sessionsSinceBest} sessions. The plan below handles it.
+        {#if stats.status === 'stalled'}No progress (an extra rep, more weight or a new best) in your last {stats.sessionsSinceBest} sessions. The plan below handles it.
         {:else if stats.status === 'regressing'}Your best this month is below last month's. Usually fatigue, a cut or time off, and it comes back.
         {:else if stats.status === 'progressing'}Still climbing. Keep doing what you're doing.
-        {:else if stats.status === 'steady'}Holding. {stats.sessionsSinceBest} session{stats.sessionsSinceBest === 1 ? '' : 's'} since your best.
+        {:else if stats.status === 'steady'}Holding. {stats.sessionsSinceBest} session{stats.sessionsSinceBest === 1 ? '' : 's'} since your last step forward.
         {:else}Log a couple more sessions to see a trend.{/if}
       </p>
       {#if trend}

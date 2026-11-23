@@ -812,7 +812,7 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   day, else the first after). Records (best e1RM, heaviest, rep PR) count only
   after the first session. Status: last 4 weeks of training vs the 4 before
   (or everything earlier): ≤ −3 % slipping, the last session a best or ≥ +1 %
-  progressing, no best in the last 3 sessions stalled, else steady. Weekly volume =
+  progressing, no step forward (as in the plateau rule below) in the last 3 sessions stalled, else steady. Weekly volume =
   hard sets per primary muscle, against a 10–20 band.
 - **Progression** (`src/lib/progression.ts`, pure; the header comment has the
   sources). Rep range (`repMin`/`repMax` are both null or both 1–50, max ≥ min) is
@@ -825,7 +825,10 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   2. First top set ≥ 2 below the range bottom, or under it at RIR ≤ 0.5 → lighter
      weight that predicts bottom + 1 reps.
   3. Plateau: ≥ 4 sessions since the latest ≥ 8 % top-weight drop (looking back
-     12 sessions), and no new best (+0.2 %) in the last 3. First time → reset to about
+     12 sessions), and no step forward in the last 3: a new best (+0.2 %), the rep step
+     (same top weight, every top set ≥ the last step forward and one more somewhere,
+     or an extra set) or the load step (heavier, best set within 6 % of the last step
+     forward), so following the plan is never a plateau. First time → reset to about
      90 %. Already reset, and back within one step of the weight it was reset from → switch rep range
      (≤ 8 → 8–12, ≥ 10 → 6–10, else barbell 5–8 / other 10–15).
   4. Last session ≥ 5 % below the best of the 3 before → repeat.
