@@ -46,7 +46,7 @@ import { backfillBench, backfillTargets, benchConfig } from './lib/modelBench.js
 import { isMocked, userTextFromPrompt } from './ai.js'
 import { corosStatus, dumpRaw as corosDump, readLastSync as corosLastSync, syncUser as corosSync } from './lib/coros.js'
 import { ensureHousehold } from './lib/planner/household.js'
-import { importDraft, listNotes, replyToNote } from './lib/planner/meals.js'
+import { importDraft, listNotes, replyToNote, splitOptions } from './lib/planner/meals.js'
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -91,6 +91,8 @@ function usage() {
     '                       [--models a,b] [--retry-failed] [--delay ms]   ask the panel about earlier meals',
     '  node server/cli.js planner import --email <email> [--dry-run] [file|-]',
     '                       load a Notes-import draft (JSON, stdin by default) into that user\'s household',
+    '  node server/cli.js planner split --email <email> --meal "<name>" [--family "<section>"] [--rest "<new name>"] [--dry-run]',
+    '                       turn each option of a meal into its own meal',
     '  node server/cli.js planner notes [--all]          notes to Claude about meals (open ones by default)',
     '  node server/cli.js planner reply --id <note id> [--resolve] [-]   reply text from stdin',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
@@ -439,6 +441,23 @@ async function cmdPlanner(action, args) {
     for (const [k, v] of Object.entries(stats)) if (k !== 'problems') console.log(`  ${k}: ${v}`)
     for (const p of stats.problems) console.log(`  problem: ${p}`)
     if (stats.problems.length) process.exitCode = 1
+    return
+  }
+  if (action === 'split') {
+    const db = getDb()
+    const user = userByEmailArg(db, args)
+    if (typeof args.meal !== 'string') throw new Error('--meal "<name>" is required')
+    const dryRun = Boolean(args['dry-run'])
+    if (!dryRun) console.error(`backup taken first: ${backupNow(db, { label: 'pre-planner-split' }).file}`)
+    const r = splitOptions(db, ensureHousehold(db, user), args.meal, {
+      family: typeof args.family === 'string' ? args.family : null,
+      restName: typeof args.rest === 'string' ? args.rest : null,
+      dryRun,
+    })
+    console.log(`${dryRun ? 'DRY RUN (nothing saved): ' : ''}split "${args.meal}"`)
+    for (const name of r.created) console.log(`  new meal: ${name}`)
+    console.log(`  kept as: ${r.rest}`)
+    console.log(`  history moved: ${r.historyMoved}, ratings moved: ${r.ratingsMoved}, aliases moved: ${r.aliasesMoved}`)
     return
   }
   if (action === 'notes') {

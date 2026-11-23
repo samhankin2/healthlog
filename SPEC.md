@@ -308,7 +308,9 @@ log's): `name`, `tags` JSON array, `default_effort` 1–3, `tips`, `link`,
 `regular_every_days`, `regular_weekday` (0 = Monday), `never_suggest`,
 `archived_at`. `dish_aliases` (`household_id`, `alias` normalised to lower case
 with single spaces, `dish_id`, cascade), primary key `(household_id, alias)`.
-`dishes.suggested_tags` (JSON) holds tag chips offered but not yet accepted.
+`dishes.suggested_tags` (JSON) holds tag chips offered but not yet accepted;
+`dishes.family` names a section of related meals (e.g. "Pulled pork": the
+sandwiches, tacos, soup, bao buns, bowl and the slow roast are separate meals).
 `dish_options` (`dish_id`, `axis` e.g. Style / Protein / Fish, `name`,
 `position`; unique per dish + axis + name): options on up to two axes.
 `plan_entries`: one meal slot (`date` null for undated imports, ordered by
@@ -969,7 +971,7 @@ in to one signs you in to the other.
 ```
 GET    /api/planner/household       -> 200 { ok:true, household:{ id, members:[{id,name,me}],
                                                 partner:{status:'linked'|'pending',email}|null } }
-GET    /api/planner/meals           -> 200 { ok:true, meals:[{ id, name, tags[], suggestedTags[], effort,
+GET    /api/planner/meals           -> 200 { ok:true, meals:[{ id, name, family, tags[], suggestedTags[], effort,
                                                 tips, link, neverSuggest, aliases[], options:[{id,axis,name}],
                                                 cooked, lastCooked, ratings:[{optionId,ratedAs,thumbs,stars}],
                                                 notes:[{id,body,reply,resolved,createdAt,createdBy}] }] }
@@ -994,6 +996,12 @@ POST   /api/planner/meals/:id/notes { body } -> 201 { ok:true, note }   # 1–20
   `planner-reply ID`). The import takes a backup first, matches meals by name
   or alias and history by import key, and never overwrites tags, effort or
   ratings. A reply to a note shows under it in the app.
+- **Split** (`cli.js planner split --meal <name> [--family] [--rest]`, or
+  `scripts/hl planner-split EMAIL "Meal" ["Rest name"]`) turns each option of
+  a one-axis meal into its own meal named "<meal> <option>" in a family named
+  after the meal. History cooked with that option, its ratings, and aliases
+  containing the option's name move with it; the original keeps the rest and
+  can be renamed. A backup is taken first.
 - **Household resolution** runs at the start of every planner request
   (`server/lib/planner/household.js`): no household → one is created for the
   user and their linked partner; a linked partner's household → the user joins

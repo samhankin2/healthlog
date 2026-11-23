@@ -528,6 +528,7 @@ export function migrate(db) {
   addColumns(db, 'integrations', { export_day: 'TEXT', export_count: 'INTEGER' }) // Cronometer's daily export budget
   addColumns(db, 'analyses', { revises_id: 'TEXT' }) // the analysis a chat correction revised (model benchmark ground truth)
   addColumns(db, 'dishes', { suggested_tags: "TEXT NOT NULL DEFAULT '[]'" }) // tag chips offered, not yet accepted
+  addColumns(db, 'dishes', { family: 'TEXT' }) // a section of related meals, e.g. "Pulled pork"
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

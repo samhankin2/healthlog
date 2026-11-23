@@ -66,6 +66,7 @@ export function mealsPayload(db, householdId) {
     const meal = {
       id: d.id,
       name: d.name,
+      family: d.family ?? null,
       tags: parseList(d.tags),
       suggestedTags: parseList(d.suggested_tags),
       effort: d.default_effort ?? null,
@@ -279,14 +280,15 @@ export function importDraft(db, householdId, draft, { dryRun = false } = {}) {
         db.prepare(
           // Suggestions only fill an untouched meal, so re-importing never undoes our choices.
           `UPDATE dishes SET suggested_tags = CASE WHEN suggested_tags = '[]' AND tags = '[]' THEN ? ELSE suggested_tags END,
-                  tips = COALESCE(tips, ?), link = COALESCE(link, ?), updated_at = datetime('now') WHERE id = ?`,
-        ).run(JSON.stringify(cleanTags(item.suggestedTags ?? [])), item.tips ?? null, item.link ?? null, dish.id)
+                  tips = COALESCE(tips, ?), link = COALESCE(link, ?), family = COALESCE(family, ?), updated_at = datetime('now') WHERE id = ?`,
+        ).run(JSON.stringify(cleanTags(item.suggestedTags ?? [])), item.tips ?? null, item.link ?? null, item.family ?? null, dish.id)
       } else {
         const id = randomUUID()
-        db.prepare('INSERT INTO dishes (id, household_id, name, suggested_tags, tips, link) VALUES (?, ?, ?, ?, ?, ?)').run(
+        db.prepare('INSERT INTO dishes (id, household_id, name, family, suggested_tags, tips, link) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
           id,
           householdId,
           name,
+          item.family ?? null,
           JSON.stringify(cleanTags(item.suggestedTags ?? [])),
           item.tips ?? null,
           item.link ?? null,
@@ -353,6 +355,67 @@ export function importDraft(db, householdId, draft, { dryRun = false } = {}) {
     if (!err?.dryRun) throw err
   }
   return stats
+}
+
+/* ------------------------------------------------------------------ */
+/* Split: turn a meal's options into meals of their own                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Each option of a one-axis meal becomes its own meal ("<meal> <option>"),
+ * in a family (section) named after the meal. History cooked with that option,
+ * matching aliases, and ratings of that option move with it; the meal keeps
+ * any history without an option and can be renamed (`restName`).
+ */
+export function splitOptions(db, householdId, mealName, { family = null, restName = null, dryRun = false } = {}) {
+  const dish = findDishByName(db, householdId, mealName)
+  if (!dish) throw new Error(`no meal called "${mealName}"`)
+  const options = db.prepare('SELECT * FROM dish_options WHERE dish_id = ? ORDER BY axis, position, name').all(dish.id)
+  if (options.length === 0) throw new Error(`"${dish.name}" has no options to split`)
+  if (new Set(options.map((o) => o.axis)).size > 1) throw new Error(`"${dish.name}" has more than one axis; split supports one`)
+  const familyName = family ?? dish.name
+  const result = { created: [], historyMoved: 0, ratingsMoved: 0, aliasesMoved: 0, rest: restName ?? dish.name }
+
+  const run = () => {
+    for (const o of options) {
+      const name = `${dish.name} ${o.name.toLowerCase()}`
+      const clash = findDishByName(db, householdId, name)
+      if (clash && clash.id !== dish.id) throw new Error(`a meal called "${name}" already exists`)
+      db.prepare('DELETE FROM dish_aliases WHERE household_id = ? AND alias = ?').run(householdId, normaliseName(name))
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO dishes (id, household_id, name, family, tags, suggested_tags, tips, link)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, householdId, name, familyName, dish.tags, dish.suggested_tags, dish.tips, dish.link)
+      db.prepare('INSERT OR IGNORE INTO dish_aliases (household_id, alias, dish_id) VALUES (?, ?, ?)').run(householdId, normaliseName(name), id)
+      result.created.push(name)
+
+      const entries = db.prepare('SELECT plan_entry_id AS id FROM plan_entry_options WHERE option_id = ?').all(o.id)
+      for (const e of entries) db.prepare('UPDATE plan_entries SET dish_id = ? WHERE id = ?').run(id, e.id)
+      result.historyMoved += entries.length
+      result.ratingsMoved += Number(
+        db.prepare("UPDATE dish_ratings SET dish_id = ?, option_id = '' WHERE dish_id = ? AND option_id = ?").run(id, dish.id, o.id).changes,
+      )
+      // "Sandwiches" also claims "pulled pork sandwich".
+      const stem = normaliseName(o.name).replace(/(es|s)$/, '')
+      for (const a of db.prepare('SELECT alias FROM dish_aliases WHERE household_id = ? AND dish_id = ?').all(householdId, dish.id)) {
+        if (stem && a.alias.includes(stem)) {
+          db.prepare('UPDATE dish_aliases SET dish_id = ? WHERE household_id = ? AND alias = ?').run(id, householdId, a.alias)
+          result.aliasesMoved++
+        }
+      }
+      db.prepare('DELETE FROM dish_options WHERE id = ?').run(o.id) // cascades its plan_entry_options
+    }
+    db.prepare("UPDATE dishes SET name = ?, family = ?, updated_at = datetime('now') WHERE id = ?").run(restName ?? dish.name, familyName, dish.id)
+    if (restName) db.prepare('INSERT OR IGNORE INTO dish_aliases (household_id, alias, dish_id) VALUES (?, ?, ?)').run(householdId, normaliseName(restName), dish.id)
+    if (dryRun) throw Object.assign(new Error('dry run'), { dryRun: true })
+  }
+  try {
+    withTx(db, run)
+  } catch (err) {
+    if (!err?.dryRun) throw err
+  }
+  return result
 }
 
 /* ------------------------------------------------------------------ */

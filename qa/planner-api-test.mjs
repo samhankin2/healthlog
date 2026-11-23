@@ -278,6 +278,35 @@ async function runMeals({ sam, chloe, alex }) {
   eq('note: resolved', note?.resolved, true)
   r = spawnSync(process.execPath, [CLI, 'planner', 'notes'], { env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8' })
   ok('cli notes: resolved notes hidden by default', !r.stdout.includes(noteId), r.stdout)
+
+  // Split: each option becomes its own meal in a section
+  r = cliImport('sam@example.com', {
+    dishes: [{ name: 'Pulled pork', options: { Style: ['Sandwiches', 'Soup'] }, aliases: ['Pulled pork sandwich'], suggestedTags: ['batch-cook'] }],
+    weeks: [{ source: 'qa-pp', week: 1, entries: [
+      { day: 'Sat', raw: 'Pulled pork', dish: 'Pulled pork' },
+      { day: 'Sun', raw: 'Pulled pork sandwich', dish: 'Pulled pork', options: { Style: 'Sandwiches' } },
+      { day: 'Mon', raw: 'Pulled pork sandwich', dish: 'Pulled pork', options: { Style: 'Sandwiches' } },
+    ] }],
+  })
+  ok('split setup: imported', r.status === 0, r.stdout + r.stderr)
+  let pp = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.name === 'Pulled pork')
+  await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: pp.id, optionId: pp.options.find((o) => o.name === 'Sandwiches').id, ratedAs: 'both', thumbs: 1, stars: 5 } })
+  const split = (...extra) => spawnSync(process.execPath, [CLI, 'planner', 'split', '--email', 'sam@example.com', '--meal', 'Pulled pork', '--rest', 'Pulled pork (slow roast)', ...extra], { env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8' })
+  r = split('--dry-run')
+  ok('split: dry run changes nothing', r.status === 0 && (await api('GET', '/api/planner/meals', { token: sam })).json.meals.some((m) => m.name === 'Pulled pork'), r.stdout + r.stderr)
+  r = split()
+  ok('split: exits 0', r.status === 0, r.stdout + r.stderr)
+  const all = (await api('GET', '/api/planner/meals', { token: sam })).json.meals
+  const fam = all.filter((m) => m.family === 'Pulled pork').map((m) => m.name).sort()
+  eq('split: a section of three meals', fam, ['Pulled pork (slow roast)', 'Pulled pork sandwiches', 'Pulled pork soup'])
+  const sand = all.find((m) => m.name === 'Pulled pork sandwiches')
+  eq('split: history moved with the option', sand?.cooked, 2)
+  eq('split: rating became the new meal’s own', sand?.ratings.map((x) => [x.optionId, x.stars]), [[null, 5]])
+  ok('split: matching alias moved', sand?.aliases.includes('pulled pork sandwich'))
+  eq('split: the rest keeps history without an option', all.find((m) => m.name === 'Pulled pork (slow roast)')?.cooked, 1)
+  eq('split: the rest has no options left', all.find((m) => m.name === 'Pulled pork (slow roast)')?.options.length, 0)
+  eq('split: tags copied', sand?.suggestedTags, ['batch-cook'])
+  ok('split: again fails cleanly (no options)', split().status !== 0)
 }
 
 try {

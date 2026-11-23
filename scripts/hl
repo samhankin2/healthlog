@@ -29,6 +29,7 @@
 #   scripts/hl planner-import EMAIL [--dry-run] < draft.json   load a meal-history draft
 #   scripts/hl planner-notes [--all]   notes to Claude about meals
 #   echo text | scripts/hl planner-reply ID [--resolve]   answer a note
+#   scripts/hl planner-split EMAIL "Meal" ["Rest name"] [--dry-run]   options become meals
 #   scripts/hl ssh                plain shell on the box
 #
 # The DB on the box is read through server/cli.js, so nothing extra needs
@@ -47,7 +48,7 @@ ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
 remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 
-usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Only fixed flags are forwarded to the remote command line; the SQL itself
 # goes over stdin, so no quoting or injection worries.
@@ -263,6 +264,17 @@ EOF
     flag=""
     case "${1:-}" in --resolve) flag="--resolve" ;; "") ;; *) echo "unknown flag: $1" >&2; exit 2 ;; esac
     remote "$CLI planner reply --id $id $flag -"
+    ;;
+
+  planner-split)
+    # hl planner-split EMAIL "Meal" ["New name for the rest"] [--dry-run]
+    email="${1:-}"; meal="${2:-}"; rest="${3:-}"; flag="${4:-}"
+    if [ "$rest" = "--dry-run" ]; then flag="--dry-run"; rest=""; fi
+    name_ok='^[A-Za-z0-9 ()&,-]+$'
+    [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ && "$meal" =~ $name_ok ]] || { echo 'usage: hl planner-split EMAIL "Meal" ["Rest name"] [--dry-run]' >&2; exit 2; }
+    [ -z "$rest" ] || [[ "$rest" =~ $name_ok ]] || { echo "rest name: letters, numbers, spaces, ()&,- only" >&2; exit 2; }
+    case "$flag" in --dry-run|"") ;; *) echo "unknown flag: $flag" >&2; exit 2 ;; esac
+    remote "$CLI planner split --email '$email' --meal '$meal' ${rest:+--rest '$rest'} $flag"
     ;;
 
   help|-h|--help)
