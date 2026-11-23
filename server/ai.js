@@ -797,6 +797,46 @@ export async function runAnalysis({ user, message, profile = null, intake = null
 }
 
 /* ------------------------------------------------------------------ */
+/* Single-model JSON helper (meal planner, SPEC §7 "Planner AI tasks")  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Ask one model for strict JSON. Used by the meal planner's small tasks
+ * (matching typed meals, parsing reviews, guessing tags and sections), which
+ * need no two-model reconciliation. Never throws.
+ *
+ * `mock` is what a mocked run returns (AI_MOCK=1 or no key): a value, or a
+ * function of the user text. Callers always have a non-AI fallback, so a
+ * failure here is reported, not fatal.
+ *
+ * @returns {Promise<{ ok: true, data: any, model: string, mocked?: true } | { ok: false, error: string }>}
+ */
+export async function askJson({ system, user, mock, timeoutMs = JUDGE_TIMEOUT_MS, sessionId = null, cfg = aiConfig() }) {
+  if (isMocked(cfg)) {
+    const data = typeof mock === 'function' ? mock(user) : mock
+    if (data === undefined) return { ok: false, error: 'AI is mocked and this task has no mock' }
+    return { ok: true, data, model: 'mock', mocked: true }
+  }
+  const model = process.env.AI_PLANNER_MODEL || cfg.modelA
+  const result = await chatWithFallback({
+    model,
+    fallbackModel: cfg.fallbackModelA,
+    messages: [
+      { role: 'system', content: `${system}\nReply with STRICT JSON only: no prose, no markdown, no code fences.` },
+      { role: 'user', content: String(user ?? '') },
+    ],
+    timeoutMs,
+    jsonMode: true,
+    sessionId,
+    cfg,
+  })
+  if (!result.ok) return { ok: false, error: result.error }
+  const data = parseLooseJson(result.content)
+  if (data === null) return { ok: false, error: `${result.model} did not return JSON` }
+  return { ok: true, data, model: result.model }
+}
+
+/* ------------------------------------------------------------------ */
 /* DB row → API payload                                                */
 /* ------------------------------------------------------------------ */
 

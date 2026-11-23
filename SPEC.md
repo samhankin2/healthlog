@@ -298,6 +298,19 @@ recipient's copy once accepted, set null; `created_at`, `resolved_at`), unique o
 sender's meal live, so a correction made after sharing is what the partner sees.
 Exact DDL lives in `server/db.js`.
 
+### Meal planner tables
+
+The meal planner (§6 "Meal planner") stores its data per **household**, not
+per user. `households` (`id`, `created_at`); `household_members` (`user_id`
+primary key, so one household per user; `household_id`, cascade). `dishes`: a
+meal the household cooks, called "meal" in the UI (the name `meals` is the food
+log's): `name`, `tags` JSON array, `default_effort` 1–3, `tips`, `link`,
+`regular_every_days`, `regular_weekday` (0 = Monday), `never_suggest`,
+`archived_at`. `dish_aliases` (`household_id`, `alias` normalised to lower case
+with single spaces, `dish_id`, cascade), primary key `(household_id, alias)`.
+Later milestones add plan entries, reviews, freezer stock, photos and shopping
+lists; every planner table carries `household_id`.
+
 ### Model benchmark table
 
 `model_runs` (`analysis_id` → analyses, cascade; `user_id`; `model`; `role`
@@ -937,6 +950,25 @@ POST   /api/shared-meals/:id/dismiss -> 200 { ok:true, dismissed:<id> }
 - Every meal payload carries `sharedStatus` — `pending` | `accepted` |
   `dismissed` | `null` — so the sender can see what happened to an offer.
 
+### Meal planner
+The client is the separate **mealplan** frontend (its own repo and GitHub Pages
+site, same origin as this one, so CORS needs no change). It signs in with a
+HealthLog account; the token key in `localStorage` is shared, so being signed
+in to one signs you in to the other.
+```
+GET    /api/planner/household       -> 200 { ok:true, household:{ id, members:[{id,name,me}],
+                                                partner:{status:'linked'|'pending',email}|null } }
+```
+- **Household resolution** runs at the start of every planner request
+  (`server/lib/planner/household.js`): no household → one is created for the
+  user and their linked partner; a linked partner's household → the user joins
+  it; two different households → merged, the one with fewer dishes moving into
+  the other. A household holds at most the two linked people: linking a new
+  partner leaves the old household, whose data stays with the person left.
+  Unlinking alone never splits a household.
+- All planner reads and writes are scoped to the caller's household. A row from
+  another household answers `404`, never `403`.
+
 ### Imports
 ```
 POST /api/import/weight-json { json: <the old weight-tracker export as an object> }
@@ -1115,6 +1147,15 @@ must still show the `comparison` string in both cases.)
 **Never** let the AI key reach the frontend. It lives only in the server
 environment (`OPENCODE_API_KEY`), never in the repo, never in a GitHub variable
 that the frontend can read.
+
+### Planner AI tasks
+
+The meal planner's AI tasks (matching typed meals, parsing reviews, suggesting
+tags, guessing shopping sections) use `askJson()` in `server/ai.js`: **one**
+model (`AI_PLANNER_MODEL`, default model A) with the same Groq fallback, strict
+JSON out, never throws. Each task supplies its own mock for `AI_MOCK` runs and
+has a non-AI fallback, and every AI result is confirmed by the user before it
+is saved.
 
 ## 8. Frontend contract
 

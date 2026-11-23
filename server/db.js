@@ -397,6 +397,45 @@ CREATE TABLE IF NOT EXISTS model_runs (          -- one estimate per model per a
 CREATE INDEX IF NOT EXISTS idx_model_runs_user_created ON model_runs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_model_runs_analysis     ON model_runs(analysis_id);
 
+-- Meal planner (SPEC §4 "Meal planner tables"). Shared by a household, not a user.
+CREATE TABLE IF NOT EXISTS households (
+  id          TEXT PRIMARY KEY,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS household_members (   -- one household per user
+  user_id      TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  joined_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS dishes (              -- a meal we cook ("meal" in the UI)
+  id                 TEXT PRIMARY KEY,
+  household_id       TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  name               TEXT NOT NULL,
+  tags               TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  default_effort     INTEGER,                    -- 1 low | 2 medium | 3 high
+  tips               TEXT,
+  link               TEXT,
+  regular_every_days INTEGER,                    -- a regular: suggest again after this many days
+  regular_weekday    INTEGER,                    -- optional fixed night, 0 = Monday
+  never_suggest      INTEGER NOT NULL DEFAULT 0,
+  archived_at        TEXT,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS dish_aliases (        -- other spellings that mean the same dish
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  alias        TEXT NOT NULL,                    -- normalised: lower case, single spaces
+  dish_id      TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  PRIMARY KEY (household_id, alias)
+);
+
+CREATE INDEX IF NOT EXISTS idx_household_members_household ON household_members(household_id);
+CREATE INDEX IF NOT EXISTS idx_dishes_household            ON dishes(household_id, name);
+CREATE INDEX IF NOT EXISTS idx_dish_aliases_dish           ON dish_aliases(dish_id);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_meals_source_to ON shared_meals(source_meal_id, to_user_id);
 CREATE INDEX IF NOT EXISTS idx_shared_meals_to_status        ON shared_meals(to_user_id, status);
 
