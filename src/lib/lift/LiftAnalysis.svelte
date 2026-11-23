@@ -58,7 +58,7 @@
     if (first === null) return 4
     return Math.max(1, Math.min(4, heat.weeks.slice(-4).filter((wk) => shiftDay(wk, 6) >= first).length))
   })
-  const setsPerWeek = $derived(Math.round(heat.rows.reduce((a, r) => a + r.cells.slice(-4).reduce((b, c) => b + c.sets, 0), 0) / setsWeeks))
+  const setsPerWeek = $derived(Math.round(heat.totals.slice(-4).reduce((a, b) => a + b, 0) / setsWeeks))
   const prWeeks = $derived.by(() => {
     const start = shiftDay(weekStart(todayDay), -7 * 25)
     return Array.from({ length: 26 }, (_, i) => {
@@ -231,8 +231,8 @@
     <section class="card pad" aria-labelledby="comp-title">
       <h2 class="sec" id="comp-title">What you train</h2>
       {#if heat.rows.length}
-        <Heatmap label="Hard sets per muscle per week, last 12 weeks" weeks={heat.weeks} rows={heat.rows.map((r) => ({ key: r.muscle, label: r.label, values: r.cells.map((c) => c.sets) }))} />
-        <p class="note">10–20 hard sets a week per muscle is where most hypertrophy research lands.</p>
+        <Heatmap label="Sets per muscle per week, last 12 weeks" weeks={heat.weeks} rows={heat.rows.map((r) => ({ key: r.muscle, label: r.label, values: r.cells.map((c) => c.sets) }))} />
+        <p class="note">A set counts 1 for the muscle it targets and ½ for muscles that help (bench press: ½ triceps, ½ front delts). That's how research counts sets, and where 10–20 a week per muscle comes from.</p>
       {/if}
       {#if comp.sets}
         <h3 class="sub">Last 4 weeks · {comp.sets} hard sets</h3>

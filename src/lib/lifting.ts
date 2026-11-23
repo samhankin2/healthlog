@@ -51,7 +51,7 @@ export const EQUIPMENT_LABEL = Object.fromEntries(EQUIPMENT.map((e) => [e.key, e
 export const KIND_LABEL: Record<SetKind, string> = { working: 'Working', warmup: 'Warm-up', drop: 'Drop set', failure: 'To failure' }
 export const KIND_SHORT: Record<SetKind, string> = { working: '', warmup: 'W', drop: 'D', failure: 'F' }
 
-/** Weekly hard sets per muscle that most hypertrophy research lands on. */
+/** Weekly fractional sets per muscle (see muscleShares) that most hypertrophy guidance lands on. */
 export const VOLUME_BAND = { lo: 10, hi: 20 }
 
 export const isHard = (s: LiftSet): boolean => s.kind !== 'warmup'
@@ -359,14 +359,76 @@ export const exerciseOrder = (w: Workout): string[] => [...new Set(w.sets.map((s
 /* Volume by muscle                                                    */
 /* ------------------------------------------------------------------ */
 
-export interface MuscleWeek { week: string; sets: Record<Muscle, number>; total: number; volume: number; sessions: number }
+/**
+ * Fractional set counting (Pelland et al. 2026, Sports Medicine 56:481–505).
+ * A set counts 1 for the muscle that is the primary force generator (the
+ * exercise's muscle) and 0.5 for each muscle that is "meaningfully trained but
+ * not the primary force generator" (a synergist). Counting synergist sets as
+ * half fit both hypertrophy and strength data better than counting them as 0
+ * or as 1, across 67 studies. The 0.5 is the paper's heuristic, not a measured
+ * value per exercise.
+ *
+ * Which synergists count follows the paper's classification (its Table 1),
+ * plus direct hypertrophy studies for lifts it had no data on:
+ * - Presses (bench, incline, decline, chest press, push-up): triceps and front
+ *   delts. Overhead presses: triceps. Dips: chest, triceps, front delts.
+ * - Rows, pulldowns, pull-ups, chin-ups: biceps.
+ * - Squats, leg press, lunges, split squats: glutes (full squats grow the
+ *   gluteus maximus, Kubo et al. 2019) but not hamstrings, which barely grow
+ *   from squats (Kubo 2019; Plotkin et al. 2023).
+ * - Hinges (deadlift, RDL, good morning): hamstrings and glutes; conventional
+ *   deadlifts and rack pulls also the back.
+ * - Hip thrusts and isolation lifts: nothing else. Hip thrusts grew little
+ *   besides the glutes (Plotkin 2023).
+ * Whichever of these is the exercise's own muscle counts 1, the rest 0.5.
+ */
+export const INDIRECT_SHARE = 0.5
+
+export function muscleShares(ex: Pick<Exercise, 'name' | 'muscle'>): Partial<Record<Muscle, number>> {
+  const n = ex.name.toLowerCase()
+  const m = ex.muscle
+  const out: Partial<Record<Muscle, number>> = { [m]: 1 }
+  const add = (...ks: Muscle[]): void => { for (const k of ks) if (k !== m) out[k] = INDIRECT_SHARE }
+  if (/hip thrust|glute bridge/.test(n)) return out
+  if (/deadlift|\brdl\b|good morning|rack pull/.test(n)) {
+    add('hamstrings', 'glutes')
+    if (/rack pull/.test(n) || (/deadlift/.test(n) && !/romanian|stiff|single|\brdl\b/.test(n))) add('back')
+    return out
+  }
+  if (/squat|lunge|leg press|step-?up|hack/.test(n) && !/sissy/.test(n)) { add('quads', 'glutes'); return out }
+  if (/\bdips?\b/.test(n)) { add('chest', 'triceps', 'shoulders'); return out }
+  if (/chin-?up|pull-?up|pull-?down|\brows?\b|rowing/.test(n) && !/upright/.test(n)) { add('back', 'biceps'); return out }
+  if (/press|push-?up|bench/.test(n) && !/leg|calf|hip|pallof|triceps|tricep|jm press/.test(n)) {
+    if (m === 'shoulders' || /overhead|military|shoulder|arnold|push press/.test(n)) add('shoulders', 'triceps')
+    else add('chest', 'triceps', 'shoulders')
+  }
+  return out
+}
+
+export interface MuscleWeek {
+  week: string
+  /** Fractional sets: 1 for the exercise's muscle, 0.5 for each synergist. */
+  sets: Record<Muscle, number>
+  /** The part of `sets` from exercises that target the muscle. */
+  direct: Record<Muscle, number>
+  /** Hard sets, each counted once. */
+  total: number
+  volume: number
+  sessions: number
+}
 
 const emptyMuscles = (): Record<Muscle, number> => Object.fromEntries(MUSCLES.map((m) => [m.key, 0])) as Record<Muscle, number>
 
 /** Monday-start weeks from `from` to `to`, every week present (zeros included). */
 export function muscleWeeks(workouts: Workout[], exMap: Map<string, Exercise>, from: string, to: string, bw: BodyweightAt): MuscleWeek[] {
   const out = new Map<string, MuscleWeek>()
-  for (let w = weekStart(from); w <= to; w = shiftDay(w, 7)) out.set(w, { week: w, sets: emptyMuscles(), total: 0, volume: 0, sessions: 0 })
+  for (let w = weekStart(from); w <= to; w = shiftDay(w, 7)) out.set(w, { week: w, sets: emptyMuscles(), direct: emptyMuscles(), total: 0, volume: 0, sessions: 0 })
+  const shares = new Map<string, Partial<Record<Muscle, number>>>()
+  const sharesOf = (ex: Exercise): Partial<Record<Muscle, number>> => {
+    let s = shares.get(ex.id)
+    if (!s) shares.set(ex.id, (s = muscleShares(ex)))
+    return s
+  }
   for (const w of workouts) {
     if (w.day < from || w.day > to) continue
     const row = out.get(weekStart(w.day))
@@ -377,15 +439,21 @@ export function muscleWeeks(workouts: Workout[], exMap: Map<string, Exercise>, f
     for (const s of w.sets) {
       if (!isHard(s)) continue
       const ex = exMap.get(s.exerciseId)
-      const m = ex?.muscle ?? 'other'
       const n = share.get(s.id) ?? 1
-      row.sets[m] += n
+      const parts = ex ? sharesOf(ex) : { other: 1 }
+      for (const [m, f] of Object.entries(parts) as [Muscle, number][]) {
+        row.sets[m] += n * f
+        if (f === 1) row.direct[m] += n
+      }
       row.total += n
       row.volume += (ex ? setLoad(s, ex, b) : s.weightKg) * s.reps
     }
   }
   return [...out.values()]
 }
+
+/** Weekly fractional sets for one muscle; `direct` is the part from exercises that target it. */
+export interface MuscleAverage { muscle: Muscle; label: string; sets: number; direct: number }
 
 /** Day of the first logged workout with a hard set, or null if there is none. */
 export function firstLiftDay(workouts: Workout[]): string | null {
@@ -399,10 +467,10 @@ export function firstLiftDay(workouts: Workout[]): string | null {
  * end before `firstDay` (the first logged workout) are not counted, so a log
  * younger than `count` weeks averages over the weeks it actually has.
  */
-export function muscleAverages(weeks: MuscleWeek[], count = 4, firstDay: string | null = null): { muscle: Muscle; label: string; sets: number }[] {
+export function muscleAverages(weeks: MuscleWeek[], count = 4, firstDay: string | null = null): MuscleAverage[] {
   const recent = weeks.filter((w) => firstDay === null || shiftDay(w.week, 6) >= firstDay).slice(-count)
   const n = Math.max(1, recent.length)
-  return MUSCLES.map((m) => ({ muscle: m.key, label: m.label, sets: recent.reduce((a, w) => a + w.sets[m.key], 0) / n }))
+  return MUSCLES.map((m) => ({ muscle: m.key, label: m.label, sets: recent.reduce((a, w) => a + w.sets[m.key], 0) / n, direct: recent.reduce((a, w) => a + w.direct[m.key], 0) / n }))
     .filter((m) => m.sets > 0 || m.muscle !== 'other')
 }
 
@@ -479,7 +547,7 @@ export interface StrengthInsight {
   volume: number
   prs: number
   lifts: { exercise: Exercise; now: number | null; change: number | null; spark: { day: string; value: number | null }[]; status: LiftStatus; metric: 'e1rm' | 'reps' }[]
-  muscles: { muscle: Muscle; label: string; sets: number }[]
+  muscles: MuscleAverage[]
 }
 
 export function strengthInsight(lifting: LiftingPayload, from: string, to: string, bw: BodyweightAt): StrengthInsight | null {

@@ -16,7 +16,7 @@
   import { today } from '../lib/format'
   import { app, navigate } from '../lib/state.svelte'
   import { lift, loadLifting } from '../lib/lifting.svelte'
-  import { MUSCLE_LABEL, STATUS_LABEL, bodyweightLookup, fmtTonnage, mergeLifting, strengthInsight } from '../lib/lifting'
+  import { MUSCLE_LABEL, STATUS_LABEL, VOLUME_BAND, bodyweightLookup, fmtTonnage, mergeLifting, strengthInsight } from '../lib/lifting'
   import { activityTypeLabel } from '../lib/activity'
   import { fmtDayLong, fmtDayShort } from '../lib/viz/scale'
   import {
@@ -601,13 +601,14 @@
           {/if}
           {#if strength.muscles.length}
             <article class="card pad">
-              <div class="chart-head"><h3>Weekly sets per muscle</h3><p class="chart-note">Last 4 weeks of the range. Shaded: 10–20.</p></div>
+              <div class="chart-head"><h3>Weekly sets per muscle</h3><p class="chart-note">Last 4 weeks of the range. Solid: exercises for the muscle; light: lifts that also work it, at half a set each. Shaded: {VOLUME_BAND.lo}–{VOLUME_BAND.hi}.</p></div>
               <ul class="mus-list">
                 {#each strength.muscles as m (m.muscle)}
                   <li>
                     <span>{m.label}</span>
-                    <span class="mus-bar" aria-hidden="true"><i class="band" style:left="{(10 / strengthMax) * 100}%" style:width="{(10 / strengthMax) * 100}%"></i><i class="fill" style:width="{(m.sets / strengthMax) * 100}%"></i></span>
+                    <span class="mus-bar" aria-hidden="true"><i class="band" style:left="{(VOLUME_BAND.lo / strengthMax) * 100}%" style:width="{((VOLUME_BAND.hi - VOLUME_BAND.lo) / strengthMax) * 100}%"></i><i class="fill ind" style:width="{(m.sets / strengthMax) * 100}%"></i><i class="fill" style:width="{(m.direct / strengthMax) * 100}%"></i></span>
                     <b>{m.sets.toFixed(1)}</b>
+                    <span class="sr-only">{m.direct.toFixed(1)} from exercises for this muscle, {(m.sets - m.direct).toFixed(1)} from lifts that also work it</span>
                   </li>
                 {/each}
               </ul>
@@ -964,4 +965,5 @@
   .mus-bar i { position: absolute; top: 0; bottom: 0; left: 0; }
   .mus-bar .band { background: color-mix(in oklab, var(--color-accent) 22%, transparent); }
   .mus-bar .fill { border-radius: inherit; background: var(--color-accent); }
+  .mus-bar .fill.ind { background: color-mix(in oklab, var(--color-accent) 50%, var(--color-surface)); }
 </style>

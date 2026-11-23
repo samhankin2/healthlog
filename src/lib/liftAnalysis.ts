@@ -34,7 +34,7 @@
  */
 import type { Exercise, InsightsPayload, Muscle, Routine, Workout } from './types'
 import { dayNum, isNum, shiftDay, weekStart } from './insights'
-import { MUSCLES, isHard, sortWorkouts, type BodyweightAt, type ExerciseStats } from './lifting'
+import { MUSCLES, isHard, muscleShares, sortWorkouts, type BodyweightAt, type ExerciseStats } from './lifting'
 import { FATIGUE_PER_UNIT, FRESH_BELOW, TIRED_FROM } from './fatigue'
 import { countedSets, sideGroups } from './sides'
 
@@ -657,22 +657,29 @@ export function composition(workouts: Workout[], exMap: Map<string, Exercise>, f
 
 export interface HeatCell { muscle: Muscle; label: string; week: string; sets: number }
 
-/** Hard sets per muscle per week, oldest week first; only muscles trained. */
-export function muscleHeat(workouts: Workout[], exMap: Map<string, Exercise>, today: string, weeks = 12): { weeks: string[]; rows: { muscle: Muscle; label: string; cells: HeatCell[] }[] } {
+/**
+ * Fractional sets per muscle per week (lifting.ts muscleShares: 1 for the
+ * target muscle, 0.5 per synergist), oldest week first; only muscles trained.
+ * `totals` counts each hard set once.
+ */
+export function muscleHeat(workouts: Workout[], exMap: Map<string, Exercise>, today: string, weeks = 12): { weeks: string[]; totals: number[]; rows: { muscle: Muscle; label: string; cells: HeatCell[] }[] } {
   const start = shiftDay(weekStart(today), -7 * (weeks - 1))
   const wks = Array.from({ length: weeks }, (_, i) => shiftDay(start, 7 * i))
   const counts = new Map<string, number>()
+  const totals = new Map<string, number>()
   for (const w of workouts) {
     if (w.day < start) continue
     const wk = weekStart(w.day)
     for (const s of countedSets(w, exMap)) {
-      const m = exMap.get(s.exerciseId)?.muscle ?? 'other'
-      counts.set(`${m}|${wk}`, (counts.get(`${m}|${wk}`) ?? 0) + 1)
+      const ex = exMap.get(s.exerciseId)
+      const parts = ex ? muscleShares(ex) : { other: 1 }
+      for (const [m, f] of Object.entries(parts) as [Muscle, number][]) counts.set(`${m}|${wk}`, (counts.get(`${m}|${wk}`) ?? 0) + f)
+      totals.set(wk, (totals.get(wk) ?? 0) + 1)
     }
   }
   const rows = MUSCLES.map((m) => ({ muscle: m.key, label: m.label, cells: wks.map((wk) => ({ muscle: m.key, label: m.label, week: wk, sets: counts.get(`${m.key}|${wk}`) ?? 0 })) }))
     .filter((r) => r.cells.some((c) => c.sets > 0))
-  return { weeks: wks, rows }
+  return { weeks: wks, totals: wks.map((wk) => totals.get(wk) ?? 0), rows }
 }
 
 /* ------------------------------------------------------------------ */

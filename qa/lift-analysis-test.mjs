@@ -200,7 +200,60 @@ ok('trend: stable between runs (seeded bootstrap)', JSON.stringify(A.liftTrend(s
   ok('composition: push/pull and upper/lower', comp.push === 2 && comp.pull === 1 && comp.upper === 3 && comp.lower === 1)
   ok('composition: effort share', comp.rpeShare === 25 && comp.failureShare === 25)
   const heat = A.muscleHeat(ws, exMap, TODAY)
-  ok('heatmap: only trained muscles, 12 weeks', heat.weeks.length === 12 && heat.rows.map((r) => r.muscle).join() === 'chest,back,quads')
+  ok('heatmap: only trained muscles (synergists included), 12 weeks', heat.weeks.length === 12 && heat.rows.map((r) => r.muscle).join() === 'chest,back,shoulders,biceps,triceps,quads,glutes', heat.rows.map((r) => r.muscle).join())
+  const cell = (m) => heat.rows.find((r) => r.muscle === m)?.cells.at(-1).sets
+  ok('heatmap: fractional — bench 2 sets → chest 2, triceps 1', cell('chest') === 2 && cell('triceps') === 1 && cell('back') === 1 && cell('biceps') === 0.5, `${cell('chest')} ${cell('triceps')} ${cell('back')} ${cell('biceps')}`)
+  ok('heatmap: totals count each set once', heat.totals.at(-1) === 4, String(heat.totals.at(-1)))
+}
+
+/* ---------- fractional set counting (Pelland et al. 2026) ---------- */
+{
+  const sh = (name, muscle) => JSON.stringify(Object.entries(L.muscleShares({ name, muscle })).sort())
+  const is = (name, muscle, want) => ok(`shares: ${name} (${muscle})`, sh(name, muscle) === JSON.stringify(Object.entries(want).sort()), sh(name, muscle))
+  is('Bench press', 'chest', { chest: 1, triceps: 0.5, shoulders: 0.5 })
+  is('Incline dumbbell press', 'chest', { chest: 1, triceps: 0.5, shoulders: 0.5 })
+  is('Push-up', 'chest', { chest: 1, triceps: 0.5, shoulders: 0.5 })
+  is('Close-grip bench press', 'triceps', { triceps: 1, chest: 0.5, shoulders: 0.5 })
+  is('Overhead press', 'shoulders', { shoulders: 1, triceps: 0.5 })
+  is('Dips', 'chest', { chest: 1, triceps: 0.5, shoulders: 0.5 })
+  is('Lat pulldown', 'back', { back: 1, biceps: 0.5 })
+  is('Barbell row', 'back', { back: 1, biceps: 0.5 })
+  is('Chin-up', 'biceps', { biceps: 1, back: 0.5 })
+  is('Back squat', 'quads', { quads: 1, glutes: 0.5 })
+  is('Leg press', 'quads', { quads: 1, glutes: 0.5 })
+  is('Bulgarian split squat', 'glutes', { glutes: 1, quads: 0.5 })
+  is('Romanian deadlift', 'hamstrings', { hamstrings: 1, glutes: 0.5 })
+  is('Deadlift', 'back', { back: 1, hamstrings: 0.5, glutes: 0.5 })
+  is('Hip thrust', 'glutes', { glutes: 1 })
+  is('Leg curl', 'hamstrings', { hamstrings: 1 })
+  is('Leg extension', 'quads', { quads: 1 })
+  is('Triceps pushdown', 'triceps', { triceps: 1 })
+  is('Lying triceps press', 'triceps', { triceps: 1 })
+  is('Upright row', 'shoulders', { shoulders: 1 })
+  is('Lateral raise', 'shoulders', { shoulders: 1 })
+  is('Calf press', 'calves', { calves: 1 })
+  is('Pallof press', 'core', { core: 1 })
+  is('Dumbbell curl', 'biceps', { biceps: 1 })
+}
+{
+  // The paper's own worked example: 5 sets of curls and 5 of rows in one
+  // session, 5 more rows in another → biceps 'fractional' 10 (5 + 10 × 0.5).
+  const exMap = new Map([['curl', ex('curl', 'Biceps curl', 'biceps')], ['row', ex('row', 'Seated row', 'back')]])
+  const s = (id) => ({ id: `f${sid++}`, exerciseId: id, weightKg: 30, reps: 10, rpe: null, kind: 'working', doneAt: null })
+  const day = TODAY
+  const ws = [
+    { id: 'f1', day: shift(TODAY, -1), name: null, notes: null, startedAt: null, endedAt: null, sets: [...Array(5)].map(() => s('curl')).concat([...Array(5)].map(() => s('row'))) },
+    { id: 'f2', day, name: null, notes: null, startedAt: null, endedAt: null, sets: [...Array(5)].map(() => s('row')) },
+  ]
+  const weeks = L.muscleWeeks(ws, exMap, shift(TODAY, -6), TODAY, bw)
+  const wk = weeks.find((w) => w.sets.biceps > 0)
+  const total = weeks.reduce((a, w) => a + w.sets.biceps, 0)
+  const direct = weeks.reduce((a, w) => a + w.direct.biceps, 0)
+  ok('weeks: biceps = 5 curls + ½ × 10 rows = 10 fractional (paper example)', total === 10 && direct === 5, `${total} / ${direct}`)
+  ok('weeks: back = 10 direct, total sets still counted once', weeks.reduce((a, w) => a + w.sets.back, 0) === 10 && weeks.reduce((a, w) => a + w.total, 0) === 15, wk ? JSON.stringify(wk.sets) : 'none')
+  const avg = L.muscleAverages(weeks, 4)
+  const b = avg.find((m) => m.muscle === 'biceps')
+  ok('averages: carry the direct part', b && b.direct <= b.sets && b.direct > 0)
 }
 
 fs.rmSync(out, { recursive: true, force: true })

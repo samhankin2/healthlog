@@ -188,17 +188,18 @@
 
       {#if muscles.length}
         <section class="card pad" aria-labelledby="muscle-title">
-          <h2 class="sec" id="muscle-title">Weekly hard sets per muscle <small>({avgWeeks === 1 ? 'this week' : `${avgWeeks}-week average`})</small></h2>
+          <h2 class="sec" id="muscle-title">Weekly sets per muscle <small>({avgWeeks === 1 ? 'this week' : `${avgWeeks}-week average`})</small></h2>
           <ul class="mus">
             {#each muscles as m (m.muscle)}
               <li>
                 <span>{m.label}</span>
-                <span class="bar" aria-hidden="true"><i class="band" style:left="{(VOLUME_BAND.lo / 25) * 100}%" style:width="{((VOLUME_BAND.hi - VOLUME_BAND.lo) / 25) * 100}%"></i><i class="fill" style:width="{Math.min(100, (m.sets / 25) * 100)}%"></i></span>
+                <span class="bar" aria-hidden="true"><i class="band" style:left="{(VOLUME_BAND.lo / 25) * 100}%" style:width="{((VOLUME_BAND.hi - VOLUME_BAND.lo) / 25) * 100}%"></i><i class="fill ind" style:width="{Math.min(100, (m.sets / 25) * 100)}%"></i><i class="fill" style:width="{Math.min(100, (m.direct / 25) * 100)}%"></i></span>
                 <b>{m.sets.toFixed(1)}</b>
+                <span class="sr-only">{m.direct.toFixed(1)} from exercises for this muscle, {(m.sets - m.direct).toFixed(1)} from lifts that also work it</span>
               </li>
             {/each}
           </ul>
-          <p class="note">Shaded: {VOLUME_BAND.lo}–{VOLUME_BAND.hi} sets a week, the range most hypertrophy research lands on.</p>
+          <p class="note">Solid: sets of exercises for that muscle. Light: lifts that also work it, at half a set each (bench press counts ½ for triceps and front delts), the way the research counts them. Shaded: {VOLUME_BAND.lo}–{VOLUME_BAND.hi} sets a week.</p>
         </section>
       {/if}
 
@@ -263,6 +264,7 @@
   .bar i { position: absolute; top: 0; bottom: 0; left: 0; }
   .band { background: color-mix(in oklab, var(--color-accent) 22%, transparent); }
   .fill { border-radius: inherit; background: var(--color-accent); }
+  .fill.ind { background: color-mix(in oklab, var(--color-accent) 50%, var(--color-surface)); }
   .hist { display: flex; margin: 0; padding: 0; flex-direction: column; gap: var(--space-3); list-style: none; }
   .hist-row { display: flex; width: 100%; padding: var(--space-3) var(--space-4); flex-direction: column; gap: 2px; color: var(--color-text); text-align: left; }
   .h-top { display: flex; justify-content: space-between; gap: var(--space-2); }

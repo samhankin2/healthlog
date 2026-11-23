@@ -168,6 +168,8 @@ try {
   ok('finish: back on home', await until(`location.hash === '#/lifting' && document.body.innerText.includes('Start Upper body')`))
   const saved = (await json('GET', `/api/lifting/workouts/${workoutId}`, token)).workout
   ok('finish: endedAt stored', Boolean(saved?.endedAt))
+  // Fractional sets: bench press counts half a set for the triceps, shown as the light part of the bar.
+  ok('home: weekly sets count bench press as ½ for triceps', await until(`[...document.querySelectorAll('.mus li')].some((li) => li.textContent.startsWith('Triceps') && li.querySelector('.fill.ind') && parseFloat(li.querySelector('b').textContent) > 0 && li.querySelector('.fill:not(.ind)').style.width === '0%')`))
 
   // Routine: start it, swap the incline press for the barbell bench, then discard.
   await click('button', 'Start Upper body')

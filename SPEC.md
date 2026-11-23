@@ -812,8 +812,15 @@ DELETE /api/lifting/routines/:id         -> 200 { ok:true, deleted:<id> }   (sof
   day, else the first after). Records (best e1RM, heaviest, rep PR) count only
   after the first session. Status: last 4 weeks of training vs the 4 before
   (or everything earlier): ≤ −3 % slipping, the last session a best or ≥ +1 %
-  progressing, no step forward (as in the plateau rule below) in the last 3 sessions stalled, else steady. Weekly volume =
-  hard sets per primary muscle, against a 10–20 band.
+  progressing, no step forward (as in the plateau rule below) in the last 3 sessions stalled, else steady. Weekly volume
+  per muscle is fractional (Pelland et al. 2026): a hard set counts 1 for the
+  exercise's muscle and 0.5 for each synergist (`muscleShares`): presses →
+  triceps + front delts (overhead: triceps); dips → chest, triceps, delts; rows,
+  pulldowns, pull/chin-ups → biceps (or back when biceps is the target); squats,
+  leg press, lunges → glutes (not hamstrings); hinges → hamstrings + glutes,
+  conventional deadlift / rack pull also back; hip thrusts and isolation lifts →
+  nothing. Bars show the direct part solid and the synergist part light, against
+  a 10–20 band; total set counts still count each set once.
 - **Progression** (`src/lib/progression.ts`, pure; the header comment has the
   sources). Rep range (`repMin`/`repMax` are both null or both 1–50, max ≥ min) is
   set on the exercise, else a default: 6–12, lateral raises (by name) 6–15. If the median first working set of the last 4
@@ -1150,7 +1157,7 @@ that the frontend can read.
   an empty workout, resume one, edit routines (order, stand-ins), repeat a recent session, this week's days /
   sets / volume, a lighter-week suggestion when several lifts stall at once,
   every lift with its e1RM, sparkline, status and next target,
-  weekly hard sets per muscle. The logger: an exercise card per lift with last
+  weekly (fractional) sets per muscle. The logger: an exercise card per lift with last
   time, a one-tap swap to a routine stand-in before any set is logged
   (also in the card menu), the suggested plan with a "Why?" disclosure, a mid-session adjustment
   note, and each set compared with the same set last time;
