@@ -422,6 +422,107 @@ async function runWeek({ sam, chloe, alex }) {
   ok('parse: unknown text proposes a new meal', fresh && fresh.dishId === null && fresh.newName === 'Something brand new', JSON.stringify(fresh))
   eq('parse: nothing saved yet', (await api('GET', `/api/planner/week?start=${MON}`, { token: sam })).json.week.entries.length, 1)
   eq('parse: empty text rejected', (await api('POST', '/api/planner/parse-week', { token: sam, body: { start: MON, text: '  ' } })).status, 400)
+
+  await runReview({ sam, chloe, alex })
+}
+
+/* ---------- the review: cooked / skipped / swapped, opinions, freezer ---------- */
+async function runReview({ sam, chloe, alex }) {
+  const TODAY = '2027-01-12'
+  const d = (n) => new Date(Date.parse('2027-01-04T00:00:00Z') + n * 86400000).toISOString().slice(0, 10) // Mon 4 Jan +n
+  const meals = (await api('GET', '/api/planner/meals', { token: sam })).json.meals
+  const cabbage = meals.find((m) => m.name === 'Dirty cabbage')
+  const curry = meals.find((m) => m.name === 'Thai curry')
+  const palak = meals.find((m) => m.name === 'Palak')
+  const korean = cabbage.options.find((o) => o.name === 'Korean')
+  const beef = cabbage.options.find((o) => o.name === 'Beef')
+  const home = await household(sam)
+  const samId = home.members.find((m) => m.me).id
+
+  const night = async (date, body) => (await api('PUT', `/api/planner/slots/${date}`, { token: sam, body })).json.entry
+  const e1 = await night(d(0), { dishId: cabbage.id, optionIds: [korean.id, beef.id] })
+  const e2 = await night(d(1), { dishId: curry.id })
+  await night(d(2), { kind: 'out' })
+  const e4 = await night(d(3), { dishId: palak.id })
+  await night(d(9), { dishId: palak.id }) // after today: not up for review
+
+  let r = await api('GET', `/api/planner/review?today=${TODAY}`, { token: chloe })
+  eq('queue: past meal nights only, oldest first', r.json?.entries?.map((e) => e.date), [d(0), d(1), d(3)])
+  eq('queue: needs today', (await api('GET', '/api/planner/review', { token: sam })).status, 400)
+  eq('queue: outsiders see nothing', (await api('GET', `/api/planner/review?today=${TODAY}`, { token: alex })).json?.entries?.length, 0)
+
+  // Cooked + an opinion: becomes the standing rating for that exact combination
+  r = await api('PUT', `/api/planner/entries/${e1.id}`, { token: sam, body: { status: 'cooked', cookNote: 'more gochujang', leftovers: true, tweakRetry: true } })
+  eq('cooked: status and facts saved', [r.json?.entry?.status, r.json?.entry?.cookNote, r.json?.entry?.leftovers, r.json?.entry?.tweakRetry, Boolean(r.json?.entry?.reviewedAt)], ['cooked', 'more gochujang', true, true, true])
+  r = await api('PUT', `/api/planner/entries/${e1.id}/review`, { token: sam, body: { ratedAs: 'both', thumbs: 1, stars: 5 } })
+  eq('opinion: saved on the cook', r.json?.entry?.reviews, [{ ratedAs: 'both', thumbs: 1, stars: 5 }])
+  let m = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((x) => x.id === cabbage.id)
+  const combo = [korean.id, beef.id].sort().join('+')
+  const standing = m.ratings.find((x) => x.optionId === combo && x.ratedAs === 'both')
+  eq('opinion: standing rating of the combination, marked review', [standing?.stars, standing?.source], [5, 'review'])
+  eq('cooked: counts, with a real last date', [m.cooked >= 1, m.lastCooked], [true, d(0)])
+  r = await api('PUT', `/api/planner/entries/${e1.id}/review`, { token: chloe, body: { ratedAs: 'me', thumbs: -1, stars: 2 } })
+  eq('opinion: per person alongside Both', r.json?.entry?.reviews.length, 2)
+
+  // A cook that doesn't pin a variation down leaves standing ratings alone
+  await api('PUT', `/api/planner/entries/${e2.id}`, { token: sam, body: { status: 'cooked' } })
+  const curryBefore = JSON.stringify((await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((x) => x.id === curry.id).ratings)
+  await api('PUT', `/api/planner/entries/${e2.id}/review`, { token: sam, body: { ratedAs: 'both', thumbs: 1, stars: 4 } })
+  eq('opinion: no variation chosen, standing ratings untouched', JSON.stringify((await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((x) => x.id === curry.id).ratings), curryBefore)
+
+  // Swapped: we made Palak instead of the Thai curry
+  r = await api('PUT', `/api/planner/entries/${e2.id}`, { token: sam, body: { swapToDishId: palak.id } })
+  eq('swap: night becomes what we made, cooked', [r.json?.entry?.dishId, r.json?.entry?.status, r.json?.entry?.note], [palak.id, 'cooked', 'Planned: Thai curry'])
+  eq('swap: old opinions cleared', r.json?.entry?.reviews, [])
+
+  // Froze some → freezer stock, adjustable from the review
+  r = await api('PUT', `/api/planner/entries/${e4.id}`, { token: sam, body: { status: 'cooked', frozenPortions: 3 } })
+  let freezer = (await api('GET', '/api/planner/freezer', { token: chloe })).json.items
+  const item = freezer.find((f) => f.fromEntryId === e4.id)
+  eq('freezer: portions from the review', [item?.dishId, item?.portions, item?.frozenOn], [palak.id, 3, d(3)])
+  await api('PUT', `/api/planner/entries/${e4.id}`, { token: sam, body: { frozenPortions: 2 } })
+  eq('freezer: changing the review adjusts stock', (await api('GET', '/api/planner/freezer', { token: sam })).json.items.find((f) => f.id === item.id)?.portions, 2)
+  eq('freezer: 21 portions rejected', (await api('PUT', `/api/planner/entries/${e4.id}`, { token: sam, body: { frozenPortions: 21 } })).status, 400)
+  r = await api('PUT', `/api/planner/entries/${e4.id}/review`, { token: sam, body: { ratedAs: 'me', thumbs: 1, stars: 4 } })
+  m = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((x) => x.id === palak.id)
+  ok('opinion: a meal without options rates the meal itself', m.ratings.some((x) => x.optionId === null && x.ratedAs === samId && x.stars === 4 && x.source === 'review'))
+
+  // A freezer night: eating it takes a portion; anything else gives it back
+  const fz = await night(d(5), { kind: 'freezer', freezerItemId: item.id })
+  eq('freezer night: eats the frozen meal', [fz?.kind, fz?.dishId, fz?.freezerItemId], ['freezer', palak.id, item.id])
+  eq('freezer night: unknown item 404', (await api('PUT', `/api/planner/slots/${d(6)}`, { token: sam, body: { kind: 'freezer', freezerItemId: 'nope' } })).status, 404)
+  ok('queue: freezer night up for review', (await api('GET', `/api/planner/review?today=${TODAY}`, { token: sam })).json.entries.some((e) => e.id === fz.id))
+  const portions = async () => (await api('GET', '/api/planner/freezer', { token: sam })).json.items.find((f) => f.id === item.id)?.portions ?? 0
+  await api('PUT', `/api/planner/entries/${fz.id}`, { token: sam, body: { status: 'cooked' } })
+  eq('freezer night: eaten takes one portion', await portions(), 1)
+  await api('PUT', `/api/planner/entries/${fz.id}`, { token: sam, body: { status: 'cooked' } })
+  eq('freezer night: marking again takes nothing more', await portions(), 1)
+  await api('PUT', `/api/planner/entries/${fz.id}`, { token: sam, body: { status: 'skipped' } })
+  eq('freezer night: skipped gives it back', await portions(), 2)
+  await api('PUT', `/api/planner/entries/${fz.id}`, { token: sam, body: { status: 'cooked' } })
+  await night(d(5), { kind: 'out' })
+  eq('freezer night: replacing the night gives it back', await portions(), 2)
+
+  // Skipped, validation, scoping
+  await api('PUT', `/api/planner/entries/${e1.id}`, { token: sam, body: { status: 'planned' } })
+  ok('undo: back in the queue', (await api('GET', `/api/planner/review?today=${TODAY}`, { token: sam })).json.entries.some((e) => e.id === e1.id))
+  await api('PUT', `/api/planner/entries/${e1.id}`, { token: sam, body: { status: 'skipped' } })
+  eq('queue: all reviewed', (await api('GET', `/api/planner/review?today=${TODAY}`, { token: sam })).json.entries.length, 0)
+  eq('status: bogus rejected', (await api('PUT', `/api/planner/entries/${e1.id}`, { token: sam, body: { status: 'eaten' } })).status, 400)
+  const out = (await api('GET', `/api/planner/week?start=${d(0)}`, { token: sam })).json.week.entries.find((e) => e.date === d(2))
+  eq('review: an out night has nothing to rate', (await api('PUT', `/api/planner/entries/${out.id}/review`, { token: sam, body: { ratedAs: 'both', thumbs: 1 } })).status, 400)
+  eq('review: other household 404', (await api('PUT', `/api/planner/entries/${e1.id}`, { token: alex, body: { status: 'cooked' } })).status, 404)
+  eq('review: other household opinion 404', (await api('PUT', `/api/planner/entries/${e1.id}/review`, { token: alex, body: { ratedAs: 'me', thumbs: 1 } })).status, 404)
+
+  // Manual freezer stock
+  r = await api('POST', '/api/planner/freezer', { token: chloe, body: { dishId: cabbage.id, optionIds: [korean.id], portions: 2, frozenOn: d(4) } })
+  eq('freezer: added by hand', [r.status, r.json?.item?.portions], [201, 2])
+  const manual = r.json?.item
+  await api('PUT', `/api/planner/freezer/${manual.id}`, { token: sam, body: { portions: 0 } })
+  ok('freezer: emptied drops off the list', !(await api('GET', '/api/planner/freezer', { token: sam })).json.items.some((f) => f.id === manual.id))
+  eq('freezer: 0 portions rejected when adding', (await api('POST', '/api/planner/freezer', { token: sam, body: { dishId: cabbage.id, portions: 0 } })).status, 400)
+  eq('freezer: other household 404', (await api('PUT', `/api/planner/freezer/${item.id}`, { token: alex, body: { portions: 5 } })).status, 404)
+  eq('freezer: outsiders see none', (await api('GET', '/api/planner/freezer', { token: alex })).json.items.length, 0)
 }
 
 try {

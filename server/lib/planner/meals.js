@@ -119,6 +119,7 @@ export function mealsPayload(db, householdId) {
       thumbs: r.thumbs ?? null,
       stars: r.stars ?? null,
       want: Boolean(r.want),
+      source: r.source ?? 'estimate', // estimate (rated from memory) | review (from a cook)
     })
   }
   for (const h of db.prepare('SELECT dish_id, option_id FROM dish_hidden_options WHERE household_id = ? ORDER BY option_id').all(householdId)) {

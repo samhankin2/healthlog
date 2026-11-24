@@ -12,6 +12,7 @@ import { ensureHousehold, householdPayload } from '../lib/planner/household.js'
 import { addAlias, addNote, createMeal, mealsPayload, setHidden, setRating, updateMeal } from '../lib/planner/meals.js'
 import { parseWeek } from '../lib/planner/match.js'
 import { clearSlot, copyWeek, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
+import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, updateEntry } from '../lib/planner/review.js'
 
 /** The caller and their household id; use at the top of every planner route. */
 export function plannerContext(req) {
@@ -126,6 +127,7 @@ export function registerPlannerRoutes(router) {
       optionIds: body.optionIds ?? [],
       note: body.note ?? null,
       raw: body.raw ?? null,
+      freezerItemId: body.freezerItemId ?? null,
     })
     sendJson(res, 200, { ok: true, entry })
   })
@@ -155,5 +157,63 @@ export function registerPlannerRoutes(router) {
     const days = weekDays(start)
     const items = await parseWeek(db, householdId, text, days, days.map(weekdayOf), { useAi: body.ai !== false })
     sendJson(res, 200, { ok: true, items })
+  })
+  /* ---------- the review (M3) ---------- */
+
+  router.get('/api/planner/review', async ({ req, res, query }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, entries: reviewQueue(db, householdId, requireDay(query?.get('today'), 'today')) })
+  })
+
+  router.put('/api/planner/entries/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const entry = updateEntry(db, householdId, params.id, {
+      status: body.status,
+      swapToDishId: body.swapToDishId,
+      swapOptionIds: body.swapOptionIds,
+      cookNote: body.cookNote,
+      leftovers: body.leftovers,
+      frozenPortions: body.frozenPortions,
+      tweakRetry: body.tweakRetry,
+    })
+    sendJson(res, 200, { ok: true, entry })
+  })
+
+  router.put('/api/planner/entries/:id/review', async ({ req, res, params }) => {
+    const { user, db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    if (typeof body.ratedAs !== 'string') throw new HttpError(400, 'ratedAs is required')
+    const entry = setReview(db, householdId, user, params.id, {
+      ratedAs: body.ratedAs,
+      thumbs: nullableInt(body.thumbs, 'thumbs'),
+      stars: nullableInt(body.stars, 'stars'),
+    })
+    sendJson(res, 200, { ok: true, entry })
+  })
+
+  /* ---------- freezer ---------- */
+
+  router.get('/api/planner/freezer', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, items: freezerList(db, householdId) })
+  })
+
+  router.post('/api/planner/freezer', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const item = addFreezer(db, householdId, {
+      dishId: String(body.dishId ?? ''),
+      optionIds: Array.isArray(body.optionIds) ? body.optionIds.map(String) : [],
+      portions: body.portions,
+      frozenOn: body.frozenOn ?? null,
+    })
+    sendJson(res, 201, { ok: true, item })
+  })
+
+  router.put('/api/planner/freezer/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    sendJson(res, 200, { ok: true, item: setFreezerPortions(db, householdId, params.id, body.portions) })
   })
 }

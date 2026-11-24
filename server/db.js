@@ -495,6 +495,33 @@ CREATE TABLE IF NOT EXISTS planner_notes (       -- notes to Claude about a meal
   resolved_at  TEXT
 );
 
+CREATE TABLE IF NOT EXISTS reviews (             -- opinion of one cook (M3); facts about the cook live on plan_entries
+  plan_entry_id TEXT NOT NULL REFERENCES plan_entries(id) ON DELETE CASCADE,
+  household_id  TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  rated_as      TEXT NOT NULL,                  -- 'both' | a member's user id
+  thumbs        INTEGER,                        -- -1 | 1
+  stars         INTEGER,                        -- 1..5
+  updated_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (plan_entry_id, rated_as)
+);
+
+CREATE TABLE IF NOT EXISTS freezer_items (       -- portions in the freezer
+  id              TEXT PRIMARY KEY,
+  household_id    TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id         TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  option_ids      TEXT NOT NULL DEFAULT '[]',     -- JSON: the variation frozen
+  portions_left   INTEGER NOT NULL DEFAULT 0,
+  frozen_on       TEXT,                           -- YYYY-MM-DD
+  source_entry_id TEXT REFERENCES plan_entries(id) ON DELETE SET NULL, -- the cook it came from
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_household            ON reviews(household_id);
+CREATE INDEX IF NOT EXISTS idx_freezer_household            ON freezer_items(household_id, frozen_on);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_freezer_source        ON freezer_items(source_entry_id) WHERE source_entry_id IS NOT NULL;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dish_options_unique   ON dish_options(dish_id, axis, name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_entries_import   ON plan_entries(household_id, import_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_entries_slot     ON plan_entries(household_id, date, slot) WHERE date IS NOT NULL;
@@ -542,6 +569,17 @@ export function migrate(db) {
   addColumns(db, 'dish_ratings', { want: 'INTEGER NOT NULL DEFAULT 0' }) // 1 = not had it yet, want to make it
   addColumns(db, 'plan_entries', { updated_at: 'TEXT' })
   addColumns(db, 'households', { week_start_day: 'INTEGER NOT NULL DEFAULT 0' }) // 0 = Monday
+  // M3 review: facts about a cook, and freezer nights
+  addColumns(db, 'plan_entries', {
+    freezer_item_id: 'TEXT', // a "from the freezer" night
+    freezer_consumed: 'INTEGER NOT NULL DEFAULT 0', // its portion has been taken off
+    cook_note: 'TEXT',
+    leftovers: 'INTEGER NOT NULL DEFAULT 0', // covered a lunch
+    frozen_portions: 'INTEGER NOT NULL DEFAULT 0',
+    tweak_retry: 'INTEGER NOT NULL DEFAULT 0',
+    reviewed_at: 'TEXT',
+  })
+  addColumns(db, 'dish_ratings', { source: "TEXT NOT NULL DEFAULT 'estimate'" }) // estimate (rated from memory) | review (from a cook)
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

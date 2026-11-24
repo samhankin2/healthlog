@@ -8,7 +8,7 @@ import { HttpError } from '../http.js'
 import { findDish } from './meals.js'
 
 export const SLOT = 'dinner'
-export const NIGHT_KINDS = ['dish', 'out', 'leftovers', 'takeaway']
+export const NIGHT_KINDS = ['dish', 'freezer', 'out', 'leftovers', 'takeaway']
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -37,7 +37,7 @@ export function weekDays(start) {
   return Array.from({ length: 7 }, (_, i) => addDays(start, i))
 }
 
-function entryPayload(db, row) {
+export function entryPayload(db, row) {
   const optionIds = db.prepare('SELECT option_id FROM plan_entry_options WHERE plan_entry_id = ? ORDER BY option_id').all(row.id).map((r) => r.option_id)
   return {
     id: row.id,
@@ -49,6 +49,12 @@ function entryPayload(db, row) {
     optionIds,
     note: row.note ?? null,
     raw: row.raw ?? null,
+    freezerItemId: row.freezer_item_id ?? null,
+    cookNote: row.cook_note ?? null,
+    leftovers: Boolean(row.leftovers),
+    frozenPortions: row.frozen_portions ?? 0,
+    tweakRetry: Boolean(row.tweak_retry),
+    reviewedAt: row.reviewed_at ?? null,
     updatedAt: row.updated_at ?? row.created_at,
   }
 }
@@ -80,15 +86,32 @@ function cleanOptionIds(db, dishId, optionIds) {
   return out
 }
 
+/** A freezer night whose portion was taken off gives it back (the night changed or went). */
+export function releaseFreezer(db, row) {
+  if (row.freezer_item_id && row.freezer_consumed) {
+    db.prepare("UPDATE freezer_items SET portions_left = portions_left + 1, updated_at = datetime('now') WHERE id = ?").run(row.freezer_item_id)
+  }
+}
+
 /** Set (create or replace) one night. */
-export function setSlot(db, householdId, date, { kind = 'dish', dishId = null, optionIds = [], note = null, raw = null }) {
+export function setSlot(db, householdId, date, { kind = 'dish', dishId = null, optionIds = [], note = null, raw = null, freezerItemId = null }) {
   requireDay(date)
   if (!NIGHT_KINDS.includes(kind)) throw new HttpError(400, `kind must be one of ${NIGHT_KINDS.join(', ')}`)
-  if (kind === 'dish') {
+  if (kind === 'freezer') {
+    // A freezer night eats the dish that was frozen, in the variation it was frozen as.
+    const item = db.prepare('SELECT * FROM freezer_items WHERE id = ? AND household_id = ?').get(String(freezerItemId ?? ''), householdId)
+    if (!item) throw new HttpError(404, "That isn't in the freezer")
+    dishId = item.dish_id
+    optionIds = JSON.parse(item.option_ids || '[]')
+  } else {
+    freezerItemId = null
+  }
+  if (kind === 'dish' || kind === 'freezer') {
     if (typeof dishId !== 'string' || !dishId) throw new HttpError(400, 'dishId is required for a meal night')
     findDish(db, householdId, dishId)
   }
-  const options = kind === 'dish' ? cleanOptionIds(db, dishId, optionIds) : []
+  const hasMeal = kind === 'dish' || kind === 'freezer'
+  const options = hasMeal ? cleanOptionIds(db, dishId, optionIds) : []
   const noteText = note === null || note === undefined ? null : String(note).trim().slice(0, 500) || null
   const rawText = raw === null || raw === undefined ? null : String(raw).trim().slice(0, 200) || null
 
@@ -96,16 +119,20 @@ export function setSlot(db, householdId, date, { kind = 'dish', dishId = null, o
     const existing = slotRow(db, householdId, date)
     let id = existing?.id
     if (existing) {
+      // A new plan for the night starts its review over (a portion already eaten goes back).
+      releaseFreezer(db, existing)
       db.prepare(
-        `UPDATE plan_entries SET kind = ?, dish_id = ?, note = ?, raw = COALESCE(?, raw), status = 'planned', updated_at = datetime('now') WHERE id = ?`,
-      ).run(kind, kind === 'dish' ? dishId : null, noteText, rawText, id)
+        `UPDATE plan_entries SET kind = ?, dish_id = ?, note = ?, raw = COALESCE(?, raw), status = 'planned', freezer_item_id = ?,
+           freezer_consumed = 0, reviewed_at = NULL, updated_at = datetime('now') WHERE id = ?`,
+      ).run(kind, hasMeal ? dishId : null, noteText, rawText, freezerItemId, id)
       db.prepare('DELETE FROM plan_entry_options WHERE plan_entry_id = ?').run(id)
+      db.prepare('DELETE FROM reviews WHERE plan_entry_id = ?').run(id)
     } else {
       id = randomUUID()
       db.prepare(
-        `INSERT INTO plan_entries (id, household_id, date, slot, dish_id, kind, status, source, raw, note, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'planned', 'app', ?, ?, datetime('now'))`,
-      ).run(id, householdId, date, SLOT, kind === 'dish' ? dishId : null, kind, rawText, noteText)
+        `INSERT INTO plan_entries (id, household_id, date, slot, dish_id, kind, status, source, raw, note, freezer_item_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'planned', 'app', ?, ?, ?, datetime('now'))`,
+      ).run(id, householdId, date, SLOT, hasMeal ? dishId : null, kind, rawText, noteText, freezerItemId)
     }
     const link = db.prepare('INSERT INTO plan_entry_options (plan_entry_id, option_id) VALUES (?, ?)')
     for (const o of options) link.run(id, o)
@@ -115,6 +142,8 @@ export function setSlot(db, householdId, date, { kind = 'dish', dishId = null, o
 
 export function clearSlot(db, householdId, date) {
   requireDay(date)
+  const existing = slotRow(db, householdId, date)
+  if (existing) releaseFreezer(db, existing)
   db.prepare('DELETE FROM plan_entries WHERE household_id = ? AND slot = ? AND date = ?').run(householdId, SLOT, date)
 }
 
@@ -133,7 +162,7 @@ export function copyWeek(db, householdId, from, to) {
       db.prepare(
         `INSERT INTO plan_entries (id, household_id, date, slot, dish_id, kind, status, source, raw, note, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, 'planned', 'app', ?, ?, datetime('now'))`,
-      ).run(id, householdId, date, SLOT, e.dishId, e.kind, e.raw, e.note)
+      ).run(id, householdId, date, SLOT, e.dishId, e.kind === 'freezer' ? 'dish' : e.kind, e.raw, e.note)
       for (const o of e.optionIds) db.prepare('INSERT INTO plan_entry_options (plan_entry_id, option_id) VALUES (?, ?)').run(id, o)
       copied++
     }

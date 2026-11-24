@@ -1003,6 +1003,31 @@ POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ d
   slot). Only dated entries show; imported history is undated. A meal night
   needs a `dishId` from the household; options must belong to it, one per
   axis. Setting a night resets its status to `planned`.
+- **Review (M3)** — tables `reviews` (`plan_entry_id`, `rated_as`, `thumbs`,
+  `stars`; one opinion per person per cook) and `freezer_items` (`dish_id`,
+  `option_ids` JSON, `portions_left`, `frozen_on`, `source_entry_id` unique);
+  `plan_entries` gains `freezer_item_id`, `freezer_consumed`, `cook_note`,
+  `leftovers`, `frozen_portions`, `tweak_retry`, `reviewed_at`;
+  `dish_ratings.source` is `estimate` (rated from memory) or `review`.
+  ```
+  GET  /api/planner/review?today=YYYY-MM-DD -> 200 { ok:true, entries:[entry + reviews[]] }
+                                    # meal / freezer nights before today, last 14 days, still planned
+  PUT  /api/planner/entries/:id { status?: cooked|skipped|planned, swapToDishId?, swapOptionIds?,
+                                  cookNote?, leftovers?, frozenPortions?: 0..20, tweakRetry? } -> { entry }
+  PUT  /api/planner/entries/:id/review { ratedAs, thumbs?, stars? } -> { entry }   # both null deletes
+  GET  /api/planner/freezer        -> { items:[{ id, dishId, optionIds, portions, frozenOn, fromEntryId }] }
+  POST /api/planner/freezer { dishId, optionIds?, portions: 1..20, frozenOn? } -> 201 { item }
+  PUT  /api/planner/freezer/:id { portions: 0..50 } -> { item }
+  PUT  /api/planner/slots/:date { kind:'freezer', freezerItemId }   # a night eating frozen stock
+  ```
+  Marking a freezer night cooked takes one portion off (once); skipping,
+  undoing, replacing or clearing the night gives it back. `frozenPortions`
+  creates or adjusts the stock for that cook. Swapping turns the night into
+  what was made (status cooked, note "Planned: <old meal>", opinions cleared).
+  An opinion also becomes the standing rating (`source` review) of the meal
+  (no options), option (one axis) or combination (two axes), when the cook
+  chose an option on every axis; otherwise standing ratings are untouched.
+  Copying a week turns freezer nights into plain meal nights.
 - **Parse** saves nothing: it proposes nights for the client to confirm. Text
   splits on new lines, commas and semicolons; a leading day name pins an item
   to that day and the rest fill free nights in order; "out", "leftovers",
