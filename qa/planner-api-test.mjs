@@ -336,6 +336,92 @@ async function runMeals({ sam, chloe, alex }) {
   eq('split: the rest has no options left', all.find((m) => m.name === 'Pulled pork (slow roast)')?.options.length, 0)
   eq('split: tags copied', sand?.suggestedTags, ['batch-cook'])
   ok('split: again fails cleanly (no options)', split().status !== 0)
+
+  await runWeek({ sam, chloe, alex })
+}
+
+/* ---------- the week: slots, copy, parse, new meals, aliases ---------- */
+async function runWeek({ sam, chloe, alex }) {
+  const MON = '2026-11-30'
+  const day = (n) => new Date(Date.parse(`${MON}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10)
+  const meals = (await api('GET', '/api/planner/meals', { token: sam })).json.meals
+  const cabbage = meals.find((m) => m.name === 'Dirty cabbage')
+  const korean = cabbage.options.find((o) => o.name === 'Korean')
+  const beef = cabbage.options.find((o) => o.name === 'Beef')
+  const chinese = cabbage.options.find((o) => o.name === 'Chinese')
+
+  // Week start setting
+  let r = await api('GET', '/api/planner/household', { token: sam })
+  eq('week start: Monday by default', r.json?.household?.weekStartDay, 0)
+  r = await api('PUT', '/api/planner/household', { token: chloe, body: { weekStartDay: 5 } })
+  eq('week start: changed to Saturday', r.json?.household?.weekStartDay, 5)
+  eq('week start: shared with the partner', (await api('GET', '/api/planner/household', { token: sam })).json?.household?.weekStartDay, 5)
+  eq('week start: 7 rejected', (await api('PUT', '/api/planner/household', { token: sam, body: { weekStartDay: 7 } })).status, 400)
+  await api('PUT', '/api/planner/household', { token: sam, body: { weekStartDay: 0 } })
+
+  // Slots
+  r = await api('PUT', `/api/planner/slots/${MON}`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id, beef.id], raw: 'korean cabbage' } })
+  eq('slot: set a meal with options', r.status, 200)
+  eq('slot: options saved', r.json?.entry?.optionIds, [korean.id, beef.id].sort())
+  eq('slot: status planned', r.json?.entry?.status, 'planned')
+  r = await api('PUT', `/api/planner/slots/${day(1)}`, { token: chloe, body: { kind: 'out', note: 'Dinner with friends' } })
+  eq('slot: out night by the partner', r.json?.entry?.kind, 'out')
+  r = await api('PUT', `/api/planner/slots/${MON}`, { token: chloe, body: { dishId: cabbage.id, optionIds: [chinese.id] } })
+  eq('slot: replacing keeps one entry per night', (await api('GET', `/api/planner/week?start=${MON}`, { token: sam })).json.week.entries.length, 2)
+  eq('slot: replaced options', r.json?.entry?.optionIds, [chinese.id])
+  eq('slot: two options on one axis rejected', (await api('PUT', `/api/planner/slots/${MON}`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id, chinese.id] } })).status, 400)
+  eq('slot: bad date rejected', (await api('PUT', '/api/planner/slots/2026-02-30', { token: sam, body: { kind: 'out' } })).status, 400)
+  eq('slot: meal night needs a meal', (await api('PUT', `/api/planner/slots/${day(2)}`, { token: sam, body: { kind: 'dish' } })).status, 400)
+  eq('slot: bad kind rejected', (await api('PUT', `/api/planner/slots/${day(2)}`, { token: sam, body: { kind: 'brunch' } })).status, 400)
+  eq('slot: another household’s meal 404', (await api('PUT', `/api/planner/slots/${day(2)}`, { token: alex, body: { dishId: cabbage.id } })).status, 404)
+  r = await api('GET', `/api/planner/week?start=${MON}`, { token: alex })
+  eq('week: outsiders see an empty week', r.json?.week?.entries?.length, 0)
+  r = await api('GET', `/api/planner/week?start=${MON}`, { token: sam })
+  eq('week: range is start..start+6', [r.json?.week?.start, r.json?.week?.end], [MON, day(6)])
+  ok('week: imported history (no date) never shows', r.json.week.entries.every((e) => e.date))
+  eq('week: missing start rejected', (await api('GET', '/api/planner/week', { token: sam })).status, 400)
+  r = await api('DELETE', `/api/planner/slots/${day(1)}`, { token: sam })
+  eq('slot: cleared', (await api('GET', `/api/planner/week?start=${MON}`, { token: sam })).json.week.entries.length, 1)
+
+  // Copy last week into this week's empty nights
+  await api('PUT', `/api/planner/slots/${day(9)}`, { token: sam, body: { kind: 'leftovers' } }) // next Wed already planned
+  r = await api('POST', '/api/planner/week/copy', { token: sam, body: { from: MON, to: day(7) } })
+  eq('copy: one night copied', r.json?.copied, 1)
+  const next = r.json?.week?.entries ?? []
+  ok('copy: lands on the same weekday with options', next.some((e) => e.date === day(7) && e.dishId === cabbage.id && e.optionIds[0] === chinese.id))
+  eq('copy: never overwrites a planned night', next.find((e) => e.date === day(9))?.kind, 'leftovers')
+  r = await api('POST', '/api/planner/week/copy', { token: sam, body: { from: MON, to: day(7) } })
+  eq('copy: again copies nothing', r.json?.copied, 0)
+
+  // New meals and aliases
+  r = await api('POST', '/api/planner/meals', { token: sam, body: { name: 'Katsu curry bowls' } })
+  eq('new meal: 201', r.status, 201)
+  const katsu = r.json?.meal
+  r = await api('POST', '/api/planner/meals', { token: chloe, body: { name: 'katsu curry   bowls' } })
+  ok('new meal: same name returns the existing meal', r.status === 200 && r.json?.created === false && r.json?.meal?.id === katsu.id)
+  eq('new meal: empty name rejected', (await api('POST', '/api/planner/meals', { token: sam, body: { name: ' ' } })).status, 400)
+  r = await api('POST', `/api/planner/meals/${cabbage.id}/aliases`, { token: sam, body: { alias: 'Filthy Cabbage!' } })
+  eq('alias: normalised (case, trailing punctuation)', r.json?.alias, 'filthy cabbage')
+  await api('POST', `/api/planner/meals/${katsu.id}/aliases`, { token: sam, body: { alias: 'that lentil thing' } })
+  r = await api('POST', `/api/planner/meals/${cabbage.id}/aliases`, { token: sam, body: { alias: 'that lentil thing' } })
+  const after = (await api('GET', '/api/planner/meals', { token: sam })).json.meals
+  ok('alias: the latest correction wins', after.find((m) => m.id === cabbage.id).aliases.includes('that lentil thing') && !after.find((m) => m.id === katsu.id).aliases.includes('that lentil thing'))
+  eq('alias: other household 404', (await api('POST', `/api/planner/meals/${cabbage.id}/aliases`, { token: alex, body: { alias: 'x' } })).status, 404)
+
+  // Parse a typed week (AI mocked: code matching only)
+  r = await api('POST', '/api/planner/parse-week', { token: sam, body: { start: MON, text: 'mon thai cuzza, tue out\nwed: korean dirty cabbage beef\nthat lentil thing\nfri -\nsomething brand new' } })
+  eq('parse: 200', r.status, 200)
+  const items = r.json?.items ?? []
+  const at = (d) => items.find((it) => it.date === d)
+  eq('parse: Monday matched by alias', [at(MON)?.dishId, at(MON)?.confidence], [meals.find((m) => m.name === 'Thai curry').id, 1])
+  eq('parse: Tuesday out', at(day(1))?.kind, 'out')
+  ok('parse: Wednesday with both options', at(day(2))?.dishId === cabbage.id && at(day(2))?.optionIds.length === 2 && at(day(2))?.optionIds.includes(korean.id) && at(day(2))?.optionIds.includes(beef.id))
+  eq('parse: a corrected alias is used next time', at(day(3))?.dishId, cabbage.id)
+  ok('parse: "-" leaves Friday empty', !items.some((it) => it.date === day(4) && it.raw === '-'))
+  const fresh = items.find((it) => it.raw === 'something brand new')
+  ok('parse: unknown text proposes a new meal', fresh && fresh.dishId === null && fresh.newName === 'Something brand new', JSON.stringify(fresh))
+  eq('parse: nothing saved yet', (await api('GET', `/api/planner/week?start=${MON}`, { token: sam })).json.week.entries.length, 1)
+  eq('parse: empty text rejected', (await api('POST', '/api/planner/parse-week', { token: sam, body: { start: MON, text: '  ' } })).status, 400)
 }
 
 try {

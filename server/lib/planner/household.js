@@ -120,8 +120,10 @@ export function householdPayload(db, user, householdId) {
     )
     .all(householdId)
   const link = partnerLink(db, user.id)
+  const week = db.prepare('SELECT week_start_day FROM households WHERE id = ?').get(householdId)
   return {
     id: householdId,
+    weekStartDay: week?.week_start_day ?? 0,
     members: rows.map((u) => ({ id: u.id, name: shortName(u), me: u.id === user.id })),
     partner: link ? { status: link.linked ? 'linked' : 'pending', email: link.email } : null,
   }

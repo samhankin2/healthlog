@@ -972,7 +972,7 @@ site, same origin as this one, so CORS needs no change). It signs in with a
 HealthLog account; the token key in `localStorage` is shared, so being signed
 in to one signs you in to the other.
 ```
-GET    /api/planner/household       -> 200 { ok:true, household:{ id, members:[{id,name,me}],
+GET    /api/planner/household       -> 200 { ok:true, household:{ id, weekStartDay, members:[{id,name,me}],
                                                 partner:{status:'linked'|'pending',email}|null } }
 GET    /api/planner/meals           -> 200 { ok:true, meals:[{ id, name, family, tags[], suggestedTags[], effort,
                                                 tips, link, neverSuggest, aliases[], options:[{id,axis,name}],
@@ -986,7 +986,29 @@ PUT    /api/planner/meals/:id/hidden { optionId, hidden?: true|false }
 PUT    /api/planner/ratings { dishId, optionId?, ratedAs:'both'|'me'|<member id>, thumbs?, stars?, want? }
                                     -> 200 { ok:true, rating|null }  # all empty deletes; want with a score 400; 404 foreign meal/option
 POST   /api/planner/meals/:id/notes { body } -> 201 { ok:true, note }   # 1–2000 chars
+PUT    /api/planner/household { weekStartDay: 0..6 }  -> 200 { ok:true, household }  # 0 = Monday (default)
+POST   /api/planner/meals { name }  -> 201 { ok:true, created:true, meal }   # 200 + created:false when the
+                                       # name or an alias already means a meal
+POST   /api/planner/meals/:id/aliases { alias } -> 200 { ok:true, alias }   # latest correction wins
+GET    /api/planner/week?start=YYYY-MM-DD -> 200 { ok:true, week:{ start, end, entries:[{ id, date, slot,
+                                       kind, status, dishId, optionIds[], note, raw, updatedAt }] } }
+PUT    /api/planner/slots/:date { kind:'dish'|'out'|'leftovers'|'takeaway', dishId?, optionIds?, note?, raw? }
+                                    -> 200 { ok:true, entry }   # one dinner per date; replaces it
+DELETE /api/planner/slots/:date    -> 200 { ok:true, cleared }
+POST   /api/planner/week/copy { from, to } -> 200 { ok:true, copied, week }   # into empty nights only
+POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ date, raw, typed, kind,
+                                       dishId, optionIds[], confidence, candidates[], newName, by }] }
 ```
+- **The week** is one `dinner` slot per date (unique per household + date +
+  slot). Only dated entries show; imported history is undated. A meal night
+  needs a `dishId` from the household; options must belong to it, one per
+  axis. Setting a night resets its status to `planned`.
+- **Parse** saves nothing: it proposes nights for the client to confirm. Text
+  splits on new lines, commas and semicolons; a leading day name pins an item
+  to that day and the rest fill free nights in order; "out", "leftovers",
+  "takeaway" are kinds and "-" / "nothing" leave the night empty. Code matches
+  names and aliases first (picking out option words); only items below 0.85
+  confidence go to AI (§7), which may pick an existing meal or a `newName`.
 - **Ratings** are standing opinions of a meal, one of its options, or a
   combination of options from different axes (`optionId` = option ids joined
   with `+`, stored sorted, at most one per axis; 400 otherwise). The client

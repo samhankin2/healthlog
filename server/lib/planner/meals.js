@@ -255,6 +255,39 @@ export function setHidden(db, householdId, user, dishId, optionId, hidden) {
   return db.prepare('SELECT option_id FROM dish_hidden_options WHERE dish_id = ? ORDER BY option_id').all(dishId).map((r) => r.option_id)
 }
 
+/** A new meal typed in the planner. An existing name or alias returns that meal instead. */
+export function createMeal(db, householdId, name) {
+  const clean = String(name ?? '').trim().replace(/\s+/g, ' ')
+  if (!clean) throw new HttpError(400, 'Give the meal a name')
+  if (clean.length > 80) throw new HttpError(400, 'A meal name can be at most 80 characters')
+  const existing = findDishByName(db, householdId, clean)
+  if (existing) {
+    // Typing a removed meal's name brings it back, history and ratings intact.
+    if (existing.archived_at) db.prepare("UPDATE dishes SET archived_at = NULL, updated_at = datetime('now') WHERE id = ?").run(existing.id)
+    return { id: existing.id, created: false }
+  }
+  const id = randomUUID()
+  db.prepare('INSERT INTO dishes (id, household_id, name) VALUES (?, ?, ?)').run(id, householdId, clean)
+  db.prepare('INSERT OR IGNORE INTO dish_aliases (household_id, alias, dish_id) VALUES (?, ?, ?)').run(householdId, normaliseName(clean), id)
+  return { id, created: true }
+}
+
+/**
+ * Remember another name for a meal (a correction in the planner). A name that
+ * already means a different meal is moved: the latest correction wins.
+ */
+export function addAlias(db, householdId, dishId, alias) {
+  findDish(db, householdId, dishId)
+  const key = normaliseName(alias)
+  if (!key) throw new HttpError(400, 'alias is required')
+  if (key.length > 120) throw new HttpError(400, 'alias is too long')
+  db.prepare(
+    `INSERT INTO dish_aliases (household_id, alias, dish_id) VALUES (?, ?, ?)
+     ON CONFLICT(household_id, alias) DO UPDATE SET dish_id = excluded.dish_id`,
+  ).run(householdId, key, dishId)
+  return key
+}
+
 export const MAX_NOTE = 2000
 
 export function addNote(db, householdId, user, dishId, body) {

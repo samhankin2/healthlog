@@ -497,6 +497,7 @@ CREATE TABLE IF NOT EXISTS planner_notes (       -- notes to Claude about a meal
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dish_options_unique   ON dish_options(dish_id, axis, name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_entries_import   ON plan_entries(household_id, import_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_entries_slot     ON plan_entries(household_id, date, slot) WHERE date IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_plan_entries_household_date  ON plan_entries(household_id, date);
 CREATE INDEX IF NOT EXISTS idx_plan_entries_dish            ON plan_entries(dish_id);
 CREATE INDEX IF NOT EXISTS idx_dish_ratings_household       ON dish_ratings(household_id);
@@ -539,6 +540,8 @@ export function migrate(db) {
   addColumns(db, 'dishes', { suggested_tags: "TEXT NOT NULL DEFAULT '[]'" }) // tag chips offered, not yet accepted
   addColumns(db, 'dishes', { family: 'TEXT' }) // a section of related meals, e.g. "Pulled pork"
   addColumns(db, 'dish_ratings', { want: 'INTEGER NOT NULL DEFAULT 0' }) // 1 = not had it yet, want to make it
+  addColumns(db, 'plan_entries', { updated_at: 'TEXT' })
+  addColumns(db, 'households', { week_start_day: 'INTEGER NOT NULL DEFAULT 0' }) // 0 = Monday
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */
