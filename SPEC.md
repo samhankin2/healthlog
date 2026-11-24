@@ -1028,6 +1028,28 @@ POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ d
   (no options), option (one axis) or combination (two axes), when the cook
   chose an option on every axis; otherwise standing ratings are untouched.
   Copying a week turns freezer nights into plain meal nights.
+- **Photos, one-line review, suggestions (M3/M4)** — tables `planner_photos`
+  (`dish_id`, `plan_entry_id`, `bytes`; files at `DATA_DIR/photos/<id>.jpg`,
+  pulled with `scripts/hl backup pull`) and `suggestion_snoozes` (`dish_id`,
+  `until`); `dishes.cover_photo_id`.
+  ```
+  POST   /api/planner/photos?dishId=&entryId=   body: the JPEG (image/jpeg, max 3 MB) -> 201 { photo }
+                                    # 415 other types, 400 not a JPEG, 413 too large
+  GET    /api/planner/photos/:id   -> the JPEG (household only; the app fetches it as a blob)
+  DELETE /api/planner/photos/:id   -> { deleted }   # the cover falls back to the newest left
+  POST   /api/planner/parse-review { today, text } -> { items:[{ entryId, status, stars, thumbs, note }], by }
+                                    # 409 when nothing is waiting; proposes, saves nothing
+  GET    /api/planner/history      -> { entries:[{ dishId, date }], importedWeeks }   # dated cooks
+  PUT    /api/planner/meals/:id/snooze { today, days?: 0..365 (21) } -> { until|null }   # 0 clears
+  PUT    /api/planner/meals/:id { regularEveryDays?: 3..120|null, coverPhotoId? }
+  ```
+  The meals payload adds `regularEveryDays`, `coverPhotoId`, `snoozedUntil`,
+  `photos[]` (newest first) and `tipSuggestions[]` (a cook note written 2+
+  times that the tips don't already contain). The first photo of a meal
+  becomes its cover. The one-line review is read by code (clauses, meal-name
+  words, opinion words; a comment right after a named meal is about it; only
+  tips like "too much faff" become notes) and by AI when available (§7).
+  Suggestions are ranked on the phone (mealplan `src/lib/suggest.ts`).
 - **Parse** saves nothing: it proposes nights for the client to confirm. Text
   splits on new lines, commas and semicolons; a leading day name pins an item
   to that day and the rest fill free nights in order; "out", "leftovers",

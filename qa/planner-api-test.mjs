@@ -523,6 +523,80 @@ async function runReview({ sam, chloe, alex }) {
   eq('freezer: 0 portions rejected when adding', (await api('POST', '/api/planner/freezer', { token: sam, body: { dishId: cabbage.id, portions: 0 } })).status, 400)
   eq('freezer: other household 404', (await api('PUT', `/api/planner/freezer/${item.id}`, { token: alex, body: { portions: 5 } })).status, 404)
   eq('freezer: outsiders see none', (await api('GET', '/api/planner/freezer', { token: alex })).json.items.length, 0)
+
+  await runExtras({ sam, chloe, alex, TODAY, d, palak, cabbage, curry })
+}
+
+/* ---------- one-line review, tips, photos, regulars, snooze, history ---------- */
+async function runExtras({ sam, chloe, alex, TODAY, d, palak, cabbage, curry }) {
+  // Fresh nights to review
+  const set = async (date, dishId) => (await api('PUT', `/api/planner/slots/${date}`, { token: sam, body: { dishId } })).json.entry
+  const a = await set(d(6), curry.id)
+  const b = await set(d(7), palak.id) // d(7) = 11 Jan, before TODAY
+  let r = await api('POST', '/api/planner/parse-review', { token: sam, body: { today: TODAY, text: 'all good except the palak, too much faff' } })
+  eq('one line: 200, read by code (AI mocked)', [r.status, r.json?.by], [200, 'code'])
+  const items = r.json?.items ?? []
+  eq('one line: the rest are good', [items.find((x) => x.entryId === a.id)?.status, items.find((x) => x.entryId === a.id)?.stars], ['cooked', 4])
+  eq('one line: the named meal gets the comment', [items.find((x) => x.entryId === b.id)?.stars, items.find((x) => x.entryId === b.id)?.note], [2, 'too much faff'])
+  eq('one line: saves nothing by itself', (await api('GET', `/api/planner/review?today=${TODAY}`, { token: sam })).json.entries.length, 2)
+  eq('one line: empty rejected', (await api('POST', '/api/planner/parse-review', { token: sam, body: { today: TODAY, text: ' ' } })).status, 400)
+  await api('PUT', `/api/planner/entries/${a.id}`, { token: sam, body: { status: 'skipped' } })
+  await api('PUT', `/api/planner/entries/${b.id}`, { token: sam, body: { status: 'skipped' } })
+  eq('one line: nothing to review is a 409', (await api('POST', '/api/planner/parse-review', { token: sam, body: { today: TODAY, text: 'great' } })).status, 409)
+
+  // A cook note written twice is offered as a tip
+  const n1 = await set(d(-7), palak.id)
+  const n2 = await set(d(-6), palak.id)
+  await api('PUT', `/api/planner/entries/${n1.id}`, { token: sam, body: { status: 'cooked', cookNote: 'More garlic' } })
+  await api('PUT', `/api/planner/entries/${n2.id}`, { token: chloe, body: { status: 'cooked', cookNote: 'more garlic ' } })
+  let meal = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === palak.id)
+  eq('tip: repeated note offered', meal.tipSuggestions, [{ note: 'more garlic', count: 2 }])
+  await api('PUT', `/api/planner/meals/${palak.id}`, { token: sam, body: { tips: 'More garlic' } })
+  meal = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === palak.id)
+  eq('tip: gone once the tips say it', meal.tipSuggestions, [])
+
+  // Photos: JPEG only, first becomes the cover, served to the household only
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff, 0xd9])
+  const upload = (token, dishId, body, type = 'image/jpeg', entryId = '') =>
+    fetch(`${BASE}/api/planner/photos?dishId=${dishId}${entryId ? `&entryId=${entryId}` : ''}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': type }, body })
+  let res = await upload(sam, palak.id, jpeg, 'image/jpeg', n1.id)
+  const p1 = (await res.json()).photo
+  eq('photo: uploaded', res.status, 201)
+  res = await upload(chloe, palak.id, jpeg)
+  const p2 = (await res.json()).photo
+  meal = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === palak.id)
+  eq('photo: newest first, first one is the cover', [meal.photos.map((p) => p.id), meal.coverPhotoId], [[p2.id, p1.id], p1.id])
+  eq('photo: linked to the cook', meal.photos.find((p) => p.id === p1.id)?.entryId, n1.id)
+  eq('photo: not a JPEG rejected', (await upload(sam, palak.id, Buffer.from('hello'))).status, 400)
+  eq('photo: wrong type rejected', (await upload(sam, palak.id, jpeg, 'image/png')).status, 415)
+  eq('photo: too big rejected', (await upload(sam, palak.id, Buffer.concat([jpeg, Buffer.alloc(3 * 1024 * 1024)]))).status, 413)
+  eq('photo: other household’s meal 404', (await upload(alex, palak.id, jpeg)).status, 404)
+  res = await fetch(`${BASE}/api/planner/photos/${p1.id}`, { headers: { authorization: `Bearer ${chloe}` } })
+  ok('photo: served to the household as a JPEG', res.status === 200 && res.headers.get('content-type') === 'image/jpeg' && Buffer.from(await res.arrayBuffer()).equals(jpeg))
+  eq('photo: not to others', (await fetch(`${BASE}/api/planner/photos/${p1.id}`, { headers: { authorization: `Bearer ${alex}` } })).status, 404)
+  eq('cover: set to another photo', (await api('PUT', `/api/planner/meals/${palak.id}`, { token: sam, body: { coverPhotoId: p2.id } })).json?.meal?.coverPhotoId, p2.id)
+  eq('cover: a photo of another meal rejected', (await api('PUT', `/api/planner/meals/${cabbage.id}`, { token: sam, body: { coverPhotoId: p2.id } })).status, 400)
+  await api('DELETE', `/api/planner/photos/${p2.id}`, { token: sam })
+  meal = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === palak.id)
+  eq('photo: deleting the cover falls back to the next', [meal.photos.length, meal.coverPhotoId], [1, p1.id])
+  eq('photo: deleted file is gone', (await fetch(`${BASE}/api/planner/photos/${p2.id}`, { headers: { authorization: `Bearer ${sam}` } })).status, 404)
+
+  // Regulars and snoozes
+  r = await api('PUT', `/api/planner/meals/${curry.id}`, { token: sam, body: { regularEveryDays: 14 } })
+  eq('regular: every 14 days', r.json?.meal?.regularEveryDays, 14)
+  eq('regular: 2 days rejected', (await api('PUT', `/api/planner/meals/${curry.id}`, { token: sam, body: { regularEveryDays: 2 } })).status, 400)
+  r = await api('PUT', `/api/planner/meals/${cabbage.id}/snooze`, { token: chloe, body: { today: TODAY } })
+  eq('snooze: three weeks by default', r.json?.until, '2027-02-02')
+  eq('snooze: shows on the meal for both', (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id).snoozedUntil, '2027-02-02')
+  await api('PUT', `/api/planner/meals/${cabbage.id}/snooze`, { token: sam, body: { today: TODAY, days: 0 } })
+  eq('snooze: cleared', (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id).snoozedUntil, null)
+  eq('snooze: other household 404', (await api('PUT', `/api/planner/meals/${cabbage.id}/snooze`, { token: alex, body: { today: TODAY } })).status, 404)
+
+  // History for suggestions
+  r = await api('GET', '/api/planner/history', { token: sam })
+  ok('history: dated cooks only', r.json?.entries?.length > 0 && r.json.entries.every((e) => e.date && e.dishId))
+  ok('history: counts imported weeks', r.json?.importedWeeks >= 1, String(r.json?.importedWeeks))
+  eq('history: outsiders get none', (await api('GET', '/api/planner/history', { token: alex })).json?.entries?.length, 0)
 }
 
 try {

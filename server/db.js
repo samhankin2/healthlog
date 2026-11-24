@@ -518,6 +518,24 @@ CREATE TABLE IF NOT EXISTS freezer_items (       -- portions in the freezer
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS planner_photos (      -- a photo of a meal (files in DATA_DIR/photos/<id>.jpg)
+  id            TEXT PRIMARY KEY,
+  household_id  TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id       TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  plan_entry_id TEXT REFERENCES plan_entries(id) ON DELETE SET NULL, -- the cook it was taken at
+  bytes         INTEGER NOT NULL,
+  created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS suggestion_snoozes (  -- "not now": a meal stays out of suggestions until a date (M4)
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id      TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  until        TEXT NOT NULL,                   -- YYYY-MM-DD
+  PRIMARY KEY (household_id, dish_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_planner_photos_dish          ON planner_photos(dish_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_household            ON reviews(household_id);
 CREATE INDEX IF NOT EXISTS idx_freezer_household            ON freezer_items(household_id, frozen_on);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_freezer_source        ON freezer_items(source_entry_id) WHERE source_entry_id IS NOT NULL;
@@ -580,6 +598,7 @@ export function migrate(db) {
     reviewed_at: 'TEXT',
   })
   addColumns(db, 'dish_ratings', { source: "TEXT NOT NULL DEFAULT 'estimate'" }) // estimate (rated from memory) | review (from a cook)
+  addColumns(db, 'dishes', { cover_photo_id: 'TEXT' })
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

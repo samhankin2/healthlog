@@ -13,6 +13,9 @@ import { addAlias, addNote, createMeal, mealsPayload, setHidden, setRating, upda
 import { parseWeek } from '../lib/planner/match.js'
 import { clearSlot, copyWeek, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
 import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, updateEntry } from '../lib/planner/review.js'
+import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
+import { historyPayload, parseReviewLine, snooze } from '../lib/planner/insights.js'
+import fs from 'node:fs'
 
 /** The caller and their household id; use at the top of every planner route. */
 export function plannerContext(req) {
@@ -70,6 +73,8 @@ export function registerPlannerRoutes(router) {
       effort: body.effort === undefined ? undefined : nullableInt(body.effort, 'effort'),
       tips: body.tips,
       neverSuggest: body.neverSuggest,
+      regularEveryDays: body.regularEveryDays === undefined ? undefined : nullableInt(body.regularEveryDays, 'regularEveryDays'),
+      coverPhotoId: body.coverPhotoId,
       archived: body.archived === undefined ? undefined : Boolean(body.archived),
     })
     // An archived meal drops out of the payload: null.
@@ -215,5 +220,58 @@ export function registerPlannerRoutes(router) {
     const { db, householdId } = plannerContext(req)
     const body = asObject(await readJsonBody(req))
     sendJson(res, 200, { ok: true, item: setFreezerPortions(db, householdId, params.id, body.portions) })
+  })
+
+  /* ---------- photos ---------- */
+
+  // Body: the JPEG itself (the phone resizes first). Query: dishId, entryId?
+  router.post('/api/planner/photos', async ({ req, res, query }) => {
+    const { user, db, householdId } = plannerContext(req)
+    const type = String(req.headers['content-type'] ?? '')
+    if (!/^image\/jpe?g\b/.test(type)) throw new HttpError(415, 'Send the photo as image/jpeg')
+    const bytes = await readRawBody(req)
+    const photo = savePhoto(db, householdId, user, { dishId: String(query?.get('dishId') ?? ''), entryId: query?.get('entryId') || null, bytes })
+    sendJson(res, 201, { ok: true, photo })
+  })
+
+  // Images can't send the bearer token from an <img>, so the app fetches them as blobs.
+  router.get('/api/planner/photos/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const file = photoFile(db, householdId, params.id)
+    const data = fs.readFileSync(file)
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(data.length), 'cache-control': 'private, max-age=31536000, immutable' })
+    res.end(data)
+  })
+
+  router.delete('/api/planner/photos/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    deletePhoto(db, householdId, params.id)
+    sendJson(res, 200, { ok: true, deleted: params.id })
+  })
+
+  /* ---------- one-line review, suggestions ---------- */
+
+  router.post('/api/planner/parse-review', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const today = requireDay(body.today, 'today')
+    const text = String(body.text ?? '').trim()
+    if (!text) throw new HttpError(400, 'Say how the week went first')
+    if (text.length > 1000) throw new HttpError(400, 'That is too long for one line')
+    const queue = reviewQueue(db, householdId, today)
+    if (queue.length === 0) throw new HttpError(409, 'Nothing to review')
+    sendJson(res, 200, { ok: true, ...(await parseReviewLine(db, householdId, queue, text)) })
+  })
+
+  router.get('/api/planner/history', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, ...historyPayload(db, householdId) })
+  })
+
+  router.put('/api/planner/meals/:id/snooze', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const until = snooze(db, householdId, params.id, { today: String(body.today ?? ''), days: body.days ?? 21 })
+    sendJson(res, 200, { ok: true, until })
   })
 }

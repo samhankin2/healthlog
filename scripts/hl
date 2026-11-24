@@ -172,6 +172,12 @@ EOF
         mkdir -p "$ROOT/data/backups"
         scp "${ssh_opts[@]}" "ubuntu@$HOST:$path" "$ROOT/data/backups/"
         echo "downloaded: $ROOT/data/backups/$(basename "$path")"
+        # Meal planner photos live beside the database, not in it.
+        stamp="$(basename "$path" .db)"
+        if remote "test -d /var/lib/healthlog/photos"; then
+          remote "tar -C /var/lib/healthlog -czf - photos" > "$ROOT/data/backups/$stamp-photos.tgz"
+          echo "downloaded: $ROOT/data/backups/$stamp-photos.tgz"
+        fi
         ;;
       *) echo "usage: hl backup [list|pull]" >&2; exit 2 ;;
     esac

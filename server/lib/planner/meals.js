@@ -73,6 +73,11 @@ export function mealsPayload(db, householdId) {
       tips: d.tips ?? null,
       link: d.link ?? null,
       neverSuggest: Boolean(d.never_suggest),
+      regularEveryDays: d.regular_every_days ?? null, // a regular: suggest again after this many days
+      coverPhotoId: d.cover_photo_id ?? null,
+      snoozedUntil: null,
+      photos: [],
+      tipSuggestions: [],
       aliases: [],
       options: [],
       cooked: 0,
@@ -133,6 +138,24 @@ export function mealsPayload(db, householdId) {
     .all(householdId)) {
     byId.get(n.dish_id)?.notes.push(notePayload(n))
   }
+  for (const p of db.prepare('SELECT * FROM planner_photos WHERE household_id = ? ORDER BY created_at DESC, rowid DESC').all(householdId)) {
+    byId.get(p.dish_id)?.photos.push({ id: p.id, entryId: p.plan_entry_id ?? null, createdAt: p.created_at })
+  }
+  for (const z of db.prepare('SELECT dish_id, until FROM suggestion_snoozes WHERE household_id = ?').all(householdId)) {
+    const meal = byId.get(z.dish_id)
+    if (meal) meal.snoozedUntil = z.until
+  }
+  // A cook note written twice or more is offered as a standing tip (unless the tips already say it).
+  for (const c of db
+    .prepare(
+      `SELECT dish_id, lower(trim(cook_note)) AS note, COUNT(*) AS n FROM plan_entries
+        WHERE household_id = ? AND cook_note IS NOT NULL AND trim(cook_note) <> '' AND dish_id IS NOT NULL
+        GROUP BY dish_id, lower(trim(cook_note)) HAVING COUNT(*) >= 2 ORDER BY n DESC`,
+    )
+    .all(householdId)) {
+    const meal = byId.get(c.dish_id)
+    if (meal && !(meal.tips ?? '').toLowerCase().includes(c.note)) meal.tipSuggestions.push({ note: c.note, count: c.n })
+  }
   return meals
 }
 
@@ -173,6 +196,19 @@ export function updateMeal(db, householdId, id, patch) {
     const tips = patch.tips === null ? null : String(patch.tips).trim().slice(0, 2000) || null
     sets.push('tips = ?')
     values.push(tips)
+  }
+  if (patch.regularEveryDays !== undefined) {
+    const n = patch.regularEveryDays
+    if (n !== null && !(Number.isInteger(n) && n >= 3 && n <= 120)) throw new HttpError(400, 'regularEveryDays must be 3 to 120, or null')
+    sets.push('regular_every_days = ?')
+    values.push(n)
+  }
+  if (patch.coverPhotoId !== undefined) {
+    if (patch.coverPhotoId !== null && !db.prepare('SELECT 1 FROM planner_photos WHERE id = ? AND dish_id = ?').get(patch.coverPhotoId, id)) {
+      throw new HttpError(400, 'That photo is not of this meal')
+    }
+    sets.push('cover_photo_id = ?')
+    values.push(patch.coverPhotoId)
   }
   if (patch.neverSuggest !== undefined) {
     sets.push('never_suggest = ?')
