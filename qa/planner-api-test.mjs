@@ -597,6 +597,66 @@ async function runExtras({ sam, chloe, alex, TODAY, d, palak, cabbage, curry }) 
   ok('history: dated cooks only', r.json?.entries?.length > 0 && r.json.entries.every((e) => e.date && e.dishId))
   ok('history: counts imported weeks', r.json?.importedWeeks >= 1, String(r.json?.importedWeeks))
   eq('history: outsiders get none', (await api('GET', '/api/planner/history', { token: alex })).json?.entries?.length, 0)
+
+  await runShopping({ sam, chloe, alex, palak, cabbage, curry })
+}
+
+/* ---------- shopping list (M5) ---------- */
+async function runShopping({ sam, chloe, alex, palak, cabbage, curry }) {
+  const WEEK = '2027-02-01' // a Monday with nothing planned yet
+  const day = (n) => new Date(Date.parse(`${WEEK}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10)
+  await api('PUT', `/api/planner/slots/${day(0)}`, { token: sam, body: { dishId: palak.id } })
+  await api('PUT', `/api/planner/slots/${day(1)}`, { token: sam, body: { kind: 'out' } })
+  await api('PUT', `/api/planner/slots/${day(3)}`, { token: sam, body: { dishId: curry.id } })
+
+  let r = await api('GET', `/api/planner/shopping?week=${WEEK}`, { token: chloe })
+  eq('shop: empty list to start', r.json?.items, [])
+  eq('shop: only meal nights to shop for', r.json?.nights?.map((n) => n.date), [day(0), day(3)])
+  eq('shop: needs a week', (await api('GET', '/api/planner/shopping', { token: sam })).status, 400)
+
+  const add = (token, body) => api('POST', '/api/planner/shopping/items', { token, body: { week: WEEK, ...body } })
+  r = await add(sam, { name: 'Onions', qty: '2', dishId: palak.id })
+  eq('shop: added for a meal, section guessed', [r.status, r.json?.item?.section, r.json?.item?.dishIds], [201, 'cold', [palak.id]])
+  r = await add(chloe, { name: ' onions ', qty: '1', dishId: curry.id })
+  eq('shop: same item from another meal is one line', [r.json?.item?.qty, r.json?.item?.dishIds], ['2 + 1', [palak.id, curry.id]])
+  eq('shop: tinned tomatoes are ambient', (await add(sam, { name: 'Tinned tomatoes', dishId: curry.id })).json?.item?.section, 'ambient')
+  eq('shop: unknown word falls back to ambient (AI mocked)', (await add(sam, { name: 'Zorblax' })).json?.item?.section, 'ambient')
+  r = await add(sam, { name: 'Coriander', dishId: curry.id, section: 'market' })
+  eq('shop: market set by us', r.json?.item?.section, 'market')
+  eq('shop: empty name rejected', (await add(sam, { name: ' ' })).status, 400)
+  eq('shop: bad section rejected', (await add(sam, { name: 'Milk', section: 'fridge' })).status, 400)
+  eq('shop: another household’s meal 404', (await add(alex, { name: 'Milk', dishId: palak.id })).status, 404)
+
+  r = await api('GET', `/api/planner/shopping?week=${WEEK}`, { token: sam })
+  const items = r.json.items
+  eq('shop: shop order Market, Cold, Ambient', items.map((i) => i.section), ['market', 'cold', 'ambient', 'ambient'])
+  eq('shop: the usual remembered per meal', r.json.usual[curry.id].map((u) => u.name).sort(), ['Coriander', 'Tinned tomatoes', 'onions'])
+
+  // Ticking, sections remembered, removing
+  const onions = items.find((i) => i.name === 'Onions')
+  r = await api('PUT', `/api/planner/shopping/items/${onions.id}`, { token: chloe, body: { checked: true } })
+  eq('shop: ticked', r.json?.item?.checked, true)
+  const zorb = items.find((i) => i.name === 'Zorblax')
+  await api('PUT', `/api/planner/shopping/items/${zorb.id}`, { token: sam, body: { section: 'market' } })
+  await api('DELETE', `/api/planner/shopping/items/${zorb.id}`, { token: sam })
+  eq('shop: a section we set is remembered next time', (await add(sam, { name: 'zorblax' })).json?.item?.section, 'market')
+  r = await api('DELETE', `/api/planner/shopping/items/${onions.id}?dishId=${palak.id}`, { token: sam })
+  eq('shop: removing one meal’s claim keeps the line', r.json?.item?.dishIds, [curry.id])
+  r = await add(sam, { name: 'Onions', dishId: palak.id })
+  eq('shop: adding again unticks it', r.json?.item?.checked, false)
+  await api('PUT', `/api/planner/shopping/items/${onions.id}`, { token: sam, body: { checked: true } })
+  r = await api('DELETE', `/api/planner/shopping/checked?week=${WEEK}`, { token: chloe })
+  eq('shop: clear ticked', r.json?.cleared, 1)
+  eq('shop: item from another household 404', (await api('PUT', `/api/planner/shopping/items/${zorb.id}`, { token: alex, body: { checked: true } })).status, 404)
+  eq('shop: outsiders see an empty list', (await api('GET', `/api/planner/shopping?week=${WEEK}`, { token: alex })).json?.items, [])
+
+  // Sections loaded from the Notes (admin)
+  const s = spawnSync(process.execPath, [CLI, 'planner', 'sections', '--email', 'sam@example.com'], {
+    env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', input: JSON.stringify([{ name: 'Leeks', section: 'market' }, { name: 'x', section: 'nowhere' }]),
+  })
+  ok('sections: loaded', s.status === 0 && /remembered 1/.test(s.stdout), s.stdout + s.stderr)
+  eq('sections: used for the next list', (await add(sam, { name: 'leeks' })).json?.item?.section, 'market')
+  void cabbage
 }
 
 try {

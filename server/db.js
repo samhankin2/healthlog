@@ -535,6 +535,49 @@ CREATE TABLE IF NOT EXISTS suggestion_snoozes (  -- "not now": a meal stays out 
   PRIMARY KEY (household_id, dish_id)
 );
 
+-- Shopping (M5): one list per week, items in shop order, remembered sections and per-meal usuals.
+CREATE TABLE IF NOT EXISTS shopping_lists (
+  id           TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  week_start   TEXT NOT NULL,                   -- YYYY-MM-DD
+  created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS shopping_items (
+  id         TEXT PRIMARY KEY,
+  list_id    TEXT NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  name_key   TEXT NOT NULL,                     -- normalised: same item from two meals is one line
+  section    TEXT NOT NULL,                     -- market | cold | ambient
+  qty        TEXT,                              -- free text; two meals' amounts join as "2 + 1"
+  dish_ids   TEXT NOT NULL DEFAULT '[]',        -- JSON: the meals it's for
+  checked    INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS item_sections (       -- where an item goes, remembered per household
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  name_key     TEXT NOT NULL,
+  section      TEXT NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'guess',   -- guess (word list / AI) | set (we chose it)
+  PRIMARY KEY (household_id, name_key)
+);
+
+CREATE TABLE IF NOT EXISTS dish_usual_items (    -- what a meal needed last time ("add the usual")
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  dish_id      TEXT NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+  name_key     TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  qty          TEXT,
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (dish_id, name_key)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shopping_lists_week   ON shopping_lists(household_id, week_start);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shopping_items_key    ON shopping_items(list_id, name_key);
+
 CREATE INDEX IF NOT EXISTS idx_planner_photos_dish          ON planner_photos(dish_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_household            ON reviews(household_id);
 CREATE INDEX IF NOT EXISTS idx_freezer_household            ON freezer_items(household_id, frozen_on);

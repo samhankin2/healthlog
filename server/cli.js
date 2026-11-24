@@ -47,6 +47,7 @@ import { isMocked, userTextFromPrompt } from './ai.js'
 import { corosStatus, dumpRaw as corosDump, readLastSync as corosLastSync, syncUser as corosSync } from './lib/coros.js'
 import { ensureHousehold } from './lib/planner/household.js'
 import { importDraft, listNotes, replyToNote, splitOptions } from './lib/planner/meals.js'
+import { rememberSections } from './lib/planner/shopping.js'
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -93,6 +94,7 @@ function usage() {
     '                       load a Notes-import draft (JSON, stdin by default) into that user\'s household',
     '  node server/cli.js planner split --email <email> --meal "<name>" [--family "<section>"] [--rest "<new name>"] [--dry-run]',
     '                       turn each option of a meal into its own meal',
+    '  node server/cli.js planner sections --email <email> < items.json   remember shopping sections [{name, section}]',
     '  node server/cli.js planner notes [--all]          notes to Claude about meals (open ones by default)',
     '  node server/cli.js planner reply --id <note id> [--resolve] [-]   reply text from stdin',
     '  node server/cli.js invite create [--note "who"]   print a new invite code',
@@ -458,6 +460,14 @@ async function cmdPlanner(action, args) {
     for (const name of r.created) console.log(`  new meal: ${name}`)
     console.log(`  kept as: ${r.rest}`)
     console.log(`  history moved: ${r.historyMoved}, ratings moved: ${r.ratingsMoved}, aliases moved: ${r.aliasesMoved}`)
+    return
+  }
+  if (action === 'sections') {
+    const db = getDb()
+    const user = userByEmailArg(db, args)
+    const items = JSON.parse(fs.readFileSync(0, 'utf8'))
+    if (!Array.isArray(items)) throw new Error('stdin must be a JSON list of { name, section }')
+    console.log(`remembered ${rememberSections(db, ensureHousehold(db, user), items)} item sections`)
     return
   }
   if (action === 'notes') {

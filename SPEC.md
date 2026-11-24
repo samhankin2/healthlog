@@ -1050,6 +1050,29 @@ POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ d
   words, opinion words; a comment right after a named meal is about it; only
   tips like "too much faff" become notes) and by AI when available (§7).
   Suggestions are ranked on the phone (mealplan `src/lib/suggest.ts`).
+- **Shopping (M5)** — tables `shopping_lists` (one per household + week),
+  `shopping_items` (`name`, `name_key` unique per list, `section`
+  market|cold|ambient, `qty` text, `dish_ids` JSON, `checked`),
+  `item_sections` (remembered per household; `source` guess|set) and
+  `dish_usual_items` (what a meal needed last time).
+  ```
+  GET    /api/planner/shopping?week=YYYY-MM-DD -> { week, items[], nights:[{ entryId, date, dishId, optionIds }],
+                                                    usual:{ <dishId>: [{ name, qty }] } }
+  POST   /api/planner/shopping/items { week, name, qty?, dishId?, section? } -> 201 { item }
+  PUT    /api/planner/shopping/items/:id { checked?, qty?, section? } -> { item }
+  DELETE /api/planner/shopping/items/:id[?dishId=] -> { item|null }   # with dishId: only that meal's claim
+  DELETE /api/planner/shopping/checked?week= -> { cleared }
+  ```
+  Nights to shop for are the week's meal nights (not out / leftovers /
+  takeaway / freezer). The same item (normalised name) added for another meal
+  is one line: the meal joins `dishIds` and amounts join as "2 + 1"; adding
+  again unticks it. Items list in shop order Market → Cold → Ambient, ticked
+  last. Section: one we set (remembered, `source` set) → a remembered guess →
+  a word list (packaging and pantry words first, so "tinned tomatoes" is
+  Ambient; fridge, freezer and fresh produce are Cold) → AI → Ambient. Market
+  is never guessed. Adding an item for a meal saves it to that meal's usuals.
+  `cli.js planner sections --email` (or `scripts/hl planner-sections EMAIL`)
+  loads known sections from JSON on stdin.
 - **Parse** saves nothing: it proposes nights for the client to confirm. Text
   splits on new lines, commas and semicolons; a leading day name pins an item
   to that day and the rest fill free nights in order; "out", "leftovers",

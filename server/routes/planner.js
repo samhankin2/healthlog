@@ -16,6 +16,7 @@ import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, up
 import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
 import { historyPayload, parseReviewLine, snooze } from '../lib/planner/insights.js'
 import fs from 'node:fs'
+import { addItem, clearChecked, removeItem, shoppingPayload, updateItem } from '../lib/planner/shopping.js'
 
 /** The caller and their household id; use at the top of every planner route. */
 export function plannerContext(req) {
@@ -273,5 +274,41 @@ export function registerPlannerRoutes(router) {
     const body = asObject(await readJsonBody(req))
     const until = snooze(db, householdId, params.id, { today: String(body.today ?? ''), days: body.days ?? 21 })
     sendJson(res, 200, { ok: true, until })
+  })
+
+  /* ---------- shopping (M5) ---------- */
+
+  router.get('/api/planner/shopping', async ({ req, res, query }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, ...shoppingPayload(db, householdId, requireDay(query?.get('week'), 'week')) })
+  })
+
+  router.post('/api/planner/shopping/items', async ({ req, res }) => {
+    const { user, db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const item = await addItem(db, householdId, user, {
+      week: String(body.week ?? ''),
+      name: body.name,
+      qty: body.qty ?? null,
+      dishId: typeof body.dishId === 'string' && body.dishId ? body.dishId : null,
+      section: body.section ?? null,
+    })
+    sendJson(res, 201, { ok: true, item })
+  })
+
+  router.put('/api/planner/shopping/items/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    sendJson(res, 200, { ok: true, item: updateItem(db, householdId, params.id, { checked: body.checked, qty: body.qty, section: body.section }) })
+  })
+
+  router.delete('/api/planner/shopping/items/:id', async ({ req, res, params, query }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, item: removeItem(db, householdId, params.id, query?.get('dishId') || null) })
+  })
+
+  router.delete('/api/planner/shopping/checked', async ({ req, res, query }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, cleared: clearChecked(db, householdId, requireDay(query?.get('week'), 'week')) })
   })
 }
