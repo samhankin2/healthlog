@@ -139,6 +139,31 @@ export function registerPlannerRoutes(router) {
   })
 
   // A night typed like a note: saved as the words at once, linked to a meal when code is sure.
+  // "This week starts on Thursday": weeks run from that date until another start. `replaces` is the
+  // start being moved (this week's own start, if it was one); its shopping list moves along.
+  router.put('/api/planner/week-starts', async ({ req, res }) => {
+    const { db, householdId, user } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const date = String(body.date ?? '')
+    requireDay(date)
+    const replaces = body.replaces ? String(body.replaces) : null
+    if (replaces) requireDay(replaces, 'replaces')
+    db.exec('BEGIN')
+    try {
+      if (replaces && replaces !== date) {
+        db.prepare('DELETE FROM week_starts WHERE household_id = ? AND date = ?').run(householdId, replaces)
+        const hasNew = db.prepare('SELECT 1 FROM shopping_lists WHERE household_id = ? AND week_start = ?').get(householdId, date)
+        if (!hasNew) db.prepare('UPDATE shopping_lists SET week_start = ? WHERE household_id = ? AND week_start = ?').run(date, householdId, replaces)
+      }
+      db.prepare('INSERT OR IGNORE INTO week_starts (household_id, date) VALUES (?, ?)').run(householdId, date)
+      db.exec('COMMIT')
+    } catch (e) {
+      db.exec('ROLLBACK')
+      throw e
+    }
+    sendJson(res, 200, { ok: true, household: householdPayload(db, user, householdId) })
+  })
+
   router.put('/api/planner/slots/:date/text', async ({ req, res, params }) => {
     const { db, householdId } = plannerContext(req)
     const body = asObject(await readJsonBody(req))

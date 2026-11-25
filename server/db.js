@@ -535,6 +535,14 @@ CREATE TABLE IF NOT EXISTS suggestion_snoozes (  -- "not now": a meal stays out 
   PRIMARY KEY (household_id, dish_id)
 );
 
+-- Weeks that start on a different day: each date starts a run of weeks until the next one.
+CREATE TABLE IF NOT EXISTS week_starts (
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  date         TEXT NOT NULL,                   -- YYYY-MM-DD
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (household_id, date)
+);
+
 -- Shopping (M5): one list per week, items in shop order, remembered sections and per-meal usuals.
 CREATE TABLE IF NOT EXISTS shopping_lists (
   id           TEXT PRIMARY KEY,

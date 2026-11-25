@@ -995,6 +995,11 @@ GET    /api/planner/week?start=YYYY-MM-DD -> 200 { ok:true, week:{ start, end, e
 PUT    /api/planner/slots/:date { kind:'dish'|'out'|'leftovers'|'takeaway', dishId?, optionIds?, note?, raw? }
                                     -> 200 { ok:true, entry }   # one dinner per date; replaces it
 DELETE /api/planner/slots/:date    -> 200 { ok:true, cleared }
+PUT    /api/planner/week-starts { date, replaces? } -> 200 { ok:true, household }   # a week starting on another
+                                       # day: weeks run 7 days at a time from the latest start on or before a date
+                                       # (short week before a new start); before any, weekStartDay applies.
+                                       # replaces = the start being moved (its shopping list moves too).
+                                       # household.weekStarts lists them, oldest first
 PUT    /api/planner/slots/:date/text { text } -> 200 { ok:true, entry|null, pending }   # a night typed like a
                                        # note: saved as the words (raw) at once; linked to a meal only when
                                        # code is sure (exact name/other name, or every word is the meal's name

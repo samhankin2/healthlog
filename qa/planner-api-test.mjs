@@ -359,6 +359,18 @@ async function runWeek({ sam, chloe, alex }) {
   eq('week start: 7 rejected', (await api('PUT', '/api/planner/household', { token: sam, body: { weekStartDay: 7 } })).status, 400)
   await api('PUT', '/api/planner/household', { token: sam, body: { weekStartDay: 0 } })
 
+  // One week starting on another day
+  eq('week starts: none to begin with', (await api('GET', '/api/planner/household', { token: sam })).json?.household?.weekStarts, [])
+  await api('POST', '/api/planner/shopping/items', { token: sam, body: { week: '2027-06-07', name: 'limes' } })
+  r = await api('PUT', '/api/planner/week-starts', { token: chloe, body: { date: '2027-06-10' } })
+  eq('week starts: Thursday added, shared', [r.status, (await api('GET', '/api/planner/household', { token: sam })).json?.household?.weekStarts], [200, ['2027-06-10']])
+  r = await api('PUT', '/api/planner/week-starts', { token: sam, body: { date: '2027-06-11', replaces: '2027-06-10' } })
+  eq('week starts: moved to Friday', r.json?.household?.weekStarts, ['2027-06-11'])
+  r = await api('PUT', '/api/planner/week-starts', { token: sam, body: { date: '2027-06-08', replaces: '2027-06-07' } })
+  eq('week starts: a list moves with its week', (await api('GET', '/api/planner/shopping?week=2027-06-08', { token: sam })).json?.items?.map((i) => i.name), ['limes'])
+  eq('week starts: bad date rejected', (await api('PUT', '/api/planner/week-starts', { token: sam, body: { date: 'thursday' } })).status, 400)
+  eq('week starts: other households unaffected', (await api('GET', '/api/planner/household', { token: alex })).json?.household?.weekStarts, [])
+
   // Slots
   r = await api('PUT', `/api/planner/slots/${MON}`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id, beef.id], raw: 'korean cabbage' } })
   eq('slot: set a meal with options', r.status, 200)

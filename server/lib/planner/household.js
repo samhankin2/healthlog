@@ -124,6 +124,7 @@ export function householdPayload(db, user, householdId) {
   return {
     id: householdId,
     weekStartDay: week?.week_start_day ?? 0,
+    weekStarts: db.prepare('SELECT date FROM week_starts WHERE household_id = ? ORDER BY date').all(householdId).map((r) => r.date),
     members: rows.map((u) => ({ id: u.id, name: shortName(u), me: u.id === user.id })),
     partner: link ? { status: link.linked ? 'linked' : 'pending', email: link.email } : null,
   }
