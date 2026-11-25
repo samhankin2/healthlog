@@ -430,6 +430,31 @@ async function runWeek({ sam, chloe, alex }) {
   ok('parse: just the options finds the meal', byOptions?.dishId === cabbage.id && byOptions.optionIds.length === 2, JSON.stringify(byOptions))
   eq('parse: an option typo is still picked', (await one('dirty cabbage koraen'))?.optionIds, [korean.id])
   eq('parse: unrelated text is still new', (await one('beef wellington'))?.dishId ?? null, null)
+  // An old Notes name only matches when typed exactly: "hot pot" is not "salmon pots"
+  await api('POST', `/api/planner/meals/${katsu.id}/aliases`, { token: sam, body: { alias: 'salmon pots' } })
+  eq('parse: a shared word with an old name is not a match', (await one('hot pot'))?.dishId ?? null, null)
+  eq('parse: the old name typed exactly still matches', (await one('salmon pots'))?.dishId, katsu.id)
+
+  // Lines typed like a note: saved as words at once, matched when sure
+  {
+    const D = '2027-04-05'
+    const text = (t) => api('PUT', `/api/planner/slots/${D}/text`, { token: sam, body: { text: t } })
+    let t = await text('korean dirty cabbage beef')
+    eq('text: a sure match is linked straight away', [t.status, t.json?.entry?.dishId, t.json?.entry?.optionIds?.length, t.json?.pending], [200, cabbage.id, 2, false])
+    eq('text: the words are kept', t.json?.entry?.raw, 'korean dirty cabbage beef')
+    t = await text('hot pot')
+    eq('text: unsure, saved as the words', [t.json?.entry?.dishId, t.json?.entry?.raw, t.json?.entry?.kind, t.json?.pending], [null, 'hot pot', 'dish', true])
+    const m = await api('POST', `/api/planner/slots/${D}/match`, { token: sam })
+    eq('match: nothing found leaves the words (AI off in tests)', [m.status, m.json?.matched], [200, false])
+    let l = await api('PUT', `/api/planner/slots/${D}/link`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id] } })
+    eq('link: pointed at a meal, words kept', [l.json?.entry?.dishId, l.json?.entry?.optionIds, l.json?.entry?.raw], [cabbage.id, [korean.id], 'hot pot'])
+    l = await api('PUT', `/api/planner/slots/${D}/link`, { token: sam, body: { dishId: null } })
+    eq('link: "not this" unlinks, words kept', [l.json?.entry?.dishId, l.json?.entry?.raw], [null, 'hot pot'])
+    eq('link: another household 404', (await api('PUT', `/api/planner/slots/${D}/link`, { token: alex, body: { dishId: null } })).status, 404)
+    eq('text: out is a night out', (await text('out')).json?.entry?.kind, 'out')
+    t = await text('  ')
+    eq('text: empty clears the night', [t.json?.entry, (await api('GET', `/api/planner/week?start=${D}`, { token: sam })).json.week.entries.length], [null, 0])
+  }
 
   // Cooking a variation clears "want to make" for it
   {

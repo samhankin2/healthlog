@@ -995,6 +995,15 @@ GET    /api/planner/week?start=YYYY-MM-DD -> 200 { ok:true, week:{ start, end, e
 PUT    /api/planner/slots/:date { kind:'dish'|'out'|'leftovers'|'takeaway', dishId?, optionIds?, note?, raw? }
                                     -> 200 { ok:true, entry }   # one dinner per date; replaces it
 DELETE /api/planner/slots/:date    -> 200 { ok:true, cleared }
+PUT    /api/planner/slots/:date/text { text } -> 200 { ok:true, entry|null, pending }   # a night typed like a
+                                       # note: saved as the words (raw) at once; linked to a meal only when
+                                       # code is sure (exact name/other name, or every word is the meal's name
+                                       # or options); else dishId null and pending:true. "" clears; out etc. kinds
+POST   /api/planner/slots/:date/match   -> 200 { ok:true, matched, by?, entry|null, candidates }   # background,
+                                       # after /text: code then AI over the household's meals; links at >= 0.7
+                                       # if the words haven't changed
+PUT    /api/planner/slots/:date/link { dishId|null, optionIds? } -> 200 { ok:true, entry }   # "did you mean" /
+                                       # "not this"; keeps the words, note and status
 POST   /api/planner/slots/move { from, to } -> 200 { ok:true, moved, swapped }   # drag and drop: onto an
                                        # empty night moves, onto a planned night swaps; the entries move
                                        # (options, note, review, freezer link kept)

@@ -174,6 +174,7 @@ export function setReview(db, householdId, user, id, { ratedAs, thumbs = null, s
   return withTx(db, () => {
     const row = entryRow(db, householdId, id)
     if (row.kind !== 'dish' && row.kind !== 'freezer') throw new HttpError(400, 'Only meal nights are reviewed')
+    if (!row.dish_id) throw new HttpError(400, 'Pick which meal this was first ("we made something else")')
     const as = ratedAs === 'me' ? user.id : ratedAs
     if (as !== 'both' && !db.prepare('SELECT 1 FROM household_members WHERE household_id = ? AND user_id = ?').get(householdId, as)) {
       throw new HttpError(400, 'ratedAs must be both, me, or someone in your household')

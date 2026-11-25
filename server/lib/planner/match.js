@@ -108,15 +108,17 @@ export function matchMeal(index, text) {
     const optionWords = dish.options.flatMap((o) => o.tokens)
     const isOptionWord = (t) => optionWords.some((w) => sameWord(t, w))
     let best = 0
-    for (const n of dish.names) {
+    // Loose matching only against the meal's own name: other names (old Notes lines) must be typed exactly.
+    for (const n of dish.names.slice(0, 1)) {
       const nameTokens = tokens(n)
       if (nameTokens.length === 0) continue
       const hit = nameTokens.filter((w) => has(textTokens, w)).length
       if (hit === 0) continue
       const coverName = hit / nameTokens.length // how much of the meal's name was typed
       const extra = textTokens.filter((t) => !nameTokens.some((w) => sameWord(t, w)) && !isOptionWord(t)).length
-      const coverText = 1 - extra / Math.max(textTokens.length, 1) // how much of the text is explained
-      best = Math.max(best, coverName * 0.7 + coverText * 0.3)
+      // Every word typed must be the meal's name or one of its options ("hot pot" is not "salmon pots").
+      if (extra > 0) continue
+      best = Math.max(best, coverName * 0.7 + 0.3)
     }
     // Just its options ("korean kangaroo"): a fair guess when every word is one of them.
     if (best === 0 && textTokens.length >= 2 && textTokens.every(isOptionWord)) best = 0.6
@@ -194,6 +196,21 @@ async function aiAssist(index, items) {
       Object.assign(it, { newName: r.newName.trim().slice(0, 80), by: 'ai' })
     }
   }
+}
+
+/**
+ * One typed night, for the week's lines: what kind of night, and the meal if
+ * code is sure (an exact name, or every word explained). `useAi` asks the
+ * AI about anything code wasn't sure of, using the household's meals.
+ */
+export async function matchLine(db, householdId, text, { useAi = false } = {}) {
+  const raw = String(text ?? '').trim().slice(0, 200)
+  const kind = kindOf(raw)
+  if (kind !== 'dish') return { raw, kind, dishId: null, optionIds: [], confidence: 1, candidates: [], newName: null, by: 'code' }
+  const index = buildIndex(db, householdId)
+  const item = { raw, kind, ...matchMeal(index, raw), newName: null, by: 'code' }
+  if (useAi && item.confidence < 0.85) await aiAssist(index, [item])
+  return item
 }
 
 /** Typed week → proposed nights for the confirm sheet. */

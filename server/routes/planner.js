@@ -10,8 +10,8 @@ import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
 import { asObject } from '../lib/validate.js'
 import { ensureHousehold, householdPayload } from '../lib/planner/household.js'
 import { addAlias, addNote, createMeal, mealsPayload, setHidden, setRating, updateMeal } from '../lib/planner/meals.js'
-import { parseWeek } from '../lib/planner/match.js'
-import { clearSlot, copyWeek, moveSlot, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
+import { matchLine, parseWeek } from '../lib/planner/match.js'
+import { clearSlot, copyWeek, linkSlot, moveSlot, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
 import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, updateEntry } from '../lib/planner/review.js'
 import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
 import { historyPayload, parseReviewLine, snooze } from '../lib/planner/insights.js'
@@ -135,6 +135,50 @@ export function registerPlannerRoutes(router) {
       raw: body.raw ?? null,
       freezerItemId: body.freezerItemId ?? null,
     })
+    sendJson(res, 200, { ok: true, entry })
+  })
+
+  // A night typed like a note: saved as the words at once, linked to a meal when code is sure.
+  router.put('/api/planner/slots/:date/text', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const line = await matchLine(db, householdId, String(body.text ?? ''))
+    if (line.kind === null) {
+      clearSlot(db, householdId, params.date)
+      return sendJson(res, 200, { ok: true, entry: null, pending: false })
+    }
+    const sure = line.kind !== 'dish' || (line.dishId && line.confidence >= 0.85)
+    const entry = setSlot(db, householdId, params.date, {
+      kind: line.kind,
+      dishId: sure ? line.dishId : null,
+      optionIds: sure ? line.optionIds : [],
+      raw: line.raw,
+    })
+    sendJson(res, 200, { ok: true, entry, pending: !sure })
+  })
+
+  // In the background, after /text: try harder (AI, with our meals) to find the meal.
+  router.post('/api/planner/slots/:date/match', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    requireDay(params.date)
+    const row = db.prepare("SELECT raw, dish_id, kind FROM plan_entries WHERE household_id = ? AND slot = 'dinner' AND date = ?").get(householdId, params.date)
+    if (!row || row.kind !== 'dish' || row.dish_id || !row.raw) return sendJson(res, 200, { ok: true, matched: false, entry: null, candidates: [] })
+    const line = await matchLine(db, householdId, row.raw, { useAi: true })
+    const candidates = line.candidates.slice(0, 2)
+    // Only if the words haven't changed meanwhile.
+    const still = db.prepare("SELECT raw, dish_id FROM plan_entries WHERE household_id = ? AND slot = 'dinner' AND date = ?").get(householdId, params.date)
+    if (line.dishId && line.confidence >= 0.7 && still?.raw === row.raw && !still.dish_id) {
+      const entry = linkSlot(db, householdId, params.date, line.dishId, line.optionIds)
+      return sendJson(res, 200, { ok: true, matched: true, by: line.by, entry, candidates })
+    }
+    sendJson(res, 200, { ok: true, matched: false, entry: null, candidates })
+  })
+
+  // "Not this" / "Did you mean": point a typed night at a meal, or at none.
+  router.put('/api/planner/slots/:date/link', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const entry = linkSlot(db, householdId, params.date, body.dishId ? String(body.dishId) : null, Array.isArray(body.optionIds) ? body.optionIds : [])
     sendJson(res, 200, { ok: true, entry })
   })
 

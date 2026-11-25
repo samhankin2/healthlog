@@ -106,14 +106,16 @@ export function setSlot(db, householdId, date, { kind = 'dish', dishId = null, o
   } else {
     freezerItemId = null
   }
-  if (kind === 'dish' || kind === 'freezer') {
-    if (typeof dishId !== 'string' || !dishId) throw new HttpError(400, 'dishId is required for a meal night')
+  const rawText = raw === null || raw === undefined ? null : String(raw).trim().slice(0, 200) || null
+  // Typed like a note, not matched to a meal yet: the words are the plan.
+  const unmatched = kind === 'dish' && !dishId && Boolean(rawText)
+  if ((kind === 'dish' && !unmatched) || kind === 'freezer') {
+    if (typeof dishId !== 'string' || !dishId) throw new HttpError(400, 'dishId (or the words, as raw) is required for a meal night')
     findDish(db, householdId, dishId)
   }
-  const hasMeal = kind === 'dish' || kind === 'freezer'
+  const hasMeal = (kind === 'dish' || kind === 'freezer') && !unmatched
   const options = hasMeal ? cleanOptionIds(db, dishId, optionIds) : []
   const noteText = note === null || note === undefined ? null : String(note).trim().slice(0, 500) || null
-  const rawText = raw === null || raw === undefined ? null : String(raw).trim().slice(0, 200) || null
 
   return withTx(db, () => {
     const existing = slotRow(db, householdId, date)
@@ -166,6 +168,25 @@ export function moveSlot(db, householdId, from, to) {
     if (b) setDate.run(from, b.id)
     if (a) setDate.run(to, a.id)
     return { moved: (a ? 1 : 0) + (b ? 1 : 0), swapped: Boolean(a && b) }
+  })
+}
+
+/**
+ * Link a typed night to a meal (or unlink it with dishId null), keeping the
+ * words, note and status as they are.
+ */
+export function linkSlot(db, householdId, date, dishId, optionIds = []) {
+  requireDay(date)
+  const row = slotRow(db, householdId, date)
+  if (!row || row.kind !== 'dish') throw new HttpError(404, 'No meal night to match on that date')
+  if (dishId) findDish(db, householdId, dishId)
+  const options = dishId ? cleanOptionIds(db, dishId, optionIds) : []
+  return withTx(db, () => {
+    db.prepare("UPDATE plan_entries SET dish_id = ?, updated_at = datetime('now') WHERE id = ?").run(dishId || null, row.id)
+    db.prepare('DELETE FROM plan_entry_options WHERE plan_entry_id = ?').run(row.id)
+    const link = db.prepare('INSERT INTO plan_entry_options (plan_entry_id, option_id) VALUES (?, ?)')
+    for (const o of options) link.run(row.id, o)
+    return entryPayload(db, db.prepare('SELECT * FROM plan_entries WHERE id = ?').get(row.id))
   })
 }
 
