@@ -213,6 +213,25 @@ export async function matchLine(db, householdId, text, { useAi = false } = {}) {
   return item
 }
 
+/**
+ * Free words for the want-to-make list, which can be a whole note ("that miso
+ * eggplant from the Ottolenghi book, use the good miso"). Code tries the whole
+ * thing, then just the part before the first comma or dash; `useAi` asks the
+ * AI about anything code wasn't sure of.
+ */
+export async function matchWords(db, householdId, text, { useAi = false } = {}) {
+  const raw = String(text ?? '').trim().slice(0, 500)
+  const index = buildIndex(db, householdId)
+  let item = { raw, kind: 'dish', ...matchMeal(index, raw), newName: null, by: 'code' }
+  const head = raw.split(/\s*(?:[,;:(\n]|\s[-–—]\s)/)[0].trim()
+  if (item.confidence < 0.85 && head && head !== raw) {
+    const short = matchMeal(index, head)
+    if (short.confidence > item.confidence) item = { ...item, ...short }
+  }
+  if (useAi && item.confidence < 0.85) await aiAssist(index, [item])
+  return item
+}
+
 /** Typed week → proposed nights for the confirm sheet. */
 export async function parseWeek(db, householdId, text, days, weekdays, { useAi = true } = {}) {
   const index = buildIndex(db, householdId)

@@ -324,7 +324,10 @@ user id, `thumbs` −1|1, `stars` 1–5, `want` 1 = not had yet, want to make
 (no thumbs or stars). `dish_hidden_options` (`dish_id`, `option_id` an option
 or combination key; primary key both): a variation taken off the list because
 we've never had it. `planner_notes`: a note to Claude about a
-meal (`body`, `reply`, `resolved_at`). Later milestones add reviews, freezer
+meal (`body`, `reply`, `resolved_at`). `want_list`: the want-to-make scratch
+pad, one row per line (`body` as typed, `level` 1 some day | 2 keen | 3 really
+want, `dish_id` once matched, `option_ids` JSON, `position`, `created_by`,
+`done_at` set when cooked or ticked off). Later milestones add reviews, freezer
 stock, photos and shopping lists; every planner table carries `household_id`.
 
 ### Model benchmark table
@@ -1009,6 +1012,17 @@ POST   /api/planner/slots/:date/match   -> 200 { ok:true, matched, by?, entry|nu
                                        # if the words haven't changed
 PUT    /api/planner/slots/:date/link { dishId|null, optionIds? } -> 200 { ok:true, entry }   # "did you mean" /
                                        # "not this"; keeps the words, note and status
+GET    /api/planner/wants          -> 200 { ok:true, wants:[{ id, text, level, dishId|null, optionIds[], createdBy,
+                                       createdAt, updatedAt, done }] }   # open lines, in the order typed
+POST   /api/planner/wants { text, level? } -> 201 { ok:true, want, pending }   # a want-to-make line typed like a
+                                       # note (<= 500 chars; level 1–3, default 2): saved at once, linked when code
+                                       # is sure (whole text, or the part before the first comma/dash); else pending
+PUT    /api/planner/wants/:id { text?, level?, dishId?|null, optionIds?, done? } -> 200 { ok:true, want, pending }
+                                       # new words are matched again (old meal dropped unless sure); dishId alone
+                                       # is "did you mean" / "not this"; done ticks it off
+POST   /api/planner/wants/:id/match -> 200 { ok:true, matched, by?, want, candidates }   # background: code then
+                                       # AI; links at >= 0.7 if the words haven't changed
+DELETE /api/planner/wants/:id       -> 200 { ok:true, deleted }
 POST   /api/planner/slots/move { from, to } -> 200 { ok:true, moved, swapped }   # drag and drop: onto an
                                        # empty night moves, onto a planned night swaps; the entries move
                                        # (options, note, review, freezer link kept)
@@ -1108,6 +1122,12 @@ POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ d
   wanted. They are separate from per-cook reviews (M3). Either member may rate as `both`, as themselves,
   or as the other member. `cooked` counts `plan_entries` with kind `dish` and
   status `cooked`; undated imports count but leave `lastCooked` null.
+- **Want to make** is a household scratch pad, separate from the `want` flag on
+  ratings: lines are free words with how much we want them, and either member
+  sees and edits all of them. Marking a night cooked (or swapping to a meal)
+  ticks off open lines for that meal; a line naming a variation is ticked
+  only when what was cooked includes it. The client raises matched meals in
+  Ideas by `level`.
 - **Tags:** accepted `tags` and offered `suggestedTags`; the client shows a
   suggestion only while it isn't accepted. Re-imports refill suggestions only
   on a meal with no tags and no suggestions, so they never undo our choices.

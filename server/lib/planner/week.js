@@ -72,7 +72,7 @@ function slotRow(db, householdId, date) {
 }
 
 /** Options for a night: must belong to the dish, at most one per axis. */
-function cleanOptionIds(db, dishId, optionIds) {
+export function cleanOptionIds(db, dishId, optionIds) {
   if (!Array.isArray(optionIds) || optionIds.length === 0) return []
   const axes = new Set()
   const out = []

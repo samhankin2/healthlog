@@ -583,6 +583,21 @@ CREATE TABLE IF NOT EXISTS dish_usual_items (    -- what a meal needed last time
   PRIMARY KEY (dish_id, name_key)
 );
 
+CREATE TABLE IF NOT EXISTS want_list (           -- the want-to-make scratch pad: lines typed like notes
+  id           TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  body         TEXT NOT NULL,                    -- the words, as typed
+  level        INTEGER NOT NULL DEFAULT 2,       -- how much: 1 some day | 2 keen | 3 really want
+  dish_id      TEXT REFERENCES dishes(id) ON DELETE SET NULL, -- the meal it is, once found
+  option_ids   TEXT NOT NULL DEFAULT '[]',       -- JSON: the variation, if the words name one
+  position     INTEGER NOT NULL DEFAULT 0,
+  created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  done_at      TEXT                              -- cooked it (or ticked off)
+);
+CREATE INDEX IF NOT EXISTS idx_want_list_household ON want_list(household_id, done_at, position);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_shopping_lists_week   ON shopping_lists(household_id, week_start);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_shopping_items_key    ON shopping_items(list_id, name_key);
 

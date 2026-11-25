@@ -10,7 +10,8 @@ import { readJsonBody, sendJson, HttpError } from '../lib/http.js'
 import { asObject } from '../lib/validate.js'
 import { ensureHousehold, householdPayload } from '../lib/planner/household.js'
 import { addAlias, addNote, createMeal, mealsPayload, setHidden, setRating, updateMeal } from '../lib/planner/meals.js'
-import { matchLine, parseWeek } from '../lib/planner/match.js'
+import { matchLine, matchWords, parseWeek } from '../lib/planner/match.js'
+import { addWant, removeWant, updateWant, wantPayload, wantRow, wantsPayload } from '../lib/planner/wants.js'
 import { clearSlot, copyWeek, linkSlot, moveSlot, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
 import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, updateEntry } from '../lib/planner/review.js'
 import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
@@ -116,6 +117,70 @@ export function registerPlannerRoutes(router) {
     sendJson(res, 201, { ok: true, note: addNote(db, householdId, user, params.id, body.body) })
   })
 
+  /* ---------- want to make: a scratch pad ---------- */
+
+  router.get('/api/planner/wants', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, wants: wantsPayload(db, householdId) })
+  })
+
+  // A line typed like a note: saved at once, linked to a meal when code is sure (else pending).
+  router.post('/api/planner/wants', async ({ req, res }) => {
+    const { user, db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const line = await matchWords(db, householdId, body.text)
+    const sure = Boolean(line.dishId) && line.confidence >= 0.85
+    const want = addWant(db, householdId, user, {
+      text: body.text,
+      level: body.level === undefined ? undefined : nullableInt(body.level, 'level'),
+      dishId: sure ? line.dishId : null,
+      optionIds: sure ? line.optionIds : [],
+    })
+    sendJson(res, 201, { ok: true, want, pending: !sure })
+  })
+
+  // { text?, level?, dishId?|null, optionIds?, done? }. New words are matched again like a new line.
+  router.put('/api/planner/wants/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const before = wantRow(db, householdId, params.id)
+    const patch = {
+      text: body.text,
+      level: body.level === undefined ? undefined : nullableInt(body.level, 'level'),
+      dishId: body.dishId,
+      optionIds: Array.isArray(body.optionIds) ? body.optionIds : [],
+      done: body.done === undefined ? undefined : Boolean(body.done),
+    }
+    let pending = false
+    if (body.text !== undefined && body.dishId === undefined && String(body.text).trim() !== before.body) {
+      const line = await matchWords(db, householdId, body.text)
+      const sure = Boolean(line.dishId) && line.confidence >= 0.85
+      if (sure) Object.assign(patch, { dishId: line.dishId, optionIds: line.optionIds })
+      pending = !sure
+    }
+    sendJson(res, 200, { ok: true, want: updateWant(db, householdId, params.id, patch), pending })
+  })
+
+  // In the background, after adding or changing words: try harder (AI, with our meals).
+  router.post('/api/planner/wants/:id/match', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const row = wantRow(db, householdId, params.id)
+    if (row.dish_id) return sendJson(res, 200, { ok: true, matched: true, want: wantPayload(row), candidates: [] })
+    const line = await matchWords(db, householdId, row.body, { useAi: true })
+    const candidates = line.candidates.slice(0, 2)
+    const still = wantRow(db, householdId, params.id)
+    if (line.dishId && line.confidence >= 0.7 && still.body === row.body && !still.dish_id) {
+      const want = updateWant(db, householdId, params.id, { dishId: line.dishId, optionIds: line.optionIds })
+      return sendJson(res, 200, { ok: true, matched: true, by: line.by, want, candidates })
+    }
+    sendJson(res, 200, { ok: true, matched: false, want: wantPayload(still), candidates })
+  })
+
+  router.delete('/api/planner/wants/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, deleted: removeWant(db, householdId, params.id) })
+  })
+
   /* ---------- the week ---------- */
 
   router.get('/api/planner/week', async ({ req, res, query }) => {
@@ -138,7 +203,6 @@ export function registerPlannerRoutes(router) {
     sendJson(res, 200, { ok: true, entry })
   })
 
-  // A night typed like a note: saved as the words at once, linked to a meal when code is sure.
   // "This week starts on Thursday": weeks run from that date until another start. `replaces` is the
   // start being moved (this week's own start, if it was one); its shopping list moves along.
   router.put('/api/planner/week-starts', async ({ req, res }) => {
@@ -164,6 +228,7 @@ export function registerPlannerRoutes(router) {
     sendJson(res, 200, { ok: true, household: householdPayload(db, user, householdId) })
   })
 
+  // A night typed like a note: saved as the words at once, linked to a meal when code is sure.
   router.put('/api/planner/slots/:date/text', async ({ req, res, params }) => {
     const { db, householdId } = plannerContext(req)
     const body = asObject(await readJsonBody(req))

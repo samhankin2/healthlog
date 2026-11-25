@@ -11,6 +11,7 @@ import { withTx } from '../../db.js'
 import { HttpError } from '../http.js'
 import { comboKey, findDish } from './meals.js'
 import { addDays, entryPayload, releaseFreezer, requireDay } from './week.js'
+import { tickOffCooked } from './wants.js'
 
 export const REVIEW_WINDOW_DAYS = 14
 
@@ -85,6 +86,7 @@ function clearWants(db, householdId, dishId, entryId) {
     `DELETE FROM dish_ratings WHERE household_id = ? AND dish_id = ? AND want = 1
        AND (option_id IS NULL OR option_id = '' OR option_id IN (SELECT value FROM json_each(?)))`,
   ).run(householdId, dishId, JSON.stringify(keys))
+  tickOffCooked(db, householdId, dishId, ids)
 }
 
 export function updateEntry(db, householdId, id, patch) {
@@ -105,6 +107,7 @@ export function updateEntry(db, householdId, id, patch) {
       db.prepare('DELETE FROM plan_entry_options WHERE plan_entry_id = ?').run(id)
       db.prepare('DELETE FROM reviews WHERE plan_entry_id = ?').run(id)
       for (const o of options) db.prepare('INSERT OR IGNORE INTO plan_entry_options (plan_entry_id, option_id) VALUES (?, ?)').run(id, o)
+      clearWants(db, householdId, patch.swapToDishId, id) // we made it after all
       row = entryRow(db, householdId, id)
     }
     if (patch.status !== undefined) {

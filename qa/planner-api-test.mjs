@@ -481,6 +481,46 @@ async function runWeek({ sam, chloe, alex }) {
     await api('DELETE', `/api/planner/slots/${past}`, { token: sam })
   }
 
+  // Want to make: a scratch pad of lines with how much we want them
+  {
+    const add = (body, token = sam) => api('POST', '/api/planner/wants', { token, body })
+    const list = async (token = sam) => (await api('GET', '/api/planner/wants', { token })).json.wants
+    let w = await add({ text: 'korean dirty cabbage', level: 3 })
+    eq('wants: a sure line is linked at once', [w.status, w.json?.want?.dishId, w.json?.want?.optionIds, w.json?.want?.level, w.json?.pending], [201, cabbage.id, [korean.id], 3, false])
+    const cabbageWant = w.json.want
+    w = await add({ text: 'dirty cabbage, the one from the market with extra chilli' })
+    eq('wants: a long note is matched by its first part', [w.json?.want?.dishId, w.json?.want?.level, w.json?.pending], [cabbage.id, 2, false])
+    const noteWant = w.json.want
+    w = await add({ text: 'miso eggplant from the Ottolenghi book', level: 1 })
+    eq('wants: unsure, kept as the words', [w.json?.want?.dishId, w.json?.want?.text, w.json?.pending], [null, 'miso eggplant from the Ottolenghi book', true])
+    const misoWant = w.json.want
+    eq('wants: background match finds nothing (AI off), words kept', (await api('POST', `/api/planner/wants/${misoWant.id}/match`, { token: sam })).json?.matched, false)
+    eq('wants: empty rejected', (await add({ text: '   ' })).status, 400)
+    eq('wants: bad level rejected', (await add({ text: 'katsu', level: 5 })).status, 400)
+    eq('wants: the partner sees them, in order typed', (await list(chloe)).map((x) => x.id), [cabbageWant.id, noteWant.id, misoWant.id])
+    eq('wants: another household sees none', (await list(alex)).length, 0)
+    eq('wants: another household cannot change one', (await api('PUT', `/api/planner/wants/${misoWant.id}`, { token: alex, body: { level: 3 } })).status, 404)
+    let u = await api('PUT', `/api/planner/wants/${misoWant.id}`, { token: chloe, body: { level: 3 } })
+    eq('wants: how much changed', u.json?.want?.level, 3)
+    u = await api('PUT', `/api/planner/wants/${misoWant.id}`, { token: sam, body: { dishId: katsu.id } })
+    eq('wants: did you mean, words kept', [u.json?.want?.dishId, u.json?.want?.text], [katsu.id, 'miso eggplant from the Ottolenghi book'])
+    u = await api('PUT', `/api/planner/wants/${misoWant.id}`, { token: sam, body: { text: 'hot pot' } })
+    eq('wants: new words drop the old meal and ask again', [u.json?.want?.dishId, u.json?.pending], [null, true])
+    u = await api('PUT', `/api/planner/wants/${misoWant.id}`, { token: sam, body: { text: 'katsu curry bowls' } })
+    eq('wants: new words that match link again', [u.json?.want?.dishId, u.json?.pending], [katsu.id, false])
+    // Cooking a Chinese cabbage ticks off the plain line but not the Korean one
+    const chinese = cabbage.options.find((o) => o.name === 'Chinese')
+    const past = '2026-01-14'
+    const e = (await api('PUT', `/api/planner/slots/${past}`, { token: sam, body: { dishId: cabbage.id, optionIds: chinese ? [chinese.id] : [] } })).json.entry
+    await api('PUT', `/api/planner/entries/${e.id}`, { token: sam, body: { status: 'cooked' } })
+    eq('wants: cooking ticks off lines for that meal, not other variations', (await list()).map((x) => x.id), [cabbageWant.id, misoWant.id])
+    await api('DELETE', `/api/planner/slots/${past}`, { token: sam })
+    u = await api('PUT', `/api/planner/wants/${misoWant.id}`, { token: sam, body: { done: true } })
+    eq('wants: ticked off by hand', [u.json?.want?.done, (await list()).length], [true, 1])
+    eq('wants: deleted', (await api('DELETE', `/api/planner/wants/${cabbageWant.id}`, { token: sam })).json?.deleted, cabbageWant.id)
+    eq('wants: empty again', (await list()).length, 0)
+  }
+
   await runReview({ sam, chloe, alex })
 }
 
