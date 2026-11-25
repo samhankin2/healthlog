@@ -74,6 +74,19 @@ function syncFrozen(db, householdId, row, portions) {
  * - swapToDishId (+ swapOptionIds): we made something else; the night becomes that.
  * - cookNote, leftovers, frozenPortions (0–20, fills freezer stock), tweakRetry.
  */
+/**
+ * Cooked it: "want to make" is done for what we made. Clears a want on the
+ * whole meal, on the exact variation, or on any one of its options.
+ */
+function clearWants(db, householdId, dishId, entryId) {
+  const ids = db.prepare('SELECT option_id FROM plan_entry_options WHERE plan_entry_id = ?').all(entryId).map((r) => r.option_id)
+  const keys = [...ids, [...ids].sort().join('+')].filter(Boolean)
+  db.prepare(
+    `DELETE FROM dish_ratings WHERE household_id = ? AND dish_id = ? AND want = 1
+       AND (option_id IS NULL OR option_id = '' OR option_id IN (SELECT value FROM json_each(?)))`,
+  ).run(householdId, dishId, JSON.stringify(keys))
+}
+
 export function updateEntry(db, householdId, id, patch) {
   return withTx(db, () => {
     let row = entryRow(db, householdId, id)
@@ -111,6 +124,7 @@ export function updateEntry(db, householdId, id, patch) {
            updated_at = datetime('now') WHERE id = ?`,
       ).run(patch.status, patch.status, id)
       row = entryRow(db, householdId, id)
+      if (patch.status === 'cooked' && row.dish_id) clearWants(db, householdId, row.dish_id, id)
     }
     if (patch.frozenPortions !== undefined) {
       const n = patch.frozenPortions

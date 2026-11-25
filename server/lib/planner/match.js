@@ -19,6 +19,38 @@ const tokens = (text) =>
     .map((t) => (t.length > 3 && t.endsWith('s') && !t.endsWith('ss') ? t.slice(0, -1) : t))
     .filter((t) => t && !STOP.has(t))
 
+/** Edit distance where swapping two letters counts as one typo; stops early once past `max`. */
+function distance(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1
+  let before = []
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    let best = i
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cur[j] = Math.min(cur[j], before[j - 2] + 1)
+      best = Math.min(best, cur[j])
+    }
+    if (best > max) return max + 1
+    before = prev
+    prev = cur
+  }
+  return prev[b.length]
+}
+
+/**
+ * Same word, allowing for typing on a phone: a typo ("dhal" ~ "dahl",
+ * "risoto" ~ "risotto") or a word not finished ("risot", "kanga").
+ */
+export function sameWord(typed, word) {
+  if (typed === word) return true
+  if (typed.length >= 4 && word.startsWith(typed)) return true
+  if (typed.length < 4 || word.length < 4) return false
+  return distance(typed, word, typed.length >= 7 ? 2 : 1) <= (typed.length >= 7 ? 2 : 1)
+}
+const has = (list, word) => list.some((t) => sameWord(t, word))
+
 /** Night kinds typed as text. null = an empty night ("-", "nothing"). */
 export function kindOf(text) {
   const t = normaliseName(text)
@@ -31,8 +63,13 @@ export function kindOf(text) {
 
 /** Everything the matcher needs about the household's meals, read once per request. */
 export function buildIndex(db, householdId) {
-  const dishes = db.prepare('SELECT id, name FROM dishes WHERE household_id = ? AND archived_at IS NULL').all(householdId)
-  const byId = new Map(dishes.map((d) => [d.id, { id: d.id, name: d.name, names: [normaliseName(d.name)], options: [] }]))
+  const dishes = db
+    .prepare(
+      `SELECT d.id, d.name, (SELECT COUNT(*) FROM plan_entries p WHERE p.dish_id = d.id AND p.status != 'skipped') AS made
+         FROM dishes d WHERE d.household_id = ? AND d.archived_at IS NULL`,
+    )
+    .all(householdId)
+  const byId = new Map(dishes.map((d) => [d.id, { id: d.id, name: d.name, made: d.made, names: [normaliseName(d.name)], options: [] }]))
   for (const a of db.prepare('SELECT alias, dish_id FROM dish_aliases WHERE household_id = ?').all(householdId)) {
     byId.get(a.dish_id)?.names.push(a.alias)
   }
@@ -50,7 +87,7 @@ export function buildIndex(db, householdId) {
 function pickOptions(dish, textTokens) {
   const chosen = new Map()
   for (const o of dish.options) {
-    if (o.tokens.length && o.tokens.every((t) => textTokens.includes(t)) && !chosen.has(o.axis)) chosen.set(o.axis, o.id)
+    if (o.tokens.length && o.tokens.every((t) => has(textTokens, t)) && !chosen.has(o.axis)) chosen.set(o.axis, o.id)
   }
   return [...chosen.values()]
 }
@@ -68,21 +105,25 @@ export function matchMeal(index, text) {
   }
   const scored = []
   for (const dish of index.byId.values()) {
-    const optionWords = new Set(dish.options.flatMap((o) => o.tokens))
+    const optionWords = dish.options.flatMap((o) => o.tokens)
+    const isOptionWord = (t) => optionWords.some((w) => sameWord(t, w))
     let best = 0
     for (const n of dish.names) {
       const nameTokens = tokens(n)
       if (nameTokens.length === 0) continue
-      const hit = nameTokens.filter((t) => textTokens.includes(t)).length
+      const hit = nameTokens.filter((w) => has(textTokens, w)).length
       if (hit === 0) continue
       const coverName = hit / nameTokens.length // how much of the meal's name was typed
-      const extra = textTokens.filter((t) => !nameTokens.includes(t) && !optionWords.has(t)).length
+      const extra = textTokens.filter((t) => !nameTokens.some((w) => sameWord(t, w)) && !isOptionWord(t)).length
       const coverText = 1 - extra / Math.max(textTokens.length, 1) // how much of the text is explained
       best = Math.max(best, coverName * 0.7 + coverText * 0.3)
     }
-    if (best > 0) scored.push({ dishId: dish.id, name: dish.name, confidence: Math.round(best * 100) / 100 })
+    // Just its options ("korean kangaroo"): a fair guess when every word is one of them.
+    if (best === 0 && textTokens.length >= 2 && textTokens.every(isOptionWord)) best = 0.6
+    if (best > 0) scored.push({ dishId: dish.id, name: dish.name, made: dish.made, confidence: Math.round(best * 100) / 100 })
   }
-  scored.sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name))
+  scored.sort((a, b) => b.confidence - a.confidence || b.made - a.made || a.name.localeCompare(b.name))
+  for (const c of scored) delete c.made
   const top = scored[0]
   if (!top || top.confidence < 0.5) return { dishId: null, optionIds: [], confidence: 0, candidates: scored.slice(0, 3) }
   return { dishId: top.dishId, optionIds: pickOptions(index.byId.get(top.dishId), textTokens), confidence: top.confidence, candidates: scored.slice(0, 3) }

@@ -422,6 +422,27 @@ async function runWeek({ sam, chloe, alex }) {
   ok('parse: unknown text proposes a new meal', fresh && fresh.dishId === null && fresh.newName === 'Something brand new', JSON.stringify(fresh))
   eq('parse: nothing saved yet', (await api('GET', `/api/planner/week?start=${MON}`, { token: sam })).json.week.entries.length, 1)
   eq('parse: empty text rejected', (await api('POST', '/api/planner/parse-week', { token: sam, body: { start: MON, text: '  ' } })).status, 400)
+  // Typing on a phone: typos, words not finished, a meal named by its options
+  const one = async (text) => (await api('POST', '/api/planner/parse-week', { token: sam, body: { start: MON, text: `mon ${text}` } })).json?.items?.[0]
+  eq('parse: a typo still matches', (await one('dirty cabage'))?.dishId, cabbage.id)
+  eq('parse: a word not finished matches', (await one('dirty cabb'))?.dishId, cabbage.id)
+  const byOptions = await one('korean beef')
+  ok('parse: just the options finds the meal', byOptions?.dishId === cabbage.id && byOptions.optionIds.length === 2, JSON.stringify(byOptions))
+  eq('parse: an option typo is still picked', (await one('dirty cabbage koraen'))?.optionIds, [korean.id])
+  eq('parse: unrelated text is still new', (await one('beef wellington'))?.dishId ?? null, null)
+
+  // Cooking a variation clears "want to make" for it
+  {
+    const wantKey = [korean.id, beef.id].sort().join('+')
+    await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: wantKey, ratedAs: 'me', thumbs: null, stars: null, want: true } })
+    const past = '2026-01-07'
+    const e = (await api('PUT', `/api/planner/slots/${past}`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id, beef.id] } })).json.entry
+    const wants = async () => (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id).ratings.filter((x) => x.want).length
+    eq('want: set', await wants(), 1)
+    await api('PUT', `/api/planner/entries/${e.id}`, { token: sam, body: { status: 'cooked' } })
+    eq('want: cleared once cooked', await wants(), 0)
+    await api('DELETE', `/api/planner/slots/${past}`, { token: sam })
+  }
 
   await runReview({ sam, chloe, alex })
 }
