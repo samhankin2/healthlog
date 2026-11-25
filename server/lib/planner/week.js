@@ -147,6 +147,28 @@ export function clearSlot(db, householdId, date) {
   db.prepare('DELETE FROM plan_entries WHERE household_id = ? AND slot = ? AND date = ?').run(householdId, SLOT, date)
 }
 
+/**
+ * Move a night to another date (drag and drop). Onto an empty night it moves;
+ * onto a planned night the two swap. The entries themselves move, so options,
+ * notes, reviews and freezer links go with them.
+ */
+export function moveSlot(db, householdId, from, to) {
+  requireDay(from, 'from')
+  requireDay(to, 'to')
+  if (from === to) return { moved: 0 }
+  return withTx(db, () => {
+    const a = slotRow(db, householdId, from)
+    const b = slotRow(db, householdId, to)
+    if (!a && !b) return { moved: 0 }
+    const setDate = db.prepare("UPDATE plan_entries SET date = ?, updated_at = datetime('now') WHERE id = ?")
+    // A parking date first: (household, date, slot) is unique.
+    if (a) setDate.run('0001-01-01', a.id)
+    if (b) setDate.run(from, b.id)
+    if (a) setDate.run(to, a.id)
+    return { moved: (a ? 1 : 0) + (b ? 1 : 0), swapped: Boolean(a && b) }
+  })
+}
+
 /** Copy a week's nights into another week's empty nights (never overwrites). */
 export function copyWeek(db, householdId, from, to) {
   requireDay(from, 'from')

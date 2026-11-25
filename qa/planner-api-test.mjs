@@ -656,7 +656,28 @@ async function runShopping({ sam, chloe, alex, palak, cabbage, curry }) {
   })
   ok('sections: loaded', s.status === 0 && /remembered 1/.test(s.stdout), s.stdout + s.stderr)
   eq('sections: used for the next list', (await add(sam, { name: 'leeks' })).json?.item?.section, 'market')
-  void cabbage
+
+  // Drag and drop: move onto an empty night, swap with a planned one
+  const MON = '2027-03-01'
+  const md = (n) => new Date(Date.parse(`${MON}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10)
+  const korean = cabbage.options.find((o) => o.name === 'Korean')
+  const mon = (await api('PUT', `/api/planner/slots/${md(0)}`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id], note: 'double batch' } })).json.entry
+  await api('PUT', `/api/planner/slots/${md(1)}`, { token: sam, body: { kind: 'out' } })
+  const week = async () => Object.fromEntries((await api('GET', `/api/planner/week?start=${MON}`, { token: chloe })).json.week.entries.map((e) => [e.date, e]))
+  let mv = await api('POST', '/api/planner/slots/move', { token: chloe, body: { from: md(0), to: md(2) } })
+  eq('move: onto an empty night', [mv.status, mv.json?.moved, mv.json?.swapped], [200, 1, false])
+  let w = await week()
+  eq('move: Monday now empty, Wednesday has it', [Boolean(w[md(0)]), w[md(2)]?.dishId], [false, cabbage.id])
+  eq('move: the same entry, options and note kept', [w[md(2)]?.id, w[md(2)]?.optionIds, w[md(2)]?.note], [mon.id, [korean.id], 'double batch'])
+  mv = await api('POST', '/api/planner/slots/move', { token: sam, body: { from: md(2), to: md(1) } })
+  eq('move: onto a planned night swaps', [mv.json?.moved, mv.json?.swapped], [2, true])
+  w = await week()
+  eq('move: swapped', [w[md(1)]?.dishId, w[md(2)]?.kind], [cabbage.id, 'out'])
+  eq('move: same night is a no-op', (await api('POST', '/api/planner/slots/move', { token: sam, body: { from: md(1), to: md(1) } })).json?.moved, 0)
+  eq('move: bad date rejected', (await api('POST', '/api/planner/slots/move', { token: sam, body: { from: md(1), to: 'friday' } })).status, 400)
+  mv = await api('POST', '/api/planner/slots/move', { token: alex, body: { from: md(1), to: md(5) } })
+  eq('move: another household moves nothing of ours', mv.json?.moved, 0)
+  eq('move: ours untouched', (await week())[md(1)]?.dishId, cabbage.id)
 }
 
 try {

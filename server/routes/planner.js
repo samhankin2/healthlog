@@ -11,7 +11,7 @@ import { asObject } from '../lib/validate.js'
 import { ensureHousehold, householdPayload } from '../lib/planner/household.js'
 import { addAlias, addNote, createMeal, mealsPayload, setHidden, setRating, updateMeal } from '../lib/planner/meals.js'
 import { parseWeek } from '../lib/planner/match.js'
-import { clearSlot, copyWeek, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
+import { clearSlot, copyWeek, moveSlot, requireDay, setSlot, weekDays, weekdayOf, weekPayload } from '../lib/planner/week.js'
 import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, updateEntry } from '../lib/planner/review.js'
 import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
 import { historyPayload, parseReviewLine, snooze } from '../lib/planner/insights.js'
@@ -142,6 +142,12 @@ export function registerPlannerRoutes(router) {
     const { db, householdId } = plannerContext(req)
     clearSlot(db, householdId, params.date)
     sendJson(res, 200, { ok: true, cleared: params.date })
+  })
+
+  router.post('/api/planner/slots/move', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    sendJson(res, 200, { ok: true, ...moveSlot(db, householdId, String(body.from ?? ''), String(body.to ?? '')) })
   })
 
   router.post('/api/planner/week/copy', async ({ req, res }) => {

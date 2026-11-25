@@ -995,6 +995,9 @@ GET    /api/planner/week?start=YYYY-MM-DD -> 200 { ok:true, week:{ start, end, e
 PUT    /api/planner/slots/:date { kind:'dish'|'out'|'leftovers'|'takeaway', dishId?, optionIds?, note?, raw? }
                                     -> 200 { ok:true, entry }   # one dinner per date; replaces it
 DELETE /api/planner/slots/:date    -> 200 { ok:true, cleared }
+POST   /api/planner/slots/move { from, to } -> 200 { ok:true, moved, swapped }   # drag and drop: onto an
+                                       # empty night moves, onto a planned night swaps; the entries move
+                                       # (options, note, review, freezer link kept)
 POST   /api/planner/week/copy { from, to } -> 200 { ok:true, copied, week }   # into empty nights only
 POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ date, raw, typed, kind,
                                        dishId, optionIds[], confidence, candidates[], newName, by }] }
