@@ -18,7 +18,7 @@ import { withTx } from '../../db.js'
 import { linkedPartner, partnerLink, shortName } from '../partners.js'
 
 /** Tables carrying `household_id`, moved together when two households merge. */
-const HOUSEHOLD_TABLES = ['dishes', 'dish_aliases', 'plan_entries', 'dish_ratings', 'dish_hidden_options', 'planner_notes', 'reviews', 'freezer_items', 'planner_photos', 'suggestion_snoozes', 'shopping_lists', 'item_sections', 'dish_usual_items']
+const HOUSEHOLD_TABLES = ['dishes', 'dish_aliases', 'plan_entries', 'dish_ratings', 'dish_hidden_options', 'planner_notes', 'reviews', 'freezer_items', 'planner_photos', 'suggestion_snoozes', 'shopping_lists', 'item_sections', 'dish_usual_items', 'want_list']
 
 function householdOf(db, userId) {
   return db.prepare('SELECT household_id FROM household_members WHERE user_id = ?').get(userId)?.household_id ?? null

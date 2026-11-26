@@ -6,6 +6,7 @@
  * Schema mirrors SPEC.md §4 exactly.
  */
 import { DatabaseSync } from 'node:sqlite'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -650,7 +651,6 @@ export function migrate(db) {
   addColumns(db, 'analyses', { revises_id: 'TEXT' }) // the analysis a chat correction revised (model benchmark ground truth)
   addColumns(db, 'dishes', { suggested_tags: "TEXT NOT NULL DEFAULT '[]'" }) // tag chips offered, not yet accepted
   addColumns(db, 'dishes', { family: 'TEXT' }) // a section of related meals, e.g. "Pulled pork"
-  addColumns(db, 'dish_ratings', { want: 'INTEGER NOT NULL DEFAULT 0' }) // 1 = not had it yet, want to make it
   addColumns(db, 'plan_entries', { updated_at: 'TEXT' })
   addColumns(db, 'households', { week_start_day: 'INTEGER NOT NULL DEFAULT 0' }) // 0 = Monday
   // M3 review: facts about a cook, and freezer nights
@@ -665,6 +665,52 @@ export function migrate(db) {
   })
   addColumns(db, 'dish_ratings', { source: "TEXT NOT NULL DEFAULT 'estimate'" }) // estimate (rated from memory) | review (from a cook)
   addColumns(db, 'dishes', { cover_photo_id: 'TEXT' })
+  migrateRatingWantsToList(db)
+}
+
+/**
+ * "Want to make" used to be a flag on a rating as well as the want-to-make
+ * list. The list is the one place now: each flagged meal or variation becomes
+ * a line (keen) unless the list already has it, and the flag column goes.
+ */
+function migrateRatingWantsToList(db) {
+  const cols = new Set(db.prepare('PRAGMA table_info(dish_ratings)').all().map((c) => c.name))
+  if (!cols.has('want')) return
+  db.exec('BEGIN')
+  try {
+    const flagged = db
+      .prepare(
+        `SELECT r.household_id, r.dish_id, r.option_id, MIN(r.updated_by) AS by, d.name
+           FROM dish_ratings r JOIN dishes d ON d.id = r.dish_id
+          WHERE r.want = 1 GROUP BY r.household_id, r.dish_id, r.option_id ORDER BY MIN(r.updated_at)`,
+      )
+      .all()
+    const optionName = db.prepare('SELECT name, axis FROM dish_options WHERE id = ? AND dish_id = ?')
+    const open = db.prepare('SELECT option_ids FROM want_list WHERE household_id = ? AND dish_id = ? AND done_at IS NULL')
+    const top = db.prepare('SELECT MAX(position) AS top FROM want_list WHERE household_id = ? AND done_at IS NULL')
+    const insert = db.prepare(
+      `INSERT INTO want_list (id, household_id, body, level, dish_id, option_ids, position, created_by)
+       VALUES (?, ?, ?, 2, ?, ?, ?, (SELECT id FROM users WHERE id = ?))`,
+    )
+    const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
+    for (const f of flagged) {
+      const ids = f.option_id ? f.option_id.split('+') : []
+      const options = ids.map((id) => optionName.get(id, f.dish_id)).filter(Boolean)
+      if (options.length !== ids.length) continue // an option since deleted
+      const already = open.all(f.household_id, f.dish_id).some((r) => sameSet(JSON.parse(r.option_ids || '[]'), ids))
+      if (already) continue
+      // Style reads first, as on the rating screen: "Dirty cabbage (Korean, Beef)".
+      options.sort((a, b) => (a.axis === 'Style' ? -1 : b.axis === 'Style' ? 1 : 0))
+      const body = options.length ? `${f.name} (${options.map((o) => o.name).join(', ')})` : f.name
+      insert.run(crypto.randomUUID(), f.household_id, body, f.dish_id, JSON.stringify(ids), (top.get(f.household_id).top ?? -1) + 1, f.by)
+    }
+    db.exec('DELETE FROM dish_ratings WHERE want = 1')
+    db.exec('ALTER TABLE dish_ratings DROP COLUMN want')
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
 }
 
 /** Insight columns on `activities` (added after the table first shipped). */

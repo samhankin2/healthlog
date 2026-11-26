@@ -233,7 +233,7 @@ async function runMeals({ sam, chloe, alex }) {
   // Ratings: both, me, as the partner, per option
   const korean = cabbage.options.find((o) => o.name === 'Korean')
   r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', thumbs: 1, stars: 4 } })
-  eq('rating: both saved', r.json?.rating, { optionId: null, ratedAs: 'both', thumbs: 1, stars: 4, want: false })
+  eq('rating: both saved', r.json?.rating, { optionId: null, ratedAs: 'both', thumbs: 1, stars: 4 })
   r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'me', thumbs: 1, stars: 5 } })
   eq('rating: me resolves to my id', r.json?.rating?.ratedAs, home.members.find((m) => m.me).id)
   r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: chloeId, thumbs: -1, stars: 3 } })
@@ -260,21 +260,22 @@ async function runMeals({ sam, chloe, alex }) {
   eq('rating: combination updated', combos[0]?.stars, 2)
   eq('rating: two options from one axis rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${korean.id}+${chinese.id}`, ratedAs: 'both', thumbs: 1 } })).status, 400)
   await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${korean.id}+${beef.id}`, ratedAs: 'both', thumbs: null, stars: null } })
-  // Want to make: no score, counts as an answer; a score clears it
-  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', want: true } })
-  eq('want: saved with no score', r.json?.rating, { optionId: [chinese.id, beef.id].sort().join('+'), ratedAs: 'both', thumbs: null, stars: null, want: true })
-  eq('want: with stars rejected', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, ratedAs: 'both', want: true, stars: 4 } })).status, 400)
-  let listed = (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id)
-  eq('want: listed', listed.ratings.find((x) => x.optionId === [chinese.id, beef.id].sort().join('+'))?.want, true)
-  eq('want: ordinary ratings say false', listed.ratings.find((x) => x.ratedAs === 'both' && !x.optionId)?.want, false)
-  r = await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', thumbs: 1, stars: 4 } })
-  eq('want: a score replaces it', r.json?.rating?.want, false)
-  await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', thumbs: null, stars: null } })
+  // Want to make is the want-to-make list, not a rating
+  eq('want: not a rating any more', (await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: `${chinese.id}+${beef.id}`, ratedAs: 'both', want: true } })).status, 400)
+  {
+    const fromRow = (token = sam) => api('POST', '/api/planner/wants', { token, body: { text: 'Dirty cabbage (Chinese, Beef)', dishId: cabbage.id, optionIds: [chinese.id, beef.id] } })
+    r = await fromRow()
+    eq('want: from the rating rows, a line for that variation', [r.status, r.json?.want?.dishId, r.json?.want?.optionIds, r.json?.want?.level, r.json?.pending], [201, cabbage.id, [chinese.id, beef.id], 2, false])
+    eq('want: the same variation again is the same line', (await fromRow(chloe)).json?.want?.id, r.json?.want?.id)
+    eq('want: one line on the list', (await api('GET', '/api/planner/wants', { token: sam })).json.wants.length, 1)
+    eq('want: another household cannot point one at our meal', (await api('POST', '/api/planner/wants', { token: alex, body: { text: 'x', dishId: cabbage.id } })).status, 404)
+    await api('DELETE', `/api/planner/wants/${r.json.want.id}`, { token: sam })
+  }
 
   // Hidden variations: never had it, off the list for the household
   r = await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: `${beef.id}+${chinese.id}` } })
   eq('hidden: saved, key sorted', r.json?.hidden, [[chinese.id, beef.id].sort().join('+')])
-  listed = (await api('GET', '/api/planner/meals', { token: chloe })).json.meals.find((m) => m.id === cabbage.id)
+  const listed = (await api('GET', '/api/planner/meals', { token: chloe })).json.meals.find((m) => m.id === cabbage.id)
   eq('hidden: the partner sees it hidden too', listed.hidden, [[chinese.id, beef.id].sort().join('+')])
   eq('hidden: again is a no-op', (await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: `${chinese.id}+${beef.id}`, hidden: true } })).json?.hidden.length, 1)
   eq('hidden: bad option 404', (await api('PUT', `/api/planner/meals/${cabbage.id}/hidden`, { token: sam, body: { optionId: 'nope' } })).status, 404)
@@ -468,16 +469,15 @@ async function runWeek({ sam, chloe, alex }) {
     eq('text: empty clears the night', [t.json?.entry, (await api('GET', `/api/planner/week?start=${D}`, { token: sam })).json.week.entries.length], [null, 0])
   }
 
-  // Cooking a variation clears "want to make" for it
+  // Cooking a variation ticks it off the want-to-make list
   {
-    const wantKey = [korean.id, beef.id].sort().join('+')
-    await api('PUT', '/api/planner/ratings', { token: sam, body: { dishId: cabbage.id, optionId: wantKey, ratedAs: 'me', thumbs: null, stars: null, want: true } })
+    await api('POST', '/api/planner/wants', { token: sam, body: { text: 'Dirty cabbage (Korean, Beef)', dishId: cabbage.id, optionIds: [korean.id, beef.id] } })
     const past = '2026-01-07'
     const e = (await api('PUT', `/api/planner/slots/${past}`, { token: sam, body: { dishId: cabbage.id, optionIds: [korean.id, beef.id] } })).json.entry
-    const wants = async () => (await api('GET', '/api/planner/meals', { token: sam })).json.meals.find((m) => m.id === cabbage.id).ratings.filter((x) => x.want).length
+    const wants = async () => (await api('GET', '/api/planner/wants', { token: sam })).json.wants.filter((x) => x.dishId === cabbage.id).length
     eq('want: set', await wants(), 1)
     await api('PUT', `/api/planner/entries/${e.id}`, { token: sam, body: { status: 'cooked' } })
-    eq('want: cleared once cooked', await wants(), 0)
+    eq('want: ticked off once cooked', await wants(), 0)
     await api('DELETE', `/api/planner/slots/${past}`, { token: sam })
   }
 
@@ -778,7 +778,37 @@ async function runShopping({ sam, chloe, alex, palak, cabbage, curry }) {
   eq('move: ours untouched', (await week())[md(1)]?.dishId, cabbage.id)
 }
 
+// Older databases: "want to make" flags on ratings move onto the list, once.
+async function migrationTest() {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { migrate } = await import('../server/db.js')
+  const db = new DatabaseSync(':memory:')
+  migrate(db)
+  db.exec("ALTER TABLE dish_ratings ADD COLUMN want INTEGER NOT NULL DEFAULT 0")
+  db.exec(`INSERT INTO users (id, email, password_hash) VALUES ('u1', 'a@example.com', 'x');
+    INSERT INTO households (id) VALUES ('h1');
+    INSERT INTO dishes (id, household_id, name) VALUES ('d1', 'h1', 'Dirty cabbage'), ('d2', 'h1', 'Laksa'), ('d3', 'h1', 'Katsu');
+    INSERT INTO dish_options (id, dish_id, axis, name) VALUES ('ob', 'd1', 'Protein', 'Beef'), ('ok', 'd1', 'Style', 'Korean');
+    INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, want, updated_by) VALUES
+      ('h1', 'd1', 'ob+ok', 'both', 1, 'u1'), ('h1', 'd1', 'ob+ok', 'u1', 1, 'u1'), ('h1', 'd2', '', 'u1', 1, 'u1'), ('h1', 'd3', '', 'both', 1, 'u1');
+    INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars) VALUES ('h1', 'd2', '', 'both', 1, 4);
+    INSERT INTO want_list (id, household_id, body, level, dish_id, option_ids) VALUES ('w0', 'h1', 'katsu!!', 3, 'd3', '[]');`)
+  migrate(db)
+  const lines = db.prepare('SELECT body, level, dish_id, option_ids, created_by FROM want_list ORDER BY position, id').all().map((r) => ({ ...r }))
+  eq('migrate: flags become lines, style first, one per variation, none twice', lines, [
+    { body: 'katsu!!', level: 3, dish_id: 'd3', option_ids: '[]', created_by: null },
+    { body: 'Dirty cabbage (Korean, Beef)', level: 2, dish_id: 'd1', option_ids: '["ob","ok"]', created_by: 'u1' },
+    { body: 'Laksa', level: 2, dish_id: 'd2', option_ids: '[]', created_by: 'u1' },
+  ])
+  eq('migrate: scores kept, flags gone', db.prepare('SELECT dish_id, stars FROM dish_ratings').all().map((r) => ({ ...r })), [{ dish_id: 'd2', stars: 4 }])
+  ok('migrate: the column goes', !db.prepare('PRAGMA table_info(dish_ratings)').all().some((c) => c.name === 'want'))
+  migrate(db)
+  eq('migrate: running again changes nothing', db.prepare('SELECT COUNT(*) AS n FROM want_list').get().n, 3)
+  db.close()
+}
+
 try {
+  await migrationTest()
   await run()
 } catch (err) {
   failCount++

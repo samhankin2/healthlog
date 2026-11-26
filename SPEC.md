@@ -320,8 +320,8 @@ planned|cooked|skipped|swapped|moved, `source` app|notes, `raw`, `cook_name`,
 `note`). `plan_entry_options` links an entry to the options cooked.
 `dish_ratings`: a standing rating of a meal (`option_id` '') or one option,
 primary key `(dish_id, option_id, rated_as)`, `rated_as` 'both' or a member's
-user id, `thumbs` −1|1, `stars` 1–5, `want` 1 = not had yet, want to make
-(no thumbs or stars). `dish_hidden_options` (`dish_id`, `option_id` an option
+user id, `thumbs` −1|1, `stars` 1–5 (older databases had a `want` flag here;
+it moved onto `want_list` and the column was dropped). `dish_hidden_options` (`dish_id`, `option_id` an option
 or combination key; primary key both): a variation taken off the list because
 we've never had it. `planner_notes`: a note to Claude about a
 meal (`body`, `reply`, `resolved_at`). `want_list`: the want-to-make scratch
@@ -979,15 +979,16 @@ GET    /api/planner/household       -> 200 { ok:true, household:{ id, weekStartD
                                                 partner:{status:'linked'|'pending',email}|null } }
 GET    /api/planner/meals           -> 200 { ok:true, meals:[{ id, name, family, tags[], suggestedTags[], effort,
                                                 tips, link, neverSuggest, aliases[], options:[{id,axis,name}],
-                                                cooked, lastCooked, ratings:[{optionId,ratedAs,thumbs,stars,want}], hidden:[optionId],
+                                                cooked, lastCooked, ratings:[{optionId,ratedAs,thumbs,stars,source}], hidden:[optionId],
                                                 notes:[{id,body,reply,resolved,createdAt,createdBy}] }] }
 PUT    /api/planner/meals/:id { tags?, suggestedTags?, effort?: 1|2|3|null, tips?, neverSuggest?, archived? }
                                     -> 200 { ok:true, meal|null }   # 400 bad effort / >20 tags / tag >30 chars
                                                                     # archived:true removes it (meal null), false restores
 PUT    /api/planner/meals/:id/hidden { optionId, hidden?: true|false }
                                     -> 200 { ok:true, hidden:[optionId] }  # 404 foreign meal/option
-PUT    /api/planner/ratings { dishId, optionId?, ratedAs:'both'|'me'|<member id>, thumbs?, stars?, want? }
-                                    -> 200 { ok:true, rating|null }  # all empty deletes; want with a score 400; 404 foreign meal/option
+PUT    /api/planner/ratings { dishId, optionId?, ratedAs:'both'|'me'|<member id>, thumbs?, stars? }
+                                    -> 200 { ok:true, rating|null }  # all empty deletes; 404 foreign meal/option;
+                                                                     # want 400 (it's a want-to-make line now)
 POST   /api/planner/meals/:id/notes { body } -> 201 { ok:true, note }   # 1–2000 chars
 PUT    /api/planner/household { weekStartDay: 0..6 }  -> 200 { ok:true, household }  # 0 = Monday (default)
 POST   /api/planner/meals { name }  -> 201 { ok:true, created:true, meal }   # 200 + created:false when the
@@ -1014,9 +1015,11 @@ PUT    /api/planner/slots/:date/link { dishId|null, optionIds? } -> 200 { ok:tru
                                        # "not this"; keeps the words, note and status
 GET    /api/planner/wants          -> 200 { ok:true, wants:[{ id, text, level, dishId|null, optionIds[], createdBy,
                                        createdAt, updatedAt, done }] }   # open lines, in the order typed
-POST   /api/planner/wants { text, level? } -> 201 { ok:true, want, pending }   # a want-to-make line typed like a
-                                       # note (<= 500 chars; level 1–3, default 2): saved at once, linked when code
-                                       # is sure (whole text, or the part before the first comma/dash); else pending
+POST   /api/planner/wants { text, level?, dishId?, optionIds? } -> 201 { ok:true, want, pending }   # a want-to-make
+                                       # line typed like a note (<= 500 chars; level 1–3, default 2): saved at once,
+                                       # linked when code is sure (whole text, or the part before the first
+                                       # comma/dash); else pending. With dishId it's for that meal and variation
+                                       # (from the rating rows); one already open for it is returned, not doubled
 PUT    /api/planner/wants/:id { text?, level?, dishId?|null, optionIds?, done? } -> 200 { ok:true, want, pending }
                                        # new words are matched again (old meal dropped unless sure); dishId alone
                                        # is "did you mean" / "not this"; done ticks it off
@@ -1114,17 +1117,18 @@ POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ d
   combination of options from different axes (`optionId` = option ids joined
   with `+`, stored sorted, at most one per axis; 400 otherwise). The client
   rates a meal with no options as itself, a one-axis meal per option, and a
-  two-axis meal per combination. `want` answers a variation we haven't had
-  but want to make; a variation we've never had and don't want is **hidden**
-  for the household (its ratings are kept and return if it is put back), and
-  a whole meal is removed with `archived` (history and ratings kept). The
-  client counts a meal as rated when every visible variation is scored or
-  wanted. They are separate from per-cook reviews (M3). Either member may rate as `both`, as themselves,
+  two-axis meal per combination. A variation we haven't had but want to make
+  goes on the want-to-make list (below); one we've never had and don't want
+  is **hidden** for the household (its ratings are kept and return if it is
+  put back), and a whole meal is removed with `archived` (history and ratings
+  kept). The client counts a meal as rated when every visible variation is
+  scored or on the want-to-make list. They are separate from per-cook reviews (M3). Either member may rate as `both`, as themselves,
   or as the other member. `cooked` counts `plan_entries` with kind `dish` and
   status `cooked`; undated imports count but leave `lastCooked` null.
-- **Want to make** is a household scratch pad, separate from the `want` flag on
-  ratings: lines are free words with how much we want them, and either member
-  sees and edits all of them. Marking a night cooked (or swapping to a meal)
+- **Want to make** is one household list, the only "want to make" there is:
+  lines are free words with how much we want them, and either member sees and
+  edits all of them. "Haven't had it, want to make" on the rating rows adds a
+  line for that meal and variation (keen). Marking a night cooked (or swapping to a meal)
   ticks off open lines for that meal; a line naming a variation is ticked
   only when what was cooked includes it. The client raises matched meals in
   Ideas by `level`.

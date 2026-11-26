@@ -69,6 +69,17 @@ export function addWant(db, householdId, user, { text, level, dishId = null, opt
   if (dishId) findDish(db, householdId, dishId)
   const options = dishId ? cleanOptionIds(db, dishId, optionIds) : []
   return withTx(db, () => {
+    if (dishId) {
+      // Already on the list (the same meal and variation): that line, not a second one.
+      const same = db
+        .prepare('SELECT * FROM want_list WHERE household_id = ? AND dish_id = ? AND done_at IS NULL ORDER BY position')
+        .all(householdId, dishId)
+        .find((r) => {
+          const ids = parseIds(r.option_ids)
+          return ids.length === options.length && ids.every((o) => options.includes(o))
+        })
+      if (same) return wantPayload(same)
+    }
     const open = db.prepare('SELECT COUNT(*) AS n, MAX(position) AS top FROM want_list WHERE household_id = ? AND done_at IS NULL').get(householdId)
     if (open.n >= MAX_OPEN) throw new HttpError(400, 'The list is full: tick some off first')
     const id = randomUUID()

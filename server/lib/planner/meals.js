@@ -123,7 +123,6 @@ export function mealsPayload(db, householdId) {
       ratedAs: r.rated_as,
       thumbs: r.thumbs ?? null,
       stars: r.stars ?? null,
-      want: Boolean(r.want),
       source: r.source ?? 'estimate', // estimate (rated from memory) | review (from a cook)
     })
   }
@@ -243,10 +242,10 @@ export function comboKey(db, dishId, key) {
 
 /**
  * Upsert one standing rating. `ratedAs` is 'both' or a household member's id.
- * `want` marks a variation not had yet that we want to make: it carries no
- * thumbs or stars (a score clears it). Clearing everything deletes the rating.
+ * Clearing everything deletes the rating. ("Haven't had it, want to make" is
+ * a line on the want-to-make list, not a rating.)
  */
-export function setRating(db, householdId, user, { dishId, optionId = null, ratedAs, thumbs = null, stars = null, want = false }) {
+export function setRating(db, householdId, user, { dishId, optionId = null, ratedAs, thumbs = null, stars = null }) {
   findDish(db, householdId, dishId)
   optionId = optionId ? comboKey(db, dishId, optionId) : null
   let as = ratedAs === 'me' ? user.id : ratedAs
@@ -256,21 +255,20 @@ export function setRating(db, householdId, user, { dishId, optionId = null, rate
   }
   if (thumbs !== null && thumbs !== -1 && thumbs !== 1) throw new HttpError(400, 'thumbs must be -1, 1 or null')
   if (stars !== null && !(Number.isInteger(stars) && stars >= 1 && stars <= 5)) throw new HttpError(400, 'stars must be 1 to 5 or null')
-  if (want && (thumbs !== null || stars !== null)) throw new HttpError(400, 'want takes no thumbs or stars')
 
   const key = [dishId, optionId ?? '', as]
-  if (thumbs === null && stars === null && !want) {
+  if (thumbs === null && stars === null) {
     db.prepare('DELETE FROM dish_ratings WHERE dish_id = ? AND option_id = ? AND rated_as = ?').run(...key)
     return null
   }
   db.prepare(
-    `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, want, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(dish_id, option_id, rated_as) DO UPDATE SET
-       thumbs = excluded.thumbs, stars = excluded.stars, want = excluded.want,
+       thumbs = excluded.thumbs, stars = excluded.stars,
        updated_by = excluded.updated_by, updated_at = datetime('now')`,
-  ).run(householdId, ...key, thumbs, stars, want ? 1 : 0, user.id)
-  return { optionId: optionId ?? null, ratedAs: as, thumbs, stars, want: Boolean(want) }
+  ).run(householdId, ...key, thumbs, stars, user.id)
+  return { optionId: optionId ?? null, ratedAs: as, thumbs, stars }
 }
 
 /**

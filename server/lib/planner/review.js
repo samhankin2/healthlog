@@ -75,17 +75,9 @@ function syncFrozen(db, householdId, row, portions) {
  * - swapToDishId (+ swapOptionIds): we made something else; the night becomes that.
  * - cookNote, leftovers, frozenPortions (0–20, fills freezer stock), tweakRetry.
  */
-/**
- * Cooked it: "want to make" is done for what we made. Clears a want on the
- * whole meal, on the exact variation, or on any one of its options.
- */
+/** Cooked it: ticks what we made off the want-to-make list. */
 function clearWants(db, householdId, dishId, entryId) {
   const ids = db.prepare('SELECT option_id FROM plan_entry_options WHERE plan_entry_id = ?').all(entryId).map((r) => r.option_id)
-  const keys = [...ids, [...ids].sort().join('+')].filter(Boolean)
-  db.prepare(
-    `DELETE FROM dish_ratings WHERE household_id = ? AND dish_id = ? AND want = 1
-       AND (option_id IS NULL OR option_id = '' OR option_id IN (SELECT value FROM json_each(?)))`,
-  ).run(householdId, dishId, JSON.stringify(keys))
   tickOffCooked(db, householdId, dishId, ids)
 }
 
@@ -196,10 +188,10 @@ export function setReview(db, householdId, user, id, { ratedAs, thumbs = null, s
       const key = ratingKeyFor(db, row)
       if (key !== null) {
         db.prepare(
-          `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, want, source, updated_by)
-           VALUES (?, ?, ?, ?, ?, ?, 0, 'review', ?)
+          `INSERT INTO dish_ratings (household_id, dish_id, option_id, rated_as, thumbs, stars, source, updated_by)
+           VALUES (?, ?, ?, ?, ?, ?, 'review', ?)
            ON CONFLICT(dish_id, option_id, rated_as) DO UPDATE SET thumbs = excluded.thumbs, stars = excluded.stars,
-             want = 0, source = 'review', updated_by = excluded.updated_by, updated_at = datetime('now')`,
+             source = 'review', updated_by = excluded.updated_by, updated_at = datetime('now')`,
         ).run(householdId, row.dish_id, key, as, thumbs, stars, user.id)
       }
     }

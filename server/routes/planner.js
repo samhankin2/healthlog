@@ -94,13 +94,13 @@ export function registerPlannerRoutes(router) {
     const body = asObject(await readJsonBody(req))
     if (typeof body.dishId !== 'string') throw new HttpError(400, 'dishId is required')
     if (typeof body.ratedAs !== 'string') throw new HttpError(400, 'ratedAs is required')
+    if (body.want !== undefined) throw new HttpError(400, 'Want to make is a line on the want-to-make list now: POST /api/planner/wants')
     const rating = setRating(db, householdId, user, {
       dishId: body.dishId,
       optionId: typeof body.optionId === 'string' && body.optionId ? body.optionId : null,
       ratedAs: body.ratedAs,
       thumbs: nullableInt(body.thumbs, 'thumbs'),
       stars: nullableInt(body.stars, 'stars'),
-      want: body.want === true,
     })
     sendJson(res, 200, { ok: true, rating })
   })
@@ -125,10 +125,14 @@ export function registerPlannerRoutes(router) {
   })
 
   // A line typed like a note: saved at once, linked to a meal when code is sure (else pending).
+  // With dishId (+ optionIds) it is for that meal: "want to make" from the rating rows.
   router.post('/api/planner/wants', async ({ req, res }) => {
     const { user, db, householdId } = plannerContext(req)
     const body = asObject(await readJsonBody(req))
-    const line = await matchWords(db, householdId, body.text)
+    const given = typeof body.dishId === 'string' && body.dishId
+    const line = given
+      ? { dishId: body.dishId, optionIds: Array.isArray(body.optionIds) ? body.optionIds : [], confidence: 1 }
+      : await matchWords(db, householdId, body.text)
     const sure = Boolean(line.dishId) && line.confidence >= 0.85
     const want = addWant(db, householdId, user, {
       text: body.text,
