@@ -169,7 +169,7 @@ EOF
     # What devices reported: failed requests, outage lengths, app starts, JS errors.
     hours="${1:-24}"
     positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
-    remote "journalctl -u healthlog --since -${hours}h --no-pager -o short-iso | grep -F '[client]' | sed 's/^\([^ ]*\) [^[]*\[client\] /\1 /' || echo '(no client events)'"
+    remote "journalctl -u healthlog --since -${hours}h --no-pager -o short-iso | grep -F '[client]' | sed 's/^\([^ ]*\) .*\[client\] /\1 /' || echo '(no client events)'"
     ;;
 
   access)
