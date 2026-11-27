@@ -33,6 +33,7 @@ import { registerCorosRoutes } from './routes/coros.js'
 import { registerSharingRoutes } from './routes/sharing.js'
 import { registerModelBenchRoutes } from './routes/modelBench.js'
 import { registerPlannerRoutes } from './routes/planner.js'
+import { registerClientLogRoutes } from './routes/clientLog.js'
 import { scheduleBackups } from './lib/backup.js'
 import { scheduleGarminSync } from './lib/garmin.js'
 import { scheduleCronometerSync } from './lib/cronometer.js'
@@ -65,6 +66,7 @@ export function buildRouter() {
   registerSharingRoutes(router)
   registerModelBenchRoutes(router)
   registerPlannerRoutes(router)
+  registerClientLogRoutes(router)
   return router
 }
 

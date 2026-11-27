@@ -367,6 +367,7 @@ can be followed to the meal that was finally saved (§7 "Model benchmark").
     login relayed to Cronometer).
   - `POST /api/coros/connect`: 10 attempts / 15 min per user (each one opens
     a sign-in at COROS).
+  - `POST /api/client-log`: 30 uploads / 15 min per IP.
   - every `/api/*` request except health: 600 / 5 min per IP. Direct loopback
     calls without `X-Forwarded-For` are not counted.
   - `RATE_LIMIT=off` disables them (local experiments only).
@@ -1156,6 +1157,30 @@ POST   /api/planner/parse-week { start, text, ai? } -> 200 { ok:true, items:[{ d
 - All planner reads and writes are scoped to the caller's household. A row from
   another household answers `404`, never `403`.
 
+### Client diagnostics
+```
+POST /api/client-log { events:[ClientEvent] } -> 200 { ok:true, accepted }
+```
+When the device cannot reach the API the server never sees the attempt, so the
+device keeps the record. `src/lib/clientLog.ts` queues events in
+`localStorage` (key `healthlog.clientlog.v1`, newest 100) and `api.ts` uploads
+up to 50 after the next successful request:
+- `fetch-fail` — a request got no usable answer: `kind` `network` (no
+  response; `error` carries the browser's message), `timeout`, or `http` (5xx),
+  with `path`, `method`, `status`, `ms`.
+- `recovered` — the first answer after failures: `firstFailAt`, `failures`,
+  `outageMs`.
+- `boot` — the app started (a reload, or iOS relaunching a killed tab).
+- `error` — an uncaught error or non-API promise rejection.
+
+Every event also carries `at`, `build` (the hashed bundle name) and device
+context: `online`, `visible`, `standalone`, `net`, `sinceLoadMs`. Sign-in is
+optional, so the login screen can report too. The server whitelists and clamps
+every field, replaces ids in paths with `:id`, and writes one `[client]`
+journal line per event (`scripts/hl client`); nothing goes in the database.
+The upload itself is never logged as a failure. Rate limit: 30 uploads / 15 min
+per IP (§5).
+
 ### Imports
 ```
 POST /api/import/weight-json { json: <the old weight-tracker export as an object> }
@@ -1514,10 +1539,13 @@ is saved.
 - Weights are kilograms, fixed.
 - `src/lib/api.ts` is the only place that calls `fetch`. It reads the base URL
   from `window.APP_API_BASE` (fallback: same origin), attaches the bearer
-  token from `src/lib/auth.ts`, and turns non-2xx into typed errors.
+  token from `src/lib/auth.ts`, and turns non-2xx into typed errors. It also
+  feeds `src/lib/clientLog.ts` (failed requests, recoveries) and uploads its
+  queue (§6 "Client diagnostics").
 - `src/lib/store.ts` holds app state in memory and notifies subscribers —
   the old `appStore.ts` pattern, but the persistence is the API, not
-  `localStorage`. Only the auth token is in `localStorage`.
+  `localStorage`. Only the auth token (and the client diagnostics queue) is in
+  `localStorage`.
 
 ## 9. Build and deploy
 

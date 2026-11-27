@@ -48,6 +48,7 @@ src/
     weightTrend.ts    weight trend (EMA over interpolated days), pace fit, weekly/monthly change, weekday pattern (pure)
     sides.ts          one side at a time: pairs each-arm entries into sets (pure)
     lifting.svelte.ts lifting state + offline outbox + rest timer
+    clientLog.ts      device-side diagnostics: failed requests, outages, boots, errors; api.ts uploads them
     sharing.svelte.ts partner link + shared-meal inbox (components/SharedMealInbox, PartnerCard)
     lift/             the gym logger, exercise picker/page, routine editor, steppers, rest timer
   design/             tokens.css + ui.css — the design system, global CSS

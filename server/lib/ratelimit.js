@@ -110,6 +110,8 @@ export const chatByUser = new Limiter({
   windowMs: 60 * MIN,
   message: 'You have hit the hourly AI limit. Try again a little later.',
 })
+/** Client diagnostics uploads per IP: 30 / 15 min (each carries up to 50 events). */
+export const clientLogByIp = new Limiter({ max: 30, windowMs: 15 * MIN })
 /** Every authenticated or anonymous API request per IP: 600 / 5 min. A coarse flood guard. */
 export const requestsByIp = new Limiter({
   max: 600,

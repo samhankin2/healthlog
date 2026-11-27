@@ -1,4 +1,5 @@
 import { getToken } from './auth'
+import { acknowledgeEvents, pendingEvents, recordFetchFailure, recordFetchSuccess } from './clientLog'
 import type {
   Activity,
   Analysis,
@@ -116,13 +117,25 @@ async function request<T>(
   const token = getToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
+  const method = init.method ?? 'GET'
+  const startedAt = Date.now()
+  // The diagnostics upload itself is never logged, or a dead API would feed the queue.
+  const diagnose = path !== CLIENT_LOG_PATH
   try {
     const response = await fetch(`${baseUrl()}/api${path}`, {
-      method: init.method ?? 'GET',
+      method,
       headers,
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
       signal: controller.signal,
     })
+    if (diagnose) {
+      if (response.status >= 500) {
+        recordFetchFailure({ path, method, kind: 'http', status: response.status, ms: Date.now() - startedAt })
+      } else {
+        recordFetchSuccess()
+        flushClientLog()
+      }
+    }
     const payload = response.status === 204
       ? null
       : await response.json().catch(() => null) as (T & SuccessResponse) | FailureResponse | null
@@ -138,13 +151,34 @@ async function request<T>(
     if (error instanceof ApiError) throw error
     if (controller.signal.aborted) {
       if (externalSignal?.aborted) throw error
+      if (diagnose) recordFetchFailure({ path, method, kind: 'timeout', ms: Date.now() - startedAt })
       throw new ApiError('The request took too long. Please try again.', 0)
+    }
+    if (diagnose) {
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      recordFetchFailure({ path, method, kind: 'network', ms: Date.now() - startedAt, error: detail })
     }
     throw new ApiError('Could not connect to HealthLog. Check your connection and try again.', 0)
   } finally {
     window.clearTimeout(timeout)
     externalSignal?.removeEventListener('abort', abort)
   }
+}
+
+const CLIENT_LOG_PATH = '/client-log'
+const CLIENT_LOG_BATCH = 50
+let flushingClientLog = false
+
+/** Upload queued diagnostics (SPEC §6 "Client diagnostics"). Best-effort, one batch at a time. */
+function flushClientLog(): void {
+  if (flushingClientLog) return
+  const batch = pendingEvents().slice(0, CLIENT_LOG_BATCH)
+  if (!batch.length) return
+  flushingClientLog = true
+  request<SuccessResponse>(CLIENT_LOG_PATH, { method: 'POST', body: { events: batch } }, { timeoutMs: 15_000 })
+    .then(() => acknowledgeEvents(batch.length))
+    .catch(() => {})
+    .finally(() => { flushingClientLog = false })
 }
 
 export interface HealthPayload extends SuccessResponse {

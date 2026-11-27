@@ -11,6 +11,8 @@
 #   scripts/hl logs [N]           last N journal lines (default 80)
 #   scripts/hl logs -f            follow the journal
 #   scripts/hl errors [hours]     error lines from the journal (default 24h)
+#   scripts/hl client [hours]     what devices reported: failed requests, outages, boots, JS errors (24h)
+#   scripts/hl access [hours]     Caddy access log: every request that reached the box (default 1h)
 #   scripts/hl backup             snapshot the DB on the box now
 #   scripts/hl backup list        list snapshots on the box
 #   scripts/hl backup pull        snapshot + download to data/backups/ (off-box copy)
@@ -49,7 +51,7 @@ ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10)
 remote() { ssh "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 remote_tty() { ssh -t "${ssh_opts[@]}" "ubuntu@$HOST" "$@"; }
 
-usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Only fixed flags are forwarded to the remote command line; the SQL itself
 # goes over stdin, so no quoting or injection worries.
@@ -161,6 +163,30 @@ EOF
     hours="${1:-24}"
     positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
     remote "journalctl -u healthlog --since -${hours}h --no-pager -o short-iso | grep -E -A5 'error|Error|failed|\[req\] [A-Z]+ [^ ]+ 5[0-9][0-9] ' || echo '(no errors)'"
+    ;;
+
+  client)
+    # What devices reported: failed requests, outage lengths, app starts, JS errors.
+    hours="${1:-24}"
+    positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
+    remote "journalctl -u healthlog --since -${hours}h --no-pager -o short-iso | grep -F '[client]' | sed 's/^\([^ ]*\) [^[]*\[client\] /\1 /' || echo '(no client events)'"
+    ;;
+
+  access)
+    # Caddy's access log for the API: every request that reached the box.
+    # One line each: time, client IP, protocol, method, uri, status, ms, user agent.
+    hours="${1:-1}"
+    positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
+    remote "sudo journalctl -u caddy --since -${hours}h --no-pager -o cat | grep -F 'http.log.access' | python3 -c '
+import json, sys, datetime
+for line in sys.stdin:
+    try: e = json.loads(line)
+    except ValueError: continue
+    r = e.get(\"request\", {})
+    ua = (r.get(\"headers\", {}).get(\"User-Agent\") or [\"\"])[0][:60]
+    t = datetime.datetime.fromtimestamp(e[\"ts\"], datetime.timezone.utc).strftime(\"%m-%d %H:%M:%S\")
+    print(t, r.get(\"client_ip\", \"?\").ljust(15), r.get(\"proto\", \"\").ljust(8), r.get(\"method\", \"\").ljust(6), r.get(\"uri\", \"\")[:50].ljust(50), e.get(\"status\"), str(round(e.get(\"duration\", 0) * 1000)) + \"ms\", ua)
+' || echo '(no access lines)'"
     ;;
 
   backup)
