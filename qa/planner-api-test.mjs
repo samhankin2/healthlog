@@ -711,6 +711,19 @@ async function runShopping({ sam, chloe, alex, palak, cabbage, curry }) {
   eq('shop: empty list to start', r.json?.items, [])
   eq('shop: only meal nights to shop for', r.json?.nights?.map((n) => n.date), [day(0), day(3)])
   eq('shop: needs a week', (await api('GET', '/api/planner/shopping', { token: sam })).status, 400)
+  eq('shop: a list runs seven nights unless told', r.json?.to, day(6))
+
+  // The rolling plan: any run of nights, and a list for whichever nights we shop for
+  await api('PUT', `/api/planner/slots/${day(9)}`, { token: sam, body: { dishId: palak.id } })
+  eq('plan: a longer run of nights', (await api('GET', `/api/planner/week?start=${WEEK}&days=14`, { token: sam })).json?.week?.entries?.map((e) => e.date), [day(0), day(1), day(3), day(9)])
+  eq('plan: a week by default', (await api('GET', `/api/planner/week?start=${WEEK}`, { token: sam })).json?.week?.entries?.length, 3)
+  r = await api('PUT', '/api/planner/shopping/range', { token: chloe, body: { week: day(3), to: day(9) } })
+  eq('shop range: Thursday to the next Wednesday', [r.status, r.json?.week, r.json?.to, r.json?.nights?.map((n) => n.date)], [200, day(3), day(9), [day(3), day(9)]])
+  eq('shop range: listed for both phones', (await api('GET', '/api/planner/shopping/lists', { token: sam })).json?.lists?.find((l) => l.from === day(3)), { from: day(3), to: day(9) })
+  eq('shop range: more than three weeks rejected', (await api('PUT', '/api/planner/shopping/range', { token: sam, body: { week: day(3), to: day(30) } })).status, 400)
+  eq('shop range: ending before it starts rejected', (await api('PUT', '/api/planner/shopping/range', { token: sam, body: { week: day(3), to: day(2) } })).status, 400)
+  eq('shop range: another household sees none', (await api('GET', '/api/planner/shopping/lists', { token: alex })).json?.lists, [])
+  await api('DELETE', `/api/planner/slots/${day(9)}`, { token: sam })
 
   const add = (token, body) => api('POST', '/api/planner/shopping/items', { token, body: { week: WEEK, ...body } })
   r = await add(sam, { name: 'Onions', qty: '2', dishId: palak.id })

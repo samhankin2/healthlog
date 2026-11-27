@@ -17,7 +17,7 @@ import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, up
 import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
 import { historyPayload, parseReviewLine, snooze } from '../lib/planner/insights.js'
 import fs from 'node:fs'
-import { addItem, clearChecked, removeItem, shoppingPayload, updateItem } from '../lib/planner/shopping.js'
+import { addItem, clearChecked, removeItem, setShoppingRange, shoppingLists, shoppingPayload, updateItem } from '../lib/planner/shopping.js'
 
 /** The caller and their household id; use at the top of every planner route. */
 export function plannerContext(req) {
@@ -190,7 +190,8 @@ export function registerPlannerRoutes(router) {
   router.get('/api/planner/week', async ({ req, res, query }) => {
     const { db, householdId } = plannerContext(req)
     const start = requireDay(query?.get('start'), 'start')
-    sendJson(res, 200, { ok: true, week: weekPayload(db, householdId, start) })
+    const days = Number(query?.get('days') ?? 7)
+    sendJson(res, 200, { ok: true, week: weekPayload(db, householdId, start, Number.isInteger(days) ? days : 7) })
   })
 
   router.put('/api/planner/slots/:date', async ({ req, res, params }) => {
@@ -425,6 +426,17 @@ export function registerPlannerRoutes(router) {
   router.get('/api/planner/shopping', async ({ req, res, query }) => {
     const { db, householdId } = plannerContext(req)
     sendJson(res, 200, { ok: true, ...shoppingPayload(db, householdId, requireDay(query?.get('week'), 'week')) })
+  })
+
+  router.get('/api/planner/shopping/lists', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, lists: shoppingLists(db, householdId) })
+  })
+
+  router.put('/api/planner/shopping/range', async ({ req, res }) => {
+    const { db, householdId, user } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    sendJson(res, 200, { ok: true, ...setShoppingRange(db, householdId, user, String(body.week ?? ''), String(body.to ?? '')) })
   })
 
   router.post('/api/planner/shopping/items', async ({ req, res }) => {

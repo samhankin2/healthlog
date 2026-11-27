@@ -1000,7 +1000,12 @@ GET    /api/planner/week?start=YYYY-MM-DD -> 200 { ok:true, week:{ start, end, e
 PUT    /api/planner/slots/:date { kind:'dish'|'out'|'leftovers'|'takeaway', dishId?, optionIds?, note?, raw? }
                                     -> 200 { ok:true, entry }   # one dinner per date; replaces it
 DELETE /api/planner/slots/:date    -> 200 { ok:true, cleared }
-PUT    /api/planner/week-starts { date, replaces? } -> 200 { ok:true, household }   # a week starting on another
+GET    /api/planner/week?start=&days= -> nights from start, `days` of them (1–42, default 7): the rolling plan
+GET    /api/planner/shopping/lists        -> 200 { ok:true, lists:[{ from, to }] }   # recent, newest first
+PUT    /api/planner/shopping/range { week, to } -> 200 { ok:true, ...shopping payload }   # the nights a list
+                                       # shops for (1–21); makes the list if needed. The payload's `to` is its
+                                       # last night (default week + 6)
+PUT    /api/planner/week-starts { date, replaces? }   # (unused by the app since the rolling plan) -> 200 { ok:true, household }   # a week starting on another
                                        # day: weeks run 7 days at a time from the latest start on or before a date
                                        # (short week before a new start); before any, weekStartDay applies.
                                        # replaces = the start being moved (its shopping list moves too).

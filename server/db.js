@@ -653,6 +653,7 @@ export function migrate(db) {
   addColumns(db, 'dishes', { family: 'TEXT' }) // a section of related meals, e.g. "Pulled pork"
   addColumns(db, 'plan_entries', { updated_at: 'TEXT' })
   addColumns(db, 'households', { week_start_day: 'INTEGER NOT NULL DEFAULT 0' }) // 0 = Monday
+  addColumns(db, 'shopping_lists', { ends_on: 'TEXT' }) // the last night it shops for (null: six days after week_start)
   // M3 review: facts about a cook, and freezer nights
   addColumns(db, 'plan_entries', {
     freezer_item_id: 'TEXT', // a "from the freezer" night

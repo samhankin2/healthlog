@@ -114,6 +114,7 @@ const SECTION_ORDER = "CASE section WHEN 'market' THEN 0 WHEN 'cold' THEN 1 ELSE
 export function shoppingPayload(db, householdId, week) {
   requireDay(week, 'week')
   const list = listRow(db, householdId, week)
+  const to = list?.ends_on ?? addDays(week, 6)
   const items = list
     ? db.prepare(`SELECT * FROM shopping_items WHERE list_id = ? ORDER BY ${SECTION_ORDER}, checked, lower(name)`).all(list.id).map(itemPayload)
     : []
@@ -123,7 +124,7 @@ export function shoppingPayload(db, householdId, week) {
         WHERE p.household_id = ? AND p.slot = 'dinner' AND p.date BETWEEN ? AND ? AND p.kind = 'dish' AND p.dish_id IS NOT NULL
         ORDER BY p.date`,
     )
-    .all(householdId, week, addDays(week, 6))
+    .all(householdId, week, to)
     .map((n) => ({
       entryId: n.id,
       date: n.date,
@@ -137,7 +138,7 @@ export function shoppingPayload(db, householdId, week) {
       .all(dishId)
       .map((u) => ({ name: u.name, qty: u.qty ?? null }))
   }
-  return { week, items, nights, usual }
+  return { week, to, items, nights, usual }
 }
 
 /**
@@ -263,4 +264,22 @@ export function rememberSections(db, householdId, items) {
     }
   })
   return n
+}
+
+/** Recent lists, newest first: the nights each shops for. */
+export function shoppingLists(db, householdId) {
+  return db
+    .prepare('SELECT week_start, ends_on FROM shopping_lists WHERE household_id = ? ORDER BY week_start DESC LIMIT 20')
+    .all(householdId)
+    .map((r) => ({ from: r.week_start, to: r.ends_on ?? addDays(r.week_start, 6) }))
+}
+
+/** Which nights a list shops for: from `week` to `to` (1 to 21 nights). Makes the list if it isn't there yet. */
+export function setShoppingRange(db, householdId, user, week, to) {
+  requireDay(week, 'week')
+  requireDay(to, 'to')
+  if (to < week || to > addDays(week, 20)) throw new HttpError(400, 'A list shops for 1 to 21 nights')
+  const list = listRow(db, householdId, week, { create: true, user })
+  db.prepare('UPDATE shopping_lists SET ends_on = ? WHERE id = ?').run(to, list.id)
+  return shoppingPayload(db, householdId, week)
 }

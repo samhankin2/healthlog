@@ -59,8 +59,9 @@ export function entryPayload(db, row) {
   }
 }
 
-export function weekPayload(db, householdId, start) {
-  const end = addDays(start, 6)
+/** Nights from `start`, `days` of them (a week by default; the rolling plan asks for more). */
+export function weekPayload(db, householdId, start, days = 7) {
+  const end = addDays(start, Math.max(1, Math.min(42, days)) - 1)
   const rows = db
     .prepare('SELECT * FROM plan_entries WHERE household_id = ? AND slot = ? AND date BETWEEN ? AND ? ORDER BY date')
     .all(householdId, SLOT, start, end)
