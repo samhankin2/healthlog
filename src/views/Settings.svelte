@@ -39,6 +39,7 @@
   let error = $state('')
   let jsonOpen = $state(false)
   let exporting = $state(false)
+  let exportingLifting = $state(false)
   let signOutOpen = $state(false)
   let macroKcal = $derived(Math.round(((Number(protein) || 0) + (Number(carbs) || 0)) * 4 + (Number(fat) || 0) * 9))
 
@@ -97,15 +98,28 @@
     }
   }
 
+  function downloadJson(data: unknown, filename: string): void {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
   async function exportData(): Promise<void> {
     if (exporting) return
     exporting = true
     try {
-      const [mealResponse, messageResponse] = await Promise.all([
+      const [mealResponse, messageResponse, lifting] = await Promise.all([
         api.getMeals({ limit: 200 }),
         api.getChatMessages({ limit: 100 }),
+        api.getLifting(),
       ])
-      const data = {
+      downloadJson({
         version: 1,
         exportedAt: new Date().toISOString(),
         user: app.user,
@@ -115,21 +129,34 @@
         meals: mealResponse.meals,
         foods: app.foods,
         messages: messageResponse.messages,
-      }
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `healthlog-export-${today()}.json`
-      document.body.append(link)
-      link.click()
-      link.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+        lifting: { exercises: lifting.exercises, workouts: lifting.workouts, routines: lifting.routines ?? [] },
+      }, `healthlog-export-${today()}.json`)
       showToast('Account data exported.', 'success')
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : 'Could not export your data.', 'error')
     } finally {
       exporting = false
+    }
+  }
+
+  async function exportLifting(): Promise<void> {
+    if (exportingLifting) return
+    exportingLifting = true
+    try {
+      const lifting = await api.getLifting()
+      const sets = lifting.workouts.reduce((n, w) => n + w.sets.length, 0)
+      downloadJson({
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        exercises: lifting.exercises,
+        workouts: lifting.workouts,
+        routines: lifting.routines ?? [],
+      }, `healthlog-lifting-${today()}.json`)
+      showToast(`Lifting exported: ${lifting.workouts.length} workouts, ${sets} sets.`, 'success')
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : 'Could not export your lifting data.', 'error')
+    } finally {
+      exportingLifting = false
     }
   }
 
@@ -239,10 +266,11 @@
   <section class="metric-card settings-card" aria-labelledby="data-title">
     <div class="metric-card-header"><div class="metric-card-heading"><span class="metric-card-icon"><Icon name="download" size={20} /></span><h2 class="metric-card-title" id="data-title">Your data</h2></div></div>
     <div class="metric-card-content">
-      <p class="card-note">Restore the old weight-tracker format, or download your HealthLog profile, weigh-ins, phases, meals, foods, and recent chat messages as JSON.</p>
+      <p class="card-note">Restore the old weight-tracker format, or download your HealthLog profile, weigh-ins, phases, meals, foods, lifting, and recent chat messages as JSON.</p>
       <div class="data-actions">
         <button class="button button--secondary" type="button" onclick={() => { jsonOpen = true }}><Icon name="upload" size={18} /> Import old JSON</button>
         <button class="button button--secondary" type="button" disabled={exporting} onclick={exportData}><Icon name="download" size={18} /> {exporting ? 'Preparing export…' : 'Export account data'}</button>
+        <button class="button button--secondary" type="button" disabled={exportingLifting} onclick={exportLifting}><Icon name="download" size={18} /> {exportingLifting ? 'Preparing export…' : 'Export lifting data'}</button>
       </div>
     </div>
   </section>
