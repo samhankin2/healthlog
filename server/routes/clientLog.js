@@ -56,6 +56,7 @@ export function cleanEvent(raw) {
     outageMs: num(raw.outageMs),
     source: str(raw.source, 20),
     build: str(raw.build, 40),
+    base: str(raw.base, 80),
   }
   for (const key of Object.keys(event)) if (event[key] === undefined) delete event[key]
   return event

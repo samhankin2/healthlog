@@ -206,6 +206,13 @@ POST /repos/{owner}/healthlog/pages   {"build_type": "workflow"}
 Settings → Secrets and variables → Actions → **Variables** → `API_BASE_URL` =
 `https://healthlog.<vps-ip>.sslip.io` (no trailing slash).
 
+It may also be a comma-separated list of origins serving the same API, tried
+in order with failover (SPEC §2, §8). Production uses
+`https://<vps-ip>,https://healthlog.<vps-ip>.sslip.io`: the bare IP needs no
+DNS lookup, and sslip.io stays as the fallback. The IP origin needs its own
+Caddy site with a short-lived IP certificate (SPEC §2), and every origin must
+be in the CSP `connect-src` in `index.html`.
+
 The Pages workflow writes this into `dist/api-config.js` after the build. Change
 the API address here and nowhere else.
 

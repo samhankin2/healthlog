@@ -85,9 +85,46 @@ export class ApiError extends Error {
   }
 }
 
-function baseUrl(): string {
-  const configured = window.APP_API_BASE?.trim()
-  return (configured || window.location.origin).replace(/\/+$/, '')
+const API_BASE_KEY = 'healthlog.apiBase.v1'
+
+/**
+ * API origins from `window.APP_API_BASE`: one origin, or a comma-separated
+ * list of origins serving the same API (SPEC §8). Empty means same origin.
+ */
+function apiBases(): string[] {
+  const list = (window.APP_API_BASE ?? '')
+    .split(',')
+    .map((base) => base.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+  return list.length ? list : [window.location.origin.replace(/\/+$/, '')]
+}
+
+/** The origin that last worked, while it is still configured; else the first. */
+function preferredBase(bases: string[]): string {
+  try {
+    const saved = window.localStorage.getItem(API_BASE_KEY)
+    if (saved && bases.includes(saved)) return saved
+  } catch {
+    // Storage unavailable: start from the first origin every time.
+  }
+  return bases[0]
+}
+
+function rememberBase(base: string): void {
+  try { window.localStorage.setItem(API_BASE_KEY, base) } catch { /* best-effort */ }
+}
+
+function hostOf(base: string): string {
+  try { return new URL(base).host } catch { return base }
+}
+
+/**
+ * Requests that are safe to send twice. A read always is; a write may have
+ * reached the server before the connection dropped, so it is not re-sent
+ * automatically (the next attempt still starts on the other origin).
+ */
+function resendable(method: string, path: string): boolean {
+  return method === 'GET' || path === '/auth/login' || path === CLIENT_LOG_PATH
 }
 
 function queryString(values: Record<string, string | number | undefined>): string {
@@ -118,21 +155,39 @@ async function request<T>(
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   const method = init.method ?? 'GET'
-  const startedAt = Date.now()
+  const body = init.body === undefined ? undefined : JSON.stringify(init.body)
   // The diagnostics upload itself is never logged, or a dead API would feed the queue.
   const diagnose = path !== CLIENT_LOG_PATH
+  const bases = apiBases()
+  let base = preferredBase(bases)
+  let startedAt = Date.now()
   try {
-    const response = await fetch(`${baseUrl()}/api${path}`, {
-      method,
-      headers,
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: controller.signal,
-    })
+    let response: Response
+    // Failover (SPEC §8): a request that gets no answer at all moves the app to
+    // the next origin; a resendable one is retried there at once.
+    for (let attempt = 0; ; attempt++) {
+      startedAt = Date.now()
+      try {
+        response = await fetch(`${base}/api${path}`, { method, headers, body, signal: controller.signal })
+        break
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+        if (diagnose) {
+          const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+          recordFetchFailure({ path, method, kind: 'network', ms: Date.now() - startedAt, error: detail, base: hostOf(base) })
+        }
+        const next = bases[(bases.indexOf(base) + 1) % bases.length]
+        if (next === base) throw error
+        rememberBase(next)
+        if (attempt > 0 || !resendable(method, path)) throw error
+        base = next
+      }
+    }
     if (diagnose) {
       if (response.status >= 500) {
-        recordFetchFailure({ path, method, kind: 'http', status: response.status, ms: Date.now() - startedAt })
+        recordFetchFailure({ path, method, kind: 'http', status: response.status, ms: Date.now() - startedAt, base: hostOf(base) })
       } else {
-        recordFetchSuccess()
+        recordFetchSuccess(hostOf(base))
         flushClientLog()
       }
     }
@@ -151,12 +206,8 @@ async function request<T>(
     if (error instanceof ApiError) throw error
     if (controller.signal.aborted) {
       if (externalSignal?.aborted) throw error
-      if (diagnose) recordFetchFailure({ path, method, kind: 'timeout', ms: Date.now() - startedAt })
+      if (diagnose) recordFetchFailure({ path, method, kind: 'timeout', ms: Date.now() - startedAt, base: hostOf(base) })
       throw new ApiError('The request took too long. Please try again.', 0)
-    }
-    if (diagnose) {
-      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-      recordFetchFailure({ path, method, kind: 'network', ms: Date.now() - startedAt, error: detail })
     }
     throw new ApiError('Could not connect to HealthLog. Check your connection and try again.', 0)
   } finally {

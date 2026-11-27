@@ -132,7 +132,8 @@ No `npm install` on the server: the API imports only Node built-ins
 - **Relative asset paths.** GitHub Pages serves this at `/<repo>/`, so `/app.js`
   404s. `vite.config.ts` sets `base: './'`; keep it that way.
 - **Never edit `public/api-config.js` by hand.** The Pages workflow overwrites
-  `dist/api-config.js` from the `API_BASE_URL` repository variable. Change the
+  `dist/api-config.js` from the `API_BASE_URL` repository variable (one origin,
+  or a comma-separated failover list — SPEC §8). Change the
   variable, not the file.
 - **Compare commits, not trees.** `git diff --quiet HEAD origin/main` compares
   content; after a revert that restores identical files it reports "up to date"

@@ -62,20 +62,51 @@
   let signingOut = $state(false)
   const current = $derived(route())
 
-  async function hydrateSession(): Promise<void> {
-    booting = true
-    loadError = ''
+  // A failed first load retries by itself (SPEC §8): phones often have no
+  // working network for the first seconds after the app is reopened.
+  const RETRY_DELAYS_S = [2, 4, 8, 15, 30]
+  let retryTimer: number | undefined
+  let retryCount = 0
+  let retrying = $state(false)
+
+  function scheduleRetry(): void {
+    window.clearTimeout(retryTimer)
+    const delay = RETRY_DELAYS_S[Math.min(retryCount, RETRY_DELAYS_S.length - 1)] * 1000
+    retryCount++
+    retryTimer = window.setTimeout(() => void hydrateSession({ quiet: true }), delay)
+  }
+
+  /** Retry now (the phone came back online or the app came to the front). */
+  function retrySoon(): void {
+    if (loadError && !retrying) void hydrateSession({ quiet: true })
+  }
+
+  async function hydrateSession({ quiet = false }: { quiet?: boolean } = {}): Promise<void> {
+    window.clearTimeout(retryTimer)
+    // A quiet retry keeps the error card up instead of flashing the spinner.
+    if (quiet) retrying = true
+    else {
+      booting = true
+      loadError = ''
+      retryCount = 0
+    }
     try {
       await actions.hydrate()
+      loadError = ''
+      retryCount = 0
     } catch (cause: unknown) {
       if (cause instanceof ApiError && cause.status === 401) {
+        loadError = ''
         try { await logout() } catch { /* Local sign-out still completes. */ }
         actions.reset()
       } else {
         loadError = cause instanceof Error ? cause.message : 'Could not connect to HealthLog.'
+        // No answer, or a server error: worth trying again. Other errors are not.
+        if (!(cause instanceof ApiError) || cause.status === 0 || cause.status >= 500) scheduleRetry()
       }
     } finally {
       booting = false
+      retrying = false
     }
   }
 
@@ -111,6 +142,16 @@
     registerServiceWorker()
     if (isAuthenticated()) void hydrateSession()
     else booting = false
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') retrySoon()
+    }
+    window.addEventListener('online', retrySoon)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearTimeout(retryTimer)
+      window.removeEventListener('online', retrySoon)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   })
 
   // Meals a partner shared: fetched once signed in, and again each time the
@@ -175,8 +216,11 @@
 {:else if loadError}
   <main class="loading-screen">
     <EmptyState icon="alert" title="We could not load your data" message={loadError}>
+      <p class="retry-note" role="status">
+        {retrying ? 'Reconnecting…' : 'Trying again automatically.'}
+      </p>
       <div class="error-actions">
-        <Button onclick={hydrateSession}>Try again</Button>
+        <Button onclick={() => hydrateSession()} disabled={retrying}>Try again</Button>
         <Button variant="secondary" onclick={signOut}>Back to sign in</Button>
       </div>
     </EmptyState>
@@ -284,6 +328,13 @@
 
   .account-chip .account-copy {
     flex: 1 1 auto;
+  }
+
+  .retry-note {
+    margin: 0 0 var(--space-3);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    text-align: center;
   }
 
   .error-actions {

@@ -31,6 +31,8 @@ export interface ClientEvent {
   outageMs?: number
   source?: string
   build?: string
+  /** The API host the request went to (the app can fail over between several). */
+  base?: string
 }
 
 const QUEUE_KEY = 'healthlog.clientlog.v1'
@@ -92,15 +94,15 @@ interface Outage {
 }
 
 /** A request got no usable answer: no response, a timeout, or a 5xx. */
-export function recordFetchFailure(details: { path: string; method: string; kind: 'network' | 'timeout' | 'http'; status?: number; ms: number; error?: string }): void {
+export function recordFetchFailure(details: { path: string; method: string; kind: 'network' | 'timeout' | 'http'; status?: number; ms: number; error?: string; base?: string }): void {
   const now = new Date().toISOString()
   push({ type: 'fetch-fail', at: now, build, ...details, ...context() })
   const outage = readJson<Outage | null>(OUTAGE_KEY, null)
   writeJson(OUTAGE_KEY, outage ? { ...outage, failures: outage.failures + 1 } : { firstFailAt: now, failures: 1 })
 }
 
-/** A request got an answer. Closes an open outage with its length. */
-export function recordFetchSuccess(): void {
+/** A request got an answer (from `base`). Closes an open outage with its length. */
+export function recordFetchSuccess(base?: string): void {
   const outage = readJson<Outage | null>(OUTAGE_KEY, null)
   if (!outage) return
   const now = new Date()
@@ -111,6 +113,7 @@ export function recordFetchSuccess(): void {
     firstFailAt: outage.firstFailAt,
     failures: outage.failures,
     outageMs: now.getTime() - new Date(outage.firstFailAt).getTime(),
+    base,
     ...context(),
   })
   writeJson(OUTAGE_KEY, null)

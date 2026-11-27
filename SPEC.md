@@ -40,7 +40,13 @@ Two products in one app:
 - The frontend reads the API origin from `window.APP_API_BASE`
   (`public/api-config.js`), rewritten by the Pages workflow from the repo
   variable `API_BASE_URL`. **Never hardcode the API URL, never edit
-  `public/api-config.js` by hand.**
+  `public/api-config.js` by hand.** The value may be a comma-separated list of
+  origins serving the same API; production lists the bare IP first and the
+  sslip.io name second (`https://<ip>,https://healthlog.<ip>.sslip.io`), and
+  the app fails over between them (§8). Caddy serves both; the IP has a
+  short-lived Let's Encrypt IP certificate and `default_sni` set to the IP,
+  because browsers send no SNI to a bare IP. Every origin in the list must also
+  be in the CSP `connect-src` in `index.html`.
 - Asset paths inside the frontend must be **relative** (`app.js`, not `/app.js`)
   because Pages serves a project site from a sub-path.
 - `vite.config.ts` uses `base: './'`.
@@ -1178,7 +1184,8 @@ up to 50 after the next successful request:
 - `boot` — the app started (a reload, or iOS relaunching a killed tab).
 - `error` — an uncaught error or non-API promise rejection.
 
-Every event also carries `at`, `build` (the hashed bundle name) and device
+Every event also carries `at`, `build` (the hashed bundle name), `base` (the
+API host it went to or, for `recovered`, the one that answered) and device
 context: `online`, `visible`, `standalone`, `net`, `sinceLoadMs`. Sign-in is
 optional, so the login screen can report too. The server whitelists and clamps
 every field, replaces ids in paths with `:id`, and writes one `[client]`
@@ -1547,6 +1554,16 @@ is saved.
   token from `src/lib/auth.ts`, and turns non-2xx into typed errors. It also
   feeds `src/lib/clientLog.ts` (failed requests, recoveries) and uploads its
   queue (§6 "Client diagnostics").
+- **Failover.** `APP_API_BASE` may list several origins. Requests start on the
+  one that last worked (`localStorage` `healthlog.apiBase.v1`, else the
+  first). A request that gets no answer at all moves the app to the next
+  origin; reads, sign-in and the diagnostics upload are re-sent there at once,
+  other writes are not (they may have reached the server before the connection
+  dropped) and simply start on the new origin next time.
+- **The first load retries by itself.** If loading the signed-in session gets
+  no answer or a 5xx, the error card says so and retries after 2, 4, 8, 15,
+  then every 30 s, and at once when the device comes back online or the app
+  returns to the foreground. A 401 still signs out.
 - `src/lib/store.ts` holds app state in memory and notifies subscribers —
   the old `appStore.ts` pattern, but the persistence is the API, not
   `localStorage`. Only the auth token (and the client diagnostics queue) is in
