@@ -16,6 +16,7 @@ import { clearSlot, copyWeek, linkSlot, moveSlot, requireDay, setSlot, weekDays,
 import { addFreezer, freezerList, reviewQueue, setFreezerPortions, setReview, updateEntry } from '../lib/planner/review.js'
 import { deletePhoto, photoFile, readRawBody, savePhoto } from '../lib/planner/photos.js'
 import { historyPayload, parseReviewLine, snooze } from '../lib/planner/insights.js'
+import { plansList, setPlanNights, startPlan } from '../lib/planner/plans.js'
 import fs from 'node:fs'
 import { addItem, clearChecked, removeItem, setShoppingRange, shoppingLists, shoppingPayload, updateItem } from '../lib/planner/shopping.js'
 
@@ -426,6 +427,26 @@ export function registerPlannerRoutes(router) {
   router.get('/api/planner/shopping', async ({ req, res, query }) => {
     const { db, householdId } = plannerContext(req)
     sendJson(res, 200, { ok: true, ...shoppingPayload(db, householdId, requireDay(query?.get('week'), 'week')) })
+  })
+
+  /* ---------- meal plans: start one any night ---------- */
+  router.get('/api/planner/plans', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    sendJson(res, 200, { ok: true, plans: plansList(db, householdId) })
+  })
+
+  router.post('/api/planner/plans', async ({ req, res }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const plan = startPlan(db, householdId, { start: String(body.start ?? ''), nights: body.nights ?? 7 })
+    sendJson(res, 200, { ok: true, plan, plans: plansList(db, householdId) })
+  })
+
+  router.put('/api/planner/plans/:id', async ({ req, res, params }) => {
+    const { db, householdId } = plannerContext(req)
+    const body = asObject(await readJsonBody(req))
+    const plan = setPlanNights(db, householdId, params.id, body.nights)
+    sendJson(res, 200, { ok: true, plan, plans: plansList(db, householdId) })
   })
 
   router.get('/api/planner/shopping/lists', async ({ req, res }) => {

@@ -1006,6 +1006,13 @@ GET    /api/planner/week?start=YYYY-MM-DD -> 200 { ok:true, week:{ start, end, e
 PUT    /api/planner/slots/:date { kind:'dish'|'out'|'leftovers'|'takeaway', dishId?, optionIds?, note?, raw? }
                                     -> 200 { ok:true, entry }   # one dinner per date; replaces it
 DELETE /api/planner/slots/:date    -> 200 { ok:true, cleared }
+GET    /api/planner/plans                 -> 200 { ok:true, plans:[{ id, start, nights, end }] }   # newest first;
+                                       # the newest is the current plan
+POST   /api/planner/plans { start, nights=7 } -> 200 { ok:true, plan, plans }   # start a plan on any night
+                                       # (1–28 nights). A plan running past it ends the night before; one starting
+                                       # on the same night is replaced; it stops before a later plan
+PUT    /api/planner/plans/:id { nights } -> 200 { ok:true, plan, plans }   # more or fewer nights, never into
+                                       # the next plan. A plan's shopping list (keyed by its start) runs to its end
 GET    /api/planner/week?start=&days= -> nights from start, `days` of them (1–42, default 7): the rolling plan
 GET    /api/planner/shopping/lists        -> 200 { ok:true, lists:[{ from, to }] }   # recent, newest first
 PUT    /api/planner/shopping/range { week, to } -> 200 { ok:true, ...shopping payload }   # the nights a list

@@ -360,6 +360,28 @@ async function runWeek({ sam, chloe, alex }) {
   eq('week start: 7 rejected', (await api('PUT', '/api/planner/household', { token: sam, body: { weekStartDay: 7 } })).status, 400)
   await api('PUT', '/api/planner/household', { token: sam, body: { weekStartDay: 0 } })
 
+  // Meal plans: start one any night; the next ends the last
+  {
+    eq('plans: none to begin with', (await api('GET', '/api/planner/plans', { token: sam })).json?.plans, [])
+    let p = await api('POST', '/api/planner/plans', { token: sam, body: { start: '2027-09-03' } }) // a Friday
+    eq('plans: started on a Friday, seven nights', [p.status, p.json?.plan?.start, p.json?.plan?.nights, p.json?.plan?.end], [200, '2027-09-03', 7, '2027-09-09'])
+    eq('plans: shared with the partner', (await api('GET', '/api/planner/plans', { token: chloe })).json?.plans?.map((x) => x.start), ['2027-09-03'])
+    const first = p.json.plan.id
+    p = await api('PUT', `/api/planner/plans/${first}`, { token: chloe, body: { nights: 9 } })
+    eq('plans: two more nights', p.json?.plan?.end, '2027-09-11')
+    p = await api('POST', '/api/planner/plans', { token: sam, body: { start: '2027-09-08', nights: 7 } })
+    eq('plans: the next plan ends the last the night before', p.json?.plans?.map((x) => [x.start, x.end]), [['2027-09-08', '2027-09-14'], ['2027-09-03', '2027-09-07']])
+    p = await api('PUT', `/api/planner/plans/${first}`, { token: sam, body: { nights: 20 } })
+    eq('plans: never runs into the next plan', p.json?.plan?.end, '2027-09-07')
+    await api('POST', '/api/planner/shopping/items', { token: sam, body: { week: '2027-09-08', name: 'basil' } })
+    eq('plans: its shopping list runs to its last night', (await api('GET', '/api/planner/shopping?week=2027-09-08', { token: sam })).json?.to, '2027-09-14')
+    eq('plans: a fresh list follows its plan too', (await api('GET', '/api/planner/shopping?week=2027-09-03', { token: sam })).json?.to, '2027-09-07')
+    eq('plans: 30 nights rejected', (await api('POST', '/api/planner/plans', { token: sam, body: { start: '2027-10-01', nights: 30 } })).status, 400)
+    eq('plans: bad date rejected', (await api('POST', '/api/planner/plans', { token: sam, body: { start: 'friday' } })).status, 400)
+    eq('plans: another household sees none', (await api('GET', '/api/planner/plans', { token: alex })).json?.plans, [])
+    eq('plans: another household cannot change ours', (await api('PUT', `/api/planner/plans/${first}`, { token: alex, body: { nights: 3 } })).status, 404)
+  }
+
   // One week starting on another day
   eq('week starts: none to begin with', (await api('GET', '/api/planner/household', { token: sam })).json?.household?.weekStarts, [])
   await api('POST', '/api/planner/shopping/items', { token: sam, body: { week: '2027-06-07', name: 'limes' } })

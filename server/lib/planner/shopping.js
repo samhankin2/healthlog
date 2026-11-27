@@ -13,6 +13,7 @@ import { withTx } from '../../db.js'
 import { HttpError } from '../http.js'
 import { findDish, normaliseName } from './meals.js'
 import { addDays, requireDay } from './week.js'
+import { planEndFor } from './plans.js'
 
 export const SECTIONS = ['market', 'cold', 'ambient']
 
@@ -114,7 +115,7 @@ const SECTION_ORDER = "CASE section WHEN 'market' THEN 0 WHEN 'cold' THEN 1 ELSE
 export function shoppingPayload(db, householdId, week) {
   requireDay(week, 'week')
   const list = listRow(db, householdId, week)
-  const to = list?.ends_on ?? addDays(week, 6)
+  const to = list?.ends_on ?? planEndFor(db, householdId, week) ?? addDays(week, 6)
   const items = list
     ? db.prepare(`SELECT * FROM shopping_items WHERE list_id = ? ORDER BY ${SECTION_ORDER}, checked, lower(name)`).all(list.id).map(itemPayload)
     : []

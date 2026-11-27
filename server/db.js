@@ -536,6 +536,16 @@ CREATE TABLE IF NOT EXISTS suggestion_snoozes (  -- "not now": a meal stays out 
   PRIMARY KEY (household_id, dish_id)
 );
 
+-- Meal plans: started on any night, as many nights as we say; the next one ends the last.
+CREATE TABLE IF NOT EXISTS meal_plans (
+  id           TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  start_date   TEXT NOT NULL,                   -- YYYY-MM-DD, the first night
+  nights       INTEGER NOT NULL DEFAULT 7,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS meal_plans_start ON meal_plans (household_id, start_date);
+
 -- Weeks that start on a different day: each date starts a run of weeks until the next one.
 CREATE TABLE IF NOT EXISTS week_starts (
   household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
