@@ -174,7 +174,7 @@ EOF
 
   access)
     # Caddy's access log for the API: every request that reached the box.
-    # One line each: time, client IP, protocol, method, uri, status, ms, user agent.
+    # One line each: time, address used (ip / sslip), client IP, protocol, method, uri, status, ms, user agent.
     hours="${1:-1}"
     positive_int "$hours" || { echo "hours must be a number" >&2; exit 2; }
     remote "sudo journalctl -u caddy --since -${hours}h --no-pager -o cat | grep -F 'http.log.access' | python3 -c '
@@ -185,7 +185,8 @@ for line in sys.stdin:
     r = e.get(\"request\", {})
     ua = (r.get(\"headers\", {}).get(\"User-Agent\") or [\"\"])[0][:60]
     t = datetime.datetime.fromtimestamp(e[\"ts\"], datetime.timezone.utc).strftime(\"%m-%d %H:%M:%S\")
-    print(t, r.get(\"client_ip\", \"?\").ljust(15), r.get(\"proto\", \"\").ljust(8), r.get(\"method\", \"\").ljust(6), r.get(\"uri\", \"\")[:50].ljust(50), e.get(\"status\"), str(round(e.get(\"duration\", 0) * 1000)) + \"ms\", ua)
+    host = \"ip   \" if r.get(\"host\", \"\")[:1].isdigit() else \"sslip\"
+    print(t, host, r.get(\"client_ip\", \"?\").ljust(15), r.get(\"proto\", \"\").ljust(8), r.get(\"method\", \"\").ljust(6), r.get(\"uri\", \"\")[:50].ljust(50), e.get(\"status\"), str(round(e.get(\"duration\", 0) * 1000)) + \"ms\", ua)
 ' || echo '(no access lines)'"
     ;;
 
